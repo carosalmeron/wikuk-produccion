@@ -7,24 +7,19 @@
   <meta name="theme-color" content="#e06000"/>
   <title>wikuk · Producción</title>
   <style>
-    html,body,#root{background:#f4f4f4!important;color:#1a1a1a!important;margin:0;padding:0;width:100%;min-height:100vh;}
+    *{box-sizing:border-box;margin:0;padding:0;}
+    html,body,#root{background:#f4f4f4!important;color:#1a1a1a!important;width:100%;min-height:100vh;}
   </style>
 </head>
 <body>
   <div id="root"></div>
-  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/recharts@2.8.0/umd/Recharts.js"></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/recharts@2.8.0/umd/Recharts.js" crossorigin></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <script>
-    // Make Recharts components available globally
-    if (window.Recharts) {
-      Object.keys(window.Recharts).forEach(function(k){ window[k] = window.Recharts[k]; });
-    }
-  </script>
-  <script type="text/babel" data-presets="react">
+  <script type="text/babel" data-presets="react,env">
 const { useState, useEffect } = React;
-const { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, LineChart, Line } = window.Recharts || {};
+const { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, LineChart, Line } = Recharts;
 
 // ── TOKENS ─────────────────────────────────────────────────────────────────────
 const C = {
@@ -3049,7 +3044,9 @@ function App(){
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
+const container = document.getElementById('root');
+const root = ReactDOM.createRoot(container);
+root.render(React.createElement(App));
   </script>
 </body>
 </html>
