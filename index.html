@@ -16,10 +16,22 @@
   <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/recharts@2.8.0/umd/Recharts.js" crossorigin></script>
+  <script>
+    // Expose Recharts components globally BEFORE Babel runs
+    window.BarChart = window.Recharts.BarChart;
+    window.Bar = window.Recharts.Bar;
+    window.XAxis = window.Recharts.XAxis;
+    window.YAxis = window.Recharts.YAxis;
+    window.CartesianGrid = window.Recharts.CartesianGrid;
+    window.Tooltip = window.Recharts.Tooltip;
+    window.ResponsiveContainer = window.Recharts.ResponsiveContainer;
+    window.Legend = window.Recharts.Legend;
+    window.LineChart = window.Recharts.LineChart;
+    window.Line = window.Recharts.Line;
+  </script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <script type="text/babel" data-presets="react,env">
+  <script type="text/babel" data-presets="react">
 const { useState, useEffect } = React;
-const { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, LineChart, Line } = Recharts;
 
 // ── TOKENS ─────────────────────────────────────────────────────────────────────
 const C = {
@@ -3044,9 +3056,7 @@ function App(){
   );
 }
 
-const container = document.getElementById('root');
-const root = ReactDOM.createRoot(container);
-root.render(React.createElement(App));
+ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
   </script>
 </body>
 </html>
