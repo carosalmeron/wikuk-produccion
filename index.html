@@ -6,16 +6,18 @@
   <meta name="color-scheme" content="light"/>
   <meta name="theme-color" content="#e06000"/>
   <title>wikuk · Producción</title>
-  <style>html,body,#root{background:#f4f4f4!important;color:#1a1a1a!important;margin:0;padding:0;width:100%;min-height:100vh;}</style>
+  <style>
+    html,body,#root{background:#f4f4f4!important;color:#1a1a1a!important;margin:0;padding:0;width:100%;min-height:100vh;}
+  </style>
+</head>
+<body>
+  <div id="root"></div>
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/recharts@2.8.0/umd/Recharts.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-</head>
-<body>
-  <div id="root"></div>
   <script type="text/babel" data-presets="react">
-const { useState, useEffect, useRef } = React;
+const { useState, useEffect } = React;
 const { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, LineChart, Line } = Recharts;
 
 // ── TOKENS ─────────────────────────────────────────────────────────────────────
@@ -2857,7 +2859,7 @@ function SaveBar({status}){
 }
 
 // ── ROOT ───────────────────────────────────────────────────────────────────────
-export default function App(){
+function App(){
   const [session,setSession]=useState(null);
   const [view,setView]=useState("home");
   const [stack,setStack]=useState([]);
@@ -3041,8 +3043,7 @@ export default function App(){
   );
 }
 
-const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(React.createElement(App));
+ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
   </script>
 </body>
 </html>
