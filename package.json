@@ -1,7 +1,1 @@
-{
-  "name": "wikuk-produccion",
-  "version": "1.0.0",
-  "scripts": {
-    "build": "echo 'No build needed'"
-  }
-}
+{ "name": "wikuk-produccion", "version": "1.0.0", "scripts": { "build": "echo ok" } }
