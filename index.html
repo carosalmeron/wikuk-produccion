@@ -16,9 +16,15 @@
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/recharts@2.8.0/umd/Recharts.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script>
+    // Make Recharts components available globally
+    if (window.Recharts) {
+      Object.keys(window.Recharts).forEach(function(k){ window[k] = window.Recharts[k]; });
+    }
+  </script>
   <script type="text/babel" data-presets="react">
 const { useState, useEffect } = React;
-const { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, LineChart, Line } = Recharts;
+const { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, LineChart, Line } = window.Recharts || {};
 
 // ── TOKENS ─────────────────────────────────────────────────────────────────────
 const C = {
