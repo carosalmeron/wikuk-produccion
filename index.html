@@ -6,10 +6,7 @@
   <meta name="color-scheme" content="light"/>
   <meta name="theme-color" content="#e06000"/>
   <title>wikuk · Producción</title>
-  <style>
-    *{box-sizing:border-box;margin:0;padding:0;}
-    html,body,#root{background:#f4f4f4!important;color:#1a1a1a!important;width:100%;min-height:100vh;}
-  </style>
+  <style>*{box-sizing:border-box;margin:0;padding:0;}html,body,#root{background:#f4f4f4!important;color:#1a1a1a!important;width:100%;min-height:100vh;}</style>
 </head>
 <body>
   <div id="root"></div>
@@ -17,21 +14,15 @@
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/recharts@2.8.0/umd/Recharts.js" crossorigin></script>
   <script>
-    window.BarChart = window.Recharts.BarChart;
-    window.Bar = window.Recharts.Bar;
-    window.XAxis = window.Recharts.XAxis;
-    window.YAxis = window.Recharts.YAxis;
-    window.CartesianGrid = window.Recharts.CartesianGrid;
-    window.Tooltip = window.Recharts.Tooltip;
-    window.ResponsiveContainer = window.Recharts.ResponsiveContainer;
-    window.Legend = window.Recharts.Legend;
-    window.LineChart = window.Recharts.LineChart;
-    window.Line = window.Recharts.Line;
+    window.BarChart=window.Recharts.BarChart;window.Bar=window.Recharts.Bar;
+    window.XAxis=window.Recharts.XAxis;window.YAxis=window.Recharts.YAxis;
+    window.CartesianGrid=window.Recharts.CartesianGrid;window.Tooltip=window.Recharts.Tooltip;
+    window.ResponsiveContainer=window.Recharts.ResponsiveContainer;window.Legend=window.Recharts.Legend;
+    window.LineChart=window.Recharts.LineChart;window.Line=window.Recharts.Line;
   </script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script type="text/babel" data-presets="react">
 const { useState, useEffect } = React;
-
 // ── TOKENS ─────────────────────────────────────────────────────────────────────
 const C = {
   bg:"#f4f4f4", card:"#ffffff", card2:"#f4f4f4",
@@ -486,7 +477,7 @@ function AdminHome({onGo,onLogout,session,products,orders,registers}){
 // ── OPERATOR HOME ──────────────────────────────────────────────────────────────
 function OperatorHome({onGo,onLogout,session,orders,registers}){
   const todayRegs=registers.filter(r=>r.date===today()&&r.operatorName===session.name);
-  const openO=orders.filter(o=>o.date===today()&&o.status==="open");
+  const openO=orders.filter(o=>o.status==="open");
   return(
     <div style={{fontFamily:F.b,minHeight:"100vh",background:C.bg,display:"flex",flexDirection:"column"}}>
       <div style={{background:C.card,padding:"14px 16px",borderBottom:`3px solid ${C.accent}`,display:"flex",alignItems:"center",justifyContent:"space-between",boxShadow:"0 2px 8px rgba(0,0,0,0.08)"}}>
@@ -615,7 +606,7 @@ function PlanScreen({onBack,onGo,products,orders,registers,onSaveOrders}){
                       </div>
                       {o.status!=="closed"
                         ?<button onClick={()=>del(o.id)} style={{background:"#fff",border:`1.5px solid ${C.red}`,color:C.red,borderRadius:8,padding:"8px 10px",cursor:"pointer",fontSize:16,flexShrink:0}}>🗑️</button>
-                        :(o.date===today()||o.reopened)&&<div style={{display:"flex",gap:6,flexShrink:0}}>
+                        :o.status==="open"?<button onClick={()=>del(o.id)} style={{background:"#fff",border:`1.5px solid ${C.red}`,color:C.red,borderRadius:8,padding:"8px 11px",cursor:"pointer",fontSize:16}}>🗑️</button>:o.date===today()&&<div style={{display:"flex",gap:6,flexShrink:0}}>
                           <button onClick={()=>onGo("edit-order",{ep:o})} style={{background:"#fff",border:`1.5px solid ${C.border}`,color:C.muted,borderRadius:8,padding:"8px 10px",cursor:"pointer",fontSize:16}}>✏️</button>
                           <button onClick={()=>{if(window.confirm("¿Reabrir esta orden? Podrás añadir registros y volver a cerrarla."))onSaveOrders(orders.map(x=>x.id===o.id?{...x,status:"open",qtyActual:null,materialResults:null,yieldActual:null,reopened:true}:x));}} style={{background:"#fff",border:`1.5px solid ${C.green}`,color:C.green,borderRadius:8,padding:"8px 10px",cursor:"pointer",fontSize:13,fontFamily:F.h,fontWeight:700}}>↩ Reabrir</button>
                         </div>
@@ -828,7 +819,7 @@ function PlanNewScreen({onBack,products,orders,users,onSaveOrders}){
 
 // ── REGISTRAR TIEMPO ───────────────────────────────────────────────────────────
 function RegistroScreen({onBack,session,products,orders,registers,onSaveRegisters}){
-  const openOrders=orders.filter(o=>o.date===today()&&o.status==="open");
+  const openOrders=orders.filter(o=>o.status==="open");
   // Órdenes cerradas de ayer con procesos diferidos sin registrar
   const yesterday=addDays(today(),-1);
   const deferredOrders=orders.filter(o=>o.date===yesterday&&o.status==="closed").filter(o=>{
@@ -1102,7 +1093,7 @@ function RegistroScreen({onBack,session,products,orders,registers,onSaveRegister
 
 // ── CERRAR PRODUCCIÓN ──────────────────────────────────────────────────────────
 function CerrarScreen({onBack,products,orders,registers,onSaveOrders}){
-  const openOrders=orders.filter(o=>o.date===today()&&o.status==="open");
+  const openOrders=orders.filter(o=>o.status==="open");
   // Órdenes cerradas de ayer con procesos diferidos sin registrar
   const yesterday=addDays(today(),-1);
   const deferredOrders=orders.filter(o=>o.date===yesterday&&o.status==="closed").filter(o=>{
@@ -3054,7 +3045,6 @@ function App(){
     </div>
   );
 }
-
 ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
   </script>
 </body>
