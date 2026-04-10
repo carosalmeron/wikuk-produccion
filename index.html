@@ -17,7 +17,6 @@
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/recharts@2.8.0/umd/Recharts.js" crossorigin></script>
   <script>
-    // Expose Recharts components globally BEFORE Babel runs
     window.BarChart = window.Recharts.BarChart;
     window.Bar = window.Recharts.Bar;
     window.XAxis = window.Recharts.XAxis;
@@ -616,9 +615,9 @@ function PlanScreen({onBack,onGo,products,orders,registers,onSaveOrders}){
                       </div>
                       {o.status!=="closed"
                         ?<button onClick={()=>del(o.id)} style={{background:"#fff",border:`1.5px solid ${C.red}`,color:C.red,borderRadius:8,padding:"8px 10px",cursor:"pointer",fontSize:16,flexShrink:0}}>🗑️</button>
-                        :o.date===today()&&<div style={{display:"flex",gap:6,flexShrink:0}}>
+                        :(o.date===today()||o.reopened)&&<div style={{display:"flex",gap:6,flexShrink:0}}>
                           <button onClick={()=>onGo("edit-order",{ep:o})} style={{background:"#fff",border:`1.5px solid ${C.border}`,color:C.muted,borderRadius:8,padding:"8px 10px",cursor:"pointer",fontSize:16}}>✏️</button>
-                          <button onClick={()=>{if(window.confirm("¿Reabrir esta orden? Podrás añadir registros y volver a cerrarla."))onSaveOrders(orders.map(x=>x.id===o.id?{...x,status:"open",qtyActual:null,materialResults:null,yieldActual:null}:x));}} style={{background:"#fff",border:`1.5px solid ${C.green}`,color:C.green,borderRadius:8,padding:"8px 10px",cursor:"pointer",fontSize:13,fontFamily:F.h,fontWeight:700}}>↩ Reabrir</button>
+                          <button onClick={()=>{if(window.confirm("¿Reabrir esta orden? Podrás añadir registros y volver a cerrarla."))onSaveOrders(orders.map(x=>x.id===o.id?{...x,status:"open",qtyActual:null,materialResults:null,yieldActual:null,reopened:true}:x));}} style={{background:"#fff",border:`1.5px solid ${C.green}`,color:C.green,borderRadius:8,padding:"8px 10px",cursor:"pointer",fontSize:13,fontFamily:F.h,fontWeight:700}}>↩ Reabrir</button>
                         </div>
                       }
                     </div>
