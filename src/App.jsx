@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v2.7.1";
+const APP_VERSION = "v2.7.2";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -2061,6 +2061,22 @@ export default function App() {
   const [mps]      = useCol("materias_primas", "nombre");
   const [provs]    = useCol("proveedores", "nombre");
   const [productos]= useCol("productos", "nombre");
+  const [ordenesRoot] = useCol("ordenes");
+  const [produccionesRoot] = useCol("producciones");
+  useEffect(() => {
+    // Migración automática: la Carga Inicial v1 guardó materias en colección "materias" (nombre erróneo)
+    if (!authUser) return;
+    (async () => {
+      try {
+        const dst = await getDocs(collection(db, "materias_primas"));
+        if (!dst.empty) return;
+        const src = await getDocs(collection(db, "materias"));
+        if (src.empty) return;
+        for (const d of src.docs) await setDoc(doc(db, "materias_primas", d.id), d.data());
+        console.log("Migradas", src.size, "materias");
+      } catch(e) { console.warn("migración materias:", e.message); }
+    })();
+  }, [authUser]);
 
   const [bootSlow, setBootSlow] = useState(false);
   const [diag, setDiag] = useState(null);
@@ -2136,22 +2152,6 @@ export default function App() {
   );
 
   const back = () => setView("home");
-  const [ordenesRoot] = useCol("ordenes");
-  useEffect(() => {
-    // Migración automática: la Carga Inicial v1 guardó materias en colección "materias" (nombre erróneo)
-    if (!authUser) return;
-    (async () => {
-      try {
-        const dst = await getDocs(collection(db, "materias_primas"));
-        if (!dst.empty) return;
-        const src = await getDocs(collection(db, "materias"));
-        if (src.empty) return;
-        for (const d of src.docs) await setDoc(doc(db, "materias_primas", d.id), d.data());
-        console.log("Migradas", src.size, "materias");
-      } catch(e) { console.warn("migración materias:", e.message); }
-    })();
-  }, [authUser]);
-  const [produccionesRoot] = useCol("producciones");
   const counts = { centros:centros.length, lineas:lineas.length, motivos:motivos.length, usuarios:usuarios.length, turnos:turnos.length, procesos:procesos.length, mps:mps.length, provs:provs.length, productos:productos.length };
 
   return (
