@@ -466,15 +466,26 @@ function SeedScreen({ onBack }) {
 
 function CentrosScreen({ onBack }) {
   const [centros] = useCol("centros", "nombre");
+  const [refLineas] = useCol("lineas");
+  const [refProds] = useCol("productos");
+  const [refUsers] = useCol("usuarios");
+  const enUso = (id) => {
+    const n = refLineas.filter(l=>l.centro===id).length
+            + refProds.filter(p=>p.centro===id).length
+            + refUsers.filter(u=>u.centro===id || (u.centros||[]).includes(id)).length;
+    return n;
+  };
   const [nombre, setNombre] = useState("");
   const [ubicacion, setUbicacion] = useState("");
   const [tarifa, setTarifa] = useState("");
+  const [editId, setEditId] = useState(null);
 
   const add = async () => {
     if (!nombre.trim()) return;
-    await save("centros", uid(), { nombre: nombre.trim(), ubicacion: ubicacion.trim(), tarifa_mo: parseFloat(tarifa)||0, activo: true });
-    setNombre(""); setUbicacion(""); setTarifa("");
+    await save("centros", editId||uid(), { nombre: nombre.trim(), ubicacion: ubicacion.trim(), tarifa_mo: parseFloat(tarifa)||0, activo: true });
+    setNombre(""); setUbicacion(""); setTarifa(""); setEditId(null);
   };
+  const startEdit = (x) => { setEditId(x.id); setNombre(x.nombre||""); setUbicacion(x.ubicacion||""); setTarifa(x.tarifa_mo?.toString()||""); window.scrollTo(0,0); };
   return (
     <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
       <Header title="CENTROS DE TRABAJO" onBack={onBack} sub="Cada centro produce de forma independiente"/>
@@ -483,7 +494,8 @@ function CentrosScreen({ onBack }) {
           <Field label="Nombre del centro" value={nombre} onChange={setNombre} placeholder="Ej: Planta Baza"/>
           <Field label="Ubicación (opcional)" value={ubicacion} onChange={setUbicacion} placeholder="Ej: Baza, Granada"/>
           <Field label="Tarifa MO de referencia (€/hora)" value={tarifa} onChange={setTarifa} type="number" placeholder="12.50" min="0" step="0.01"/>
-          <Btn v="ghost" onClick={add}>＋ Añadir Centro</Btn>
+          <Btn v="ghost" onClick={add}>{editId?"💾 Guardar cambios":"＋ Añadir Centro"}</Btn>
+          {editId && <button onClick={()=>{setEditId(null);setNombre("");setUbicacion("");setTarifa("");}} style={{marginLeft:8,background:"none",border:"none",color:C.muted,fontSize:14,cursor:"pointer",textDecoration:"underline"}}>Cancelar</button>}
         </Card>
         {centros.length===0 && <Empty icon="🏭" text="Sin centros. Crea al menos uno para poder asignar operarios y productos."/>}
         <div style={{display:"flex",flexDirection:"column",gap:8}}>
@@ -499,7 +511,11 @@ function CentrosScreen({ onBack }) {
                     style={{background:"#fff",border:`1.5px solid ${c.activo!==false?C.green:C.border}`,color:c.activo!==false?C.green:C.muted,borderRadius:20,padding:"4px 12px",fontSize:12,fontFamily:F.h,fontWeight:600,cursor:"pointer"}}>
                     {c.activo!==false?"✓ Activo":"Reactivar"}
                   </button>
-                  <IconBtn danger onClick={()=>{if(window.confirm("¿Eliminar centro? Los datos asociados quedarán huérfanos."))del("centros",c.id);}}>🗑️</IconBtn>
+                  <IconBtn danger onClick={()=>{
+                      const n = enUso(c.id);
+                      if (n>0) { window.alert(`⛔ No se puede borrar: ${n} registros (líneas, productos o usuarios) dependen de este centro. Desactívalo si no quieres usarlo.`); return; }
+                      if(window.confirm("¿Eliminar centro?")) del("centros",c.id);
+                    }}>🗑️</IconBtn>
                 </div>
               </div>
             </Card>
@@ -660,6 +676,8 @@ function TurnosScreen({ onBack }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 function ProcesosScreen({ onBack }) {
   const [procesos] = useCol("procesos", "nombre");
+  const [refProds] = useCol("productos");
+  const procEnUso = (id) => refProds.filter(p=>(p.procesos_asignados||[]).some(x=>x.proceso_id===id)).length;
   const [nombre, setNombre] = useState("");
   const [diferido, setDiferido] = useState(false);
   const [apoyo, setApoyo] = useState(false);
@@ -693,7 +711,11 @@ function ProcesosScreen({ onBack }) {
                 <div style={{fontFamily:F.h,fontWeight:700,fontSize:17,color:C.text}}>
                   {p.nombre} {p.diferido && <Pill color={C.amber} bg={C.amberBg}>⏭ DIFERIDO</Pill>} {p.apoyo && <Pill color={C.blue} bg={C.blueBg}>🤝 APOYO</Pill>}
                 </div>
-                <IconBtn danger onClick={()=>{if(window.confirm("¿Eliminar proceso del catálogo?"))del("procesos",p.id);}}>🗑️</IconBtn>
+                <IconBtn danger onClick={()=>{
+                  const n = procEnUso(p.id);
+                  if (n>0) { window.alert(`⛔ No se puede borrar: ${n} productos usan este proceso. Quítalo primero de esos productos.`); return; }
+                  if(window.confirm("¿Eliminar proceso del catálogo?")) del("procesos",p.id);
+                }}>🗑️</IconBtn>
               </div>
             </Card>
           ))}
@@ -708,6 +730,8 @@ function ProcesosScreen({ onBack }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 function MateriasPrimasScreen({ onBack }) {
   const [mps] = useCol("materias_primas", "nombre");
+  const [refProdsMp] = useCol("productos");
+  const mpEnUso = (id) => refProdsMp.filter(p=>(p.materias_asignadas||[]).some(x=>x.mp_id===id)).length;
   const [edit, setEdit] = useState(null);
 
   if (edit !== null) return <MpForm onBack={()=>setEdit(null)} ep={edit.id?edit:null}/>;
@@ -729,7 +753,11 @@ function MateriasPrimasScreen({ onBack }) {
                 </div>
                 <div style={{display:"flex",gap:6}}>
                   <IconBtn onClick={()=>setEdit(m)}>✏️</IconBtn>
-                  <IconBtn danger onClick={()=>{if(window.confirm("¿Eliminar?"))del("materias_primas",m.id);}}>🗑️</IconBtn>
+                  <IconBtn danger onClick={()=>{
+                    const n = mpEnUso(m.id);
+                    if (n>0) { window.alert(`⛔ No se puede borrar: ${n} productos llevan esta materia en su escandallo. Quítala primero de esos productos.`); return; }
+                    if(window.confirm("¿Eliminar materia?")) del("materias_primas",m.id);
+                  }}>🗑️</IconBtn>
                 </div>
               </div>
             </Card>
