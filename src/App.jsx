@@ -5,7 +5,8 @@
 import React, { useState, useEffect } from "react";
 import { initializeApp, getApps, deleteApp } from "firebase/app";
 import {
-  getAuth, signInWithEmailAndPassword, signOut,
+  getAuth, initializeAuth, indexedDBLocalPersistence, browserLocalPersistence, inMemoryPersistence,
+  signInWithEmailAndPassword, signOut,
   createUserWithEmailAndPassword, onAuthStateChanged,
 } from "firebase/auth";
 import {
@@ -23,7 +24,10 @@ const firebaseConfig = {
   appId: "1:736475581587:web:7c03223392778273091166",
 };
 const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
+let auth;
+try {
+  auth = initializeAuth(app, { persistence: [indexedDBLocalPersistence, browserLocalPersistence, inMemoryPersistence] });
+} catch(e) { auth = getAuth(app); }
 const db = getFirestore(app);
 
 // ── TOKENS DE DISEÑO ───────────────────────────────────────────────────────────
@@ -810,6 +814,335 @@ function RegistrarProduccion({ onBack, orden, perfil, turnos, hechas, produccion
             ))}
           </Card>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 📖 DIARIO DE FABRICACIÓN — el parte oficial del día (sustituye al WhatsApp)
+// ═══════════════════════════════════════════════════════════════════════════════
+function DiarioScreen({ onBack, productos, lineas, turnos, mps, motivos, usuarios, centros }) {
+  const hoy = new Date().toISOString().slice(0,10);
+  const [fecha, setFecha] = useState(hoy);
+  const [ordenes] = useCol("ordenes");
+  const [producciones] = useCol("producciones", "fecha");
+
+  const partes = producciones.filter(p=>p.fecha===fecha);
+  const totalUds = partes.reduce((s,p)=>s+(p.cantidad||0),0);
+  const planDia = ordenes.filter(o=>o.fecha===fecha).reduce((s,o)=>s+(o.cantidad||0),0);
+  const totalParosMin = partes.reduce((s,p)=>s+(p.paros||[]).reduce((x,pa)=>x+(pa.minutos||0),0),0);
+  const rendimientos = partes.flatMap(p=>(p.consumos||[]).map(cs=>cs.rendimiento_pct).filter(r=>r!=null));
+  const rendMedio = rendimientos.length? Math.round(rendimientos.reduce((a,b)=>a+b,0)/rendimientos.length) : null;
+  const nombreDe = (uid) => usuarios.find(u=>u.id===uid)?.nombre||uid;
+  const tarifa = (centros[0]?.tarifa_mo||12.5);
+
+  const porTurno = {};
+  partes.forEach(p=>{ const k=p.turno_id||"_"; (porTurno[k]=porTurno[k]||[]).push(p); });
+
+  const mover = (d) => {
+    const x = new Date(fecha); x.setDate(x.getDate()+d);
+    setFecha(x.toISOString().slice(0,10));
+  };
+
+  return (
+    <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
+      <Header title="📖 DIARIO DE FABRICACIÓN" onBack={onBack} sub="El documento oficial del día"/>
+      <div style={{padding:14}}>
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
+          <IconBtn onClick={()=>mover(-1)}>◀</IconBtn>
+          <input type="date" value={fecha} onChange={e=>setFecha(e.target.value)}
+            style={{flex:1,padding:"12px",borderRadius:12,border:`1.5px solid ${C.border}`,fontSize:16,fontFamily:F.h,fontWeight:700,textAlign:"center",background:"#fff",color:C.text}}/>
+          <IconBtn onClick={()=>mover(1)}>▶</IconBtn>
+          <IconBtn onClick={()=>window.print()}>🖨️</IconBtn>
+        </div>
+
+        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:14}}>
+          {[[totalUds+(planDia?` / ${planDia}`:""),"Uds"+(planDia?" / plan":"")],
+            [planDia?Math.round(totalUds/planDia*100)+"%":"—","Cumplim."],
+            [rendMedio!=null?rendMedio+"%":"—","Rend. medio"],
+            [totalParosMin?totalParosMin+"'":"0'","Paros"]].map(([n,l],i)=>(
+            <Card key={i} style={{textAlign:"center",padding:"12px 6px"}}>
+              <div style={{fontFamily:F.h,fontWeight:900,fontSize:20,color:C.text}}>{n}</div>
+              <div style={{fontSize:10,color:C.muted,marginTop:2}}>{l}</div>
+            </Card>
+          ))}
+        </div>
+
+        {partes.length===0 && <Empty icon="📖" text={`Sin partes el ${fecha}. Se registran desde Órdenes → ➕ Producción.`}/>}
+
+        {Object.entries(porTurno).map(([tid, ps])=>{
+          const t = turnos.find(x=>x.id===tid);
+          return (
+            <div key={tid} style={{marginBottom:16}}>
+              <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.mutedD,textTransform:"uppercase",letterSpacing:0.5,marginBottom:8}}>
+                🕐 {t?.nombre||"Sin turno"} {t?` · ${t.hora_inicio}-${t.hora_fin}`:""}
+              </div>
+              {ps.map(p=>{
+                const prod = productos.find(x=>x.id===p.producto_id);
+                const orden = ordenes.find(x=>x.id===p.orden_id);
+                const lin = lineas.find(x=>x.id===p.linea_id);
+                const costeFab = p.n_personas&&p.horas_equipo&&p.cantidad ? (p.n_personas*p.horas_equipo*tarifa/p.cantidad) : null;
+                return (
+                  <Card key={p.id} style={{marginBottom:8}}>
+                    <div style={{display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:6}}>
+                      <div style={{fontFamily:F.h,fontWeight:800,fontSize:17,color:C.text}}>
+                        {orden?.numero?`OT ${orden.numero} · `:""}{prod?.nombre||"?"} <span style={{color:C.accent}}>· {p.cantidad} uds</span>
+                      </div>
+                      {lin && <Pill color={C.blue} bg={C.blueBg}>{lin.nombre}</Pill>}
+                    </div>
+                    {(p.equipo||[]).length>0 &&
+                      <div style={{fontSize:13,color:C.muted,marginTop:4}}>👷 {(p.equipo||[]).map(nombreDe).join(" · ")} · {p.horas_equipo||8} h</div>}
+                    {(p.consumos||[]).map((cs,i)=>{
+                      const m = mps.find(x=>x.id===cs.materia_id);
+                      return <div key={i} style={{display:"flex",justifyContent:"space-between",fontSize:13.5,padding:"5px 0",borderBottom:`1px solid ${C.border}`}}>
+                        <span>{m?.nombre}{cs.lote?<span style={{background:C.card2,borderRadius:8,padding:"1px 7px",fontSize:11,marginLeft:6}}>{cs.lote}</span>:null}
+                          <span style={{color:C.muted}}> · {cs.madejas?`${cs.madejas} mad`:""}{cs.metros?` +${cs.metros} m`:""}</span></span>
+                        {cs.rendimiento_pct!=null && <b style={{color:cs.rendimiento_pct>=85?C.green:cs.rendimiento_pct>=75?C.amber:C.red}}>{cs.rendimiento_pct}%</b>}
+                      </div>;
+                    })}
+                    {(p.paros||[]).map((pa,i)=>{
+                      const mo = motivos.find(x=>x.id===pa.motivo_id);
+                      return <div key={i} style={{fontSize:13,color:C.amber,marginTop:4}}>⏸ {mo?.icono} {mo?.nombre}{pa.minutos?` · ${pa.minutos}'`:""}{pa.nota?` — ${pa.nota}`:""}</div>;
+                    })}
+                    {p.nota && <div style={{fontSize:13,color:C.muted,marginTop:6,background:C.card2,borderRadius:10,padding:"8px 10px"}}>📝 {p.nota}</div>}
+                    <div style={{display:"flex",justifyContent:"space-between",marginTop:8,fontSize:12,color:C.muted}}>
+                      <span>{costeFab!=null && <>Fabricación: <b style={{color:prod?.coste_objetivo&&costeFab<=prod.coste_objetivo?C.green:C.red}}>{costeFab.toFixed(2)} €/ud</b>{prod?.coste_objetivo?` (obj ${prod.coste_objetivo})`:""}</>}</span>
+                      <span>✍ {p.registrado_por}</span>
+                    </div>
+                  </Card>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ⏱️ TERMINAL OPERARIO — 3 toques: mi orden → mi proceso → tiempo y cantidad
+// ═══════════════════════════════════════════════════════════════════════════════
+function TerminalOperario({ perfil, productos }) {
+  const [lineas] = useCol("lineas");
+  const [turnos] = useCol("turnos");
+  const [ordenes] = useCol("ordenes");
+  const [paso, setPaso] = useState(1);
+  const [orden, setOrden] = useState(null);
+  const [proceso, setProceso] = useState(null);
+  const [inicio, setInicio] = useState(null);
+  const [ahora, setAhora] = useState(Date.now());
+  const [cantidad, setCantidad] = useState("");
+  const [fin, setFin] = useState(null);
+  const [feedback, setFeedback] = useState(null);
+  const [procesosCat] = useCol("procesos");
+
+  useEffect(()=>{ const t=setInterval(()=>setAhora(Date.now()),1000); return ()=>clearInterval(t); },[]);
+
+  const hoy = new Date().toISOString().slice(0,10);
+  const misOrdenes = ordenes.filter(o=>!o.cerrada && (!o.centro || o.centro===perfil.centro));
+  const prodDeOrden = orden ? productos.find(p=>p.id===orden.producto_id) : null;
+  const procesosDelProducto = (prodDeOrden?.procesos_asignados||[]).map(pa=>({
+    ...pa, cat: procesosCat.find(x=>x.id===pa.proceso_id) })).filter(x=>x.cat);
+
+  const minutos = inicio ? (fin||ahora - inicio)/60000 : 0;
+  const minReal = inicio && fin ? (fin-inicio)/60000 : minutos;
+  const fmt = (ms) => { const s=Math.floor(ms/1000); return `${String(Math.floor(s/3600)).padStart(2,"0")}:${String(Math.floor(s/60)%60).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`; };
+
+  const guardarRegistro = async () => {
+    const q = parseFloat(cantidad);
+    if (!q || q<=0) { window.alert("Pon la cantidad"); return; }
+    const mins = Math.round(minReal*10)/10;
+    const minUd = Math.round(mins/q*100)/100;
+    const obj = proceso.min_obj || null;
+    const delta = obj ? Math.round((obj-minUd)/obj*100) : null;
+    await save("registros_operario", uid(), {
+      operario_id: perfil.id, operario: perfil.nombre,
+      orden_id: orden.id, producto_id: orden.producto_id, proceso_id: proceso.proceso_id,
+      fecha: hoy, minutos: mins, cantidad: q, min_por_ud: minUd,
+      obj_min_ud: obj, delta_pct: delta, registrado_at: new Date().toISOString(),
+    });
+    setFeedback({minUd, obj, delta, q, mins});
+  };
+  const resetear = () => { setPaso(1); setOrden(null); setProceso(null); setInicio(null); setFin(null); setCantidad(""); setFeedback(null); };
+
+  const BigBtn = ({children, onClick, color=P.accent, sub}) => (
+    <button onClick={onClick} style={{width:"100%",background:P.card,border:`3px solid ${color}`,borderRadius:18,padding:"22px 16px",cursor:"pointer",marginBottom:12,textAlign:"left"}}>
+      <div style={{fontFamily:P.fh,fontWeight:900,fontSize:22,color:P.text,letterSpacing:0.5}}>{children}</div>
+      {sub && <div style={{fontSize:14,color:P.muted,marginTop:4}}>{sub}</div>}
+    </button>
+  );
+
+  if (feedback) {
+    const bien = feedback.delta!=null && feedback.delta>=0;
+    return (
+      <div style={{maxWidth:600,margin:"0 auto",textAlign:"center",paddingTop:30}}>
+        <div style={{fontSize:80}}>{feedback.delta==null?"✅":bien?"🏆":"💪"}</div>
+        <div style={{fontFamily:P.fh,fontWeight:900,fontSize:34,color:bien?"#1e7e3e":P.text,margin:"10px 0"}}>
+          {feedback.q} uds en {feedback.mins}'
+        </div>
+        <div style={{fontFamily:P.fh,fontWeight:800,fontSize:24,color:P.muted}}>{feedback.minUd} min/ud</div>
+        {feedback.delta!=null && (
+          <div style={{fontFamily:P.fh,fontWeight:900,fontSize:26,color:bien?"#1e7e3e":"#c0392b",marginTop:10}}>
+            {bien?`✓ Vas ${feedback.delta}% mejor que el objetivo`:`Objetivo ${feedback.obj} min/ud — a ${-feedback.delta}%`}
+          </div>
+        )}
+        <button onClick={resetear} style={{marginTop:26,background:P.accent,border:"none",color:"#fff",borderRadius:16,padding:"20px 44px",fontFamily:P.fh,fontWeight:900,fontSize:24,cursor:"pointer"}}>SIGUIENTE TAREA →</button>
+      </div>
+    );
+  }
+
+  if (paso===3 && orden && proceso) return (
+    <div style={{maxWidth:600,margin:"0 auto"}}>
+      <div style={{textAlign:"center",marginBottom:14}}>
+        <div style={{fontFamily:P.fh,fontWeight:800,fontSize:18,color:P.muted}}>{prodDeOrden?.nombre} · {proceso.cat.nombre}</div>
+        {proceso.min_obj ? <div style={{fontSize:14,color:P.muted}}>🎯 objetivo {proceso.min_obj} min/ud</div> : null}
+      </div>
+      <div style={{background:inicio&&!fin?"#1e7e3e":P.card,border:`3px solid ${inicio&&!fin?"#1e7e3e":P.border}`,borderRadius:22,padding:"34px 16px",textAlign:"center",marginBottom:14}}>
+        <div style={{fontFamily:P.fh,fontWeight:900,fontSize:56,color:inicio&&!fin?"#fff":P.text,letterSpacing:2}}>{inicio?fmt((fin||ahora)-inicio):"00:00:00"}</div>
+        <div style={{fontFamily:P.fh,fontWeight:800,fontSize:18,color:inicio&&!fin?"rgba(255,255,255,.8)":P.muted,marginTop:4}}>{!inicio?"LISTO":fin?"TERMINADO":"⏺ PRODUCIENDO"}</div>
+      </div>
+      {!inicio && <button onClick={()=>setInicio(Date.now())} style={{width:"100%",background:"#1e7e3e",border:"none",color:"#fff",borderRadius:18,padding:"26px",fontFamily:P.fh,fontWeight:900,fontSize:28,cursor:"pointer"}}>▶ EMPEZAR</button>}
+      {inicio && !fin && <button onClick={()=>setFin(Date.now())} style={{width:"100%",background:"#c0392b",border:"none",color:"#fff",borderRadius:18,padding:"26px",fontFamily:P.fh,fontWeight:900,fontSize:28,cursor:"pointer"}}>⏹ TERMINAR</button>}
+      {fin && <>
+        <input value={cantidad} onChange={e=>setCantidad(e.target.value)} type="number" inputMode="decimal" placeholder="¿Cuántas unidades?"
+          style={{width:"100%",padding:"20px",borderRadius:16,border:`3px solid ${P.accent}`,fontSize:26,fontFamily:P.fh,fontWeight:800,textAlign:"center",marginTop:12,background:"#fff",color:P.text}}/>
+        <button onClick={guardarRegistro} style={{width:"100%",marginTop:12,background:P.accent,border:"none",color:"#fff",borderRadius:18,padding:"24px",fontFamily:P.fh,fontWeight:900,fontSize:26,cursor:"pointer"}}>💾 GUARDAR</button>
+      </>}
+      <button onClick={resetear} style={{width:"100%",marginTop:12,background:"none",border:`2px solid ${P.border}`,color:P.muted,borderRadius:14,padding:"14px",fontFamily:P.fh,fontWeight:700,fontSize:16,cursor:"pointer"}}>← Cambiar tarea</button>
+    </div>
+  );
+
+  if (paso===2 && orden) return (
+    <div style={{maxWidth:600,margin:"0 auto"}}>
+      <div style={{fontFamily:P.fh,fontWeight:900,fontSize:22,color:P.text,marginBottom:14,textAlign:"center"}}>2 · ¿QUÉ PROCESO HACES?</div>
+      {procesosDelProducto.length===0 && <div style={{textAlign:"center",color:P.muted,fontSize:15,padding:20}}>Este producto no tiene procesos asignados aún — pide a oficina que los configure en la ficha del producto.</div>}
+      {procesosDelProducto.map(pa=>(
+        <BigBtn key={pa.proceso_id} onClick={()=>{setProceso(pa);setPaso(3);}}
+          sub={pa.min_obj?`🎯 ${pa.min_obj} min/ud`:null}>{pa.cat.diferido?"⏭ ":""}{pa.cat.apoyo?"🤝 ":""}{pa.cat.nombre}</BigBtn>
+      ))}
+      <button onClick={()=>{setPaso(1);setOrden(null);}} style={{width:"100%",background:"none",border:`2px solid ${P.border}`,color:P.muted,borderRadius:14,padding:"14px",fontFamily:P.fh,fontWeight:700,fontSize:16,cursor:"pointer"}}>← Otra orden</button>
+    </div>
+  );
+
+  return (
+    <div style={{maxWidth:600,margin:"0 auto"}}>
+      <div style={{fontFamily:P.fh,fontWeight:900,fontSize:22,color:P.text,marginBottom:14,textAlign:"center"}}>1 · ¿EN QUÉ ORDEN TRABAJAS?</div>
+      {misOrdenes.length===0 && <div style={{textAlign:"center",color:P.muted,fontSize:15,padding:20}}>No hay órdenes abiertas ahora mismo.</div>}
+      {misOrdenes.map(o=>{
+        const p = productos.find(x=>x.id===o.producto_id);
+        const l = lineas.find(x=>x.id===o.linea_id);
+        return <BigBtn key={o.id} onClick={()=>{setOrden(o);setPaso(2);}}
+          sub={`${o.fecha}${l?` · ${l.nombre}`:""} · ${o.cantidad} uds`}>{o.numero?`OT ${o.numero} · `:""}{p?.nombre||"?"}</BigBtn>;
+      })}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 📥 IMPORTAR HISTÓRICO — sube el JSON generado desde el Excel maestro
+// ═══════════════════════════════════════════════════════════════════════════════
+function ImportHistoricoScreen({ onBack, productos, mps, lineas, turnos }) {
+  const [data, setData] = useState(null);
+  const [estado, setEstado] = useState("idle");
+  const [prog, setProg] = useState("");
+  const [resumen, setResumen] = useState(null);
+
+  const leerFichero = (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    const r = new FileReader();
+    r.onload = () => { try {
+      const j = JSON.parse(r.result);
+      if (!Array.isArray(j.ordenes)) throw new Error("Formato inesperado");
+      setData(j); setEstado("preview");
+    } catch(err){ window.alert("JSON inválido: "+err.message); } };
+    r.readAsText(f);
+  };
+
+  const norm = (s)=>String(s||"").trim().toUpperCase();
+  const mapProd = {}; productos.forEach(p=>mapProd[norm(p.nombre)]=p.id);
+  const mapMat = {}; mps.forEach(m=>mapMat[norm(m.nombre)]=m.id);
+  const mapLin = {}; lineas.forEach(l=>mapLin[norm(l.nombre)]=l.id);
+  const turnoT1 = turnos.slice().sort((a,b)=>(a.hora_inicio||"").localeCompare(b.hora_inicio||""))[0]?.id||"";
+  const turnoT2 = turnos.slice().sort((a,b)=>(a.hora_inicio||"").localeCompare(b.hora_inicio||""))[1]?.id||"";
+
+  const analizar = () => {
+    let ok=0, sinProd=new Set(), sinMat=new Set();
+    data.ordenes.forEach(o=>{
+      if (mapProd[norm(o.p)]) ok++; else sinProd.add(o.p);
+      (o.cons||[]).forEach(cs=>{ if(cs[0] && !mapMat[norm(cs[0])]) sinMat.add(cs[0]); });
+    });
+    return {ok, sinProd:[...sinProd], sinMat:[...sinMat]};
+  };
+
+  const importar = async () => {
+    setEstado("importando");
+    let no=0, np=0, skip=0;
+    for (const o of data.ordenes) {
+      const pid = mapProd[norm(o.p)];
+      if (!pid) { skip++; continue; }
+      const oid = "H_"+(o.f||"")+"_"+norm(o.p).replace(/[^A-Z0-9]/g,"")+"_"+no;
+      await save("ordenes", oid, {
+        numero: o.n?String(o.n):"", tipo: o.tipo||"Plan", cliente: o.cli||"",
+        producto_id: pid, centro: productos.find(x=>x.id===pid)?.centro||"",
+        linea_id: mapLin[norm(o.l)]||"", turno_id: o.t==="T2"?turnoT2:(o.t==="T1"?turnoT1:""),
+        fecha: o.f, cantidad: o.req||o.q||0, cerrada: true, historico: true,
+        created_at: new Date().toISOString(),
+      });
+      no++;
+      if (o.q) {
+        const consumos = (o.cons||[]).map(cs=>({
+          materia_id: mapMat[norm(cs[0])]||"", lote: cs[1]||"", madejas: cs[2]||0, metros: cs[3]||0,
+          rendimiento_pct: cs[4]!=null?cs[4]:null,
+          metros_consumidos: (cs[2]||0)*(mps.find(m=>m.id===mapMat[norm(cs[0])])?.metros_madeja||90)+(cs[3]||0),
+        }));
+        await save("producciones", "P"+oid, {
+          orden_id: oid, producto_id: pid, fecha: o.f, turno_id: o.t==="T2"?turnoT2:turnoT1,
+          linea_id: mapLin[norm(o.l)]||"", cantidad: o.q, nota: o.nota||"",
+          n_personas: o.np||null, origen_personas: o.op||"", equipo: [], paros: [],
+          consumos, historico: true, registrado_por: "histórico",
+          registrado_at: new Date().toISOString(),
+        });
+        np++;
+        for (const cs of consumos) if (cs.lote && cs.materia_id) {
+          const lid = (cs.materia_id+"_"+cs.lote).replace(/[^a-zA-Z0-9_-]/g,"_");
+          await save("lotes", lid, { materia_id: cs.materia_id, codigo: cs.lote, ultima_fecha: o.f });
+        }
+      }
+      if ((no+np)%20===0) setProg(`${no} órdenes · ${np} partes…`);
+    }
+    setResumen({no, np, skip}); setEstado("fin");
+  };
+
+  const an = data ? analizar() : null;
+
+  return (
+    <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
+      <Header title="📥 IMPORTAR HISTÓRICO" onBack={onBack} sub="El Excel maestro (abril-agosto) a Firebase, de una vez"/>
+      <div style={{padding:14}}>
+        <Card style={{marginBottom:14}}>
+          {estado==="idle" && <>
+            <div style={{fontSize:14,color:C.muted,lineHeight:1.6,marginBottom:12}}>
+              Sube el fichero <b>historico-wikuk.json</b>. Casará productos y materias por código con tus maestros, creará las órdenes cerradas con sus partes, consumos por lote y rendimientos. Ejecútalo UNA sola vez (si se repite, sobrescribe los mismos registros, no duplica).
+            </div>
+            <input type="file" accept=".json,application/json" onChange={leerFichero}
+              style={{width:"100%",padding:"14px",borderRadius:12,border:`2px dashed ${C.accent}`,fontSize:14,background:"#fff"}}/>
+          </>}
+          {estado==="preview" && an && <>
+            <div style={{background:C.card2,borderRadius:12,padding:14,marginBottom:12,fontSize:14,lineHeight:1.8}}>
+              📦 {data.ordenes.length} órdenes en el fichero · <b style={{color:C.green}}>{an.ok} casan</b> con tus productos<br/>
+              {an.sinProd.length>0 && <span style={{color:C.amber}}>⚠ Sin producto en el maestro ({an.sinProd.length}): {an.sinProd.slice(0,6).join(", ")}{an.sinProd.length>6?"…":""} — se omitirán</span>}
+              {an.sinMat.length>0 && <><br/><span style={{color:C.amber}}>⚠ Materias no encontradas: {an.sinMat.slice(0,6).join(", ")} — sus consumos entrarán sin enlazar</span></>}
+            </div>
+            <Btn onClick={importar}>🚀 Importar {an.ok} órdenes con sus partes</Btn>
+          </>}
+          {estado==="importando" && <div style={{fontFamily:F.h,fontSize:17,color:C.muted}}>⏳ Importando… {prog}</div>}
+          {estado==="fin" && resumen && <div style={{fontSize:15,lineHeight:1.9}}>
+            ✅ <b>{resumen.no} órdenes</b> y <b>{resumen.np} partes</b> importados{resumen.skip?` · ${resumen.skip} omitidos sin producto`:""}.<br/>
+            Ya puedes navegar el 📖 Diario hasta abril y ver el dashboard con historia real.
+          </div>}
+        </Card>
       </div>
     </div>
   );
@@ -1608,12 +1941,21 @@ function CostesScreen({ onBack, centros }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // HOME (menú por rol)
 // ═══════════════════════════════════════════════════════════════════════════════
-function Home({ perfil, onGo, onLogout, counts }) {
+function Home({ perfil, onGo, onLogout, counts, ordenes=[], producciones=[], productos=[] }) {
+  const hoy = new Date().toISOString().slice(0,10);
+  const partesHoy = producciones.filter(p=>p.fecha===hoy);
+  const udsHoy = partesHoy.reduce((s,p)=>s+(p.cantidad||0),0);
+  const activas = ordenes.filter(o=>!o.cerrada);
+  const planHoy = ordenes.filter(o=>o.fecha===hoy).reduce((s,o)=>s+(o.cantidad||0),0);
+  const prodDe = (oid) => producciones.filter(p=>p.orden_id===oid).reduce((s,p)=>s+(p.cantidad||0),0);
+  const verDash = perfil.rol!=="operario";
   const esGerencia = perfil.rol === "gerencia";
   const tiles = [
     { id:"ordenes",   icon:"📋", bg:"#ECFDF5", label:"Órdenes de Producción", sub:"Planificar y registrar",           roles:["gerencia","sup_fabrica","sup_oficina"] },
+    { id:"diario",    icon:"📖", bg:"#EFF6FF", label:"Diario de Fabricación", sub:"El parte oficial del día",          roles:["gerencia","sup_fabrica","sup_oficina"] },
     { id:"seed",      icon:"🚀", bg:"#FFF7ED", label:"Carga Inicial",     sub:"Catálogo completo en 1 clic",          roles:["gerencia"] },
     { id:"synccat",   icon:"🔗", bg:"#F5F3FF", label:"Sincronizar Catálogo", sub:"Descripciones desde el CRM",         roles:["gerencia"] },
+    { id:"importhist",icon:"📥", bg:"#FFFBEB", label:"Importar Histórico", sub:"Excel maestro → Firebase",              roles:["gerencia"] },
     { id:"centros",   icon:"🏭", bg:"#EFF6FF", label:"Centros de Trabajo", sub:`${counts.centros} centros`,           roles:["gerencia"] },
     { id:"lineas",    icon:"⚙️", bg:"#F1F5F9", label:"Líneas de Producción", sub:`${counts.lineas} líneas`,            roles:["gerencia"] },
     { id:"usuarios",  icon:"👥", bg:"#F5F3FF", label:"Usuarios",          sub:`${counts.usuarios} registrados`,      roles:["gerencia"] },
@@ -1644,20 +1986,40 @@ function Home({ perfil, onGo, onLogout, counts }) {
           <div style={{fontSize:13,color:C.muted,marginTop:3}}>Crea órdenes con nº OT y registra la producción diaria. Próximo: terminal de planta con paros y consumos por lote.</div>
         </div>
         {perfil.rol==="operario" && (
-          <div style={{maxWidth:760,margin:"0 auto"}}>
-            <div style={{background:P.card,border:`2px solid ${P.border}`,borderRadius:16,padding:"26px 20px",textAlign:"center",marginBottom:12}}>
-              <div style={{fontFamily:P.fh,fontWeight:900,fontSize:30,color:P.text,letterSpacing:0.5}}>TU TERMINAL DE PLANTA</div>
-              <div style={{fontSize:15,color:P.muted,marginTop:6}}>Registro de tiempo, recepción de lotes e incidencias — disponible en la Fase 2</div>
+          <TerminalOperario perfil={perfil} productos={productos}/>
+        )}
+        {verDash && (activas.length>0 || partesHoy.length>0) && (
+          <div style={{background:"#fff",border:`1px solid ${C.border}`,borderRadius:16,padding:14,marginBottom:14,boxShadow:"0 1px 2px rgba(15,23,42,.04)"}}>
+            <div style={{fontSize:11,color:C.mutedD,fontWeight:800,textTransform:"uppercase",letterSpacing:0.5,marginBottom:10,display:"flex",justifyContent:"space-between"}}>
+              <span>📅 HOY · {new Date().toLocaleDateString("es-ES",{weekday:"long",day:"numeric",month:"2-digit"})}</span>
+              <button onClick={()=>onGo("diario")} style={{background:"none",border:"none",color:C.blue,fontSize:11,fontWeight:800,cursor:"pointer"}}>Ver diario →</button>
             </div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(210px,1fr))",gap:12}}>
-              {[["⏱️","REGISTRAR TIEMPO",P.accent],["📦","RECIBIR MATERIA PRIMA",P.border],["🚨","REPORTAR INCIDENCIA",P.red]].map(([ic,tx,bc])=>(
-                <div key={tx} style={{background:P.card,border:`2.5px solid ${bc}`,borderRadius:18,padding:"30px 16px",textAlign:"center",opacity:0.55}}>
-                  <div style={{fontSize:44}}>{ic}</div>
-                  <div style={{fontFamily:P.fh,fontWeight:800,fontSize:21,color:tx==="REPORTAR INCIDENCIA"?P.red:P.text,marginTop:8,letterSpacing:0.5}}>{tx}</div>
-                  <div style={{fontSize:12,color:P.muted,marginTop:4}}>Fase 2</div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
+              {[[activas.length,"Órdenes activas",C.accent],
+                [planHoy?`${udsHoy}/${planHoy}`:String(udsHoy),"Uds hoy"+(planHoy?" / plan":""),C.text],
+                [planHoy?Math.round(udsHoy/planHoy*100)+"%":"—","Del plan",planHoy&&udsHoy/planHoy>=1?C.green:C.amber]].map(([n,l,col],i)=>(
+                <div key={i} style={{background:C.card2,borderRadius:12,padding:"10px 6px",textAlign:"center"}}>
+                  <div style={{fontFamily:F.h,fontWeight:900,fontSize:22,color:col}}>{n}</div>
+                  <div style={{fontSize:10,color:C.muted,marginTop:2}}>{l}</div>
                 </div>
               ))}
             </div>
+            {activas.slice(0,4).map(o=>{
+              const p = productos.find(x=>x.id===o.producto_id);
+              const hechas = prodDe(o.id);
+              const pct = o.cantidad>0?Math.min(100,hechas/o.cantidad*100):0;
+              return (
+                <div key={o.id} onClick={()=>onGo("ordenes")} style={{padding:"9px 0",borderBottom:`1px solid ${C.card2}`,cursor:"pointer"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",fontSize:13,gap:8}}>
+                    <b style={{color:C.text}}>{o.numero?`OT ${o.numero} · `:""}{p?.nombre||"?"}</b>
+                    <span style={{fontWeight:800,color:pct>=100?C.green:C.amber,flexShrink:0}}>{hechas}/{o.cantidad}{pct>=100?" ✓":""}</span>
+                  </div>
+                  <div style={{height:6,background:C.card2,borderRadius:3,overflow:"hidden",marginTop:4}}>
+                    <div style={{width:pct+"%",height:"100%",background:pct>=100?C.green:C.accent,borderRadius:3}}/>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
         {!esGerencia && perfil.rol!=="operario" && tiles.length===0 && <Empty icon="⏳" text="Tu área estará disponible en la Fase 2"/>}
@@ -1741,11 +2103,14 @@ export default function App() {
               <div style={{marginTop:8,fontSize:13}}>
                 {!diag.au && diag.fs && "Tu red o un bloqueador (ad-block, DNS privado tipo AdGuard, VPN) está cortando el servidor de login de Google. Desactívalo o cambia de red."}
                 {!diag.fs && "Sin salida a los servidores de Google. Cambia de red (wifi ↔ datos)."}
-                {diag.fs && diag.au && "Los servidores responden — reintenta; si persiste, borra caché del navegador o prueba en incógnito."}
+                {diag.fs && diag.au && "Los servidores responden pero la sesión local está atascada. Pulsa Entrar igualmente, o borra los DATOS del sitio (ⓘ junto a la URL → Configuración de sitios → Borrar datos)."}
               </div>
             </>}
           </div>
-          <button onClick={()=>window.location.reload()} style={{background:"#e06000",border:"none",color:"#fff",borderRadius:12,padding:"12px 28px",fontFamily:F.h,fontWeight:800,fontSize:16,cursor:"pointer"}}>🔄 Reintentar</button>
+          <div style={{display:"flex",gap:10,flexWrap:"wrap",justifyContent:"center"}}>
+            <button onClick={()=>window.location.reload()} style={{background:"#e06000",border:"none",color:"#fff",borderRadius:12,padding:"12px 28px",fontFamily:F.h,fontWeight:800,fontSize:16,cursor:"pointer"}}>🔄 Reintentar</button>
+            {diag && diag.fs && diag.au && <button onClick={()=>setAuthUser(null)} style={{background:"#fff",border:"1.5px solid #e06000",color:"#e06000",borderRadius:12,padding:"12px 22px",fontFamily:F.h,fontWeight:800,fontSize:16,cursor:"pointer"}}>→ Entrar igualmente</button>}
+          </div>
         </>}
       </div>
     </div>
@@ -1768,15 +2133,19 @@ export default function App() {
   );
 
   const back = () => setView("home");
+  const [ordenesRoot] = useCol("ordenes");
+  const [produccionesRoot] = useCol("producciones");
   const counts = { centros:centros.length, lineas:lineas.length, motivos:motivos.length, usuarios:usuarios.length, turnos:turnos.length, procesos:procesos.length, mps:mps.length, provs:provs.length, productos:productos.length };
 
   return (
     <div style={{fontFamily:F.b}}>
       <style>{STYLES}</style>
-      {view==="home"      && <Home perfil={perfil} onGo={setView} onLogout={()=>signOut(auth)} counts={counts}/>}
+      {view==="home"      && <Home perfil={perfil} onGo={setView} onLogout={()=>signOut(auth)} counts={counts} ordenes={ordenesRoot} producciones={produccionesRoot} productos={productos}/>}
       {view==="ordenes"   && <OrdenesScreen onBack={back} perfil={perfil} productos={productos} lineas={lineas} turnos={turnos} centros={centros} mps={mps} motivos={motivos} usuarios={usuarios}/>}
+      {view==="diario"    && <DiarioScreen onBack={back} productos={productos} lineas={lineas} turnos={turnos} mps={mps} motivos={motivos} usuarios={usuarios} centros={centros}/>}
       {view==="seed"      && <SeedScreen onBack={back}/>}
       {view==="synccat"   && <SyncCatalogoScreen onBack={back} productos={productos}/>}
+      {view==="importhist"&& <ImportHistoricoScreen onBack={back} productos={productos} mps={mps} lineas={lineas} turnos={turnos}/>}
       {view==="centros"   && <CentrosScreen onBack={back}/>}
       {view==="lineas"    && <LineasScreen onBack={back} centros={centros}/>}
       {view==="motivos"   && <MotivosScreen onBack={back}/>}
