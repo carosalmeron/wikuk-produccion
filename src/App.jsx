@@ -362,6 +362,108 @@ function UsuarioForm({ onBack, ep, turnos, centros, onDone }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // CENTROS DE TRABAJO
 // ═══════════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════
+// CARGA INICIAL — catálogo wikuk completo en 1 clic
+// ═══════════════════════════════════════════════════════════════════════════════
+function SeedScreen({ onBack }) {
+  const [log, setLog] = useState([]);
+  const [running, setRunning] = useState(false);
+  const [done, setDone] = useState(false);
+  const add = (m) => setLog(l=>[...l, m]);
+
+  const run = async () => {
+    if (running) return;
+    if (!window.confirm("Se creará el catálogo completo: centro, líneas, turnos, motivos, procesos, 26 materias, 3 proveedores y 31 productos con escandallo. ¿Continuar?")) return;
+    setRunning(true);
+    try {
+      // 1) CENTRO
+      const centroId = uid();
+      await save("centros", centroId, { nombre:"Obrador", ubicacion:"Baza", tarifa_mo:12.5, activo:true });
+      add("🏭 Centro Obrador (tarifa 12,50 €/h)");
+      // 2) LÍNEAS
+      for (const n of ["Maextra","Especta","MX368"]) await save("lineas", uid(), { centro:centroId, nombre:n, activo:true });
+      add("⚙️ 3 líneas: Maextra · Especta · MX368");
+      // 3) TURNOS
+      await save("turnos", uid(), { nombre:"Turno 1 · Mañana", hora_inicio:"06:00", hora_fin:"14:00" });
+      await save("turnos", uid(), { nombre:"Turno 2 · Tarde", hora_inicio:"14:00", hora_fin:"22:00" });
+      add("🕐 2 turnos (06-14 / 14-22)");
+      // 4) MOTIVOS
+      const mot = [["🔧","Avería máquina"],["📦","Falta materia prima"],["🔄","Cambio de formato"],["🧽","Limpieza"],["🧪","Pruebas"],["🎓","Formación"],["☕","Descanso"],["🔩","Poner flexibles"],["🫧","Desalar materia"],["🕳️","Desmoldar/secado"],["✏️","Otro"]];
+      for (const [ic,nm] of mot) await save("motivos_paro", uid(), { nombre:nm, icono:ic });
+      add(`⏸ ${mot.length} motivos de paro`);
+      // 5) PROCESOS
+      const procs = [["Desalar",false,true],["Entubar fina",false,false],["Entubar grueso",false,false],["Entubar malla",false,true],["Ensanchar",false,false],["Estirar",false,false],["Enrollar",false,false],["Plisar",false,false],["Secado/moldes",true,false],["Preparar mercancía",false,true]];
+      for (const [nm,dif,ap] of procs) await save("procesos", uid(), { nombre:nm, diferido:dif, apoyo:ap });
+      add(`⚙️ ${procs.length} procesos (secado diferido; desalar/malla/preparar como apoyo)`);
+      // 6) PROVEEDORES
+      for (const p of ["Proveedor MBL","Proveedor China","Proveedor grueso"]) await save("proveedores", uid(), { nombre:p, activo:true });
+      add("🚚 3 proveedores (renombra con los reales)");
+      // 7) MATERIAS
+      const mats = [
+        ["MBL60.90","m",90,0.133,85],["MBL65.90","m",90,0.133,85],["MBL55.60","m",60,0.133,85],["MBL60.60","m",60,0.133,85],
+        ["MCL50.80","m",80,0.133,85],["MCL55.90","m",90,0.133,85],["TR1409","m",90,0.133,85],["B6.9K.BG","m",90,0.09,85],
+        ["C4.8R","m",90,0.09,95],["C5.8R.BG","m",90,0.09,95],["C5.8BG","m",90,0.09,95],["C6.9R.BG","m",90,0.09,95],
+        ["C6.8N.N32","m",90,0.09,95],["C7.9R.BG","m",90,0.09,95],["C7.9R.B6","m",90,0.09,95],["C7.8F","m",90,0.09,95],
+        ["C8.8F","m",90,0.09,95],["C50.8K.BG","m",90,0.09,95],["CP155.81","m",90,0.09,95],["CP159.82","m",90,0.09,95],
+        ["CPA258.80","m",90,0.09,95],["40/42-90m","m",90,0.09,95],["48/52-verra-Chile","m",90,0,85],["52/56-prueba","m",90,0,85],
+        ["ORH4.10","m",9,0.55,110],["MALLA","m",10,0,100],
+      ];
+      const matId = {};
+      for (const [cod,un,mm,pr,ro] of mats) {
+        const id = uid(); matId[cod]=id;
+        await save("materias", id, { nombre:cod, unidad:un, precio_ud:pr, rendimiento_objetivo:ro, metros_madeja:mm });
+      }
+      add(`📦 ${mats.length} materias (85/95/110%, metros/madeja del código)`);
+      // 8) PRODUCTOS  [codigo, obj, coste_fab, escandallo:[mat,capas]]
+      const P1=[["MXP26.10F1"],["MXP28.10F2"],["MX28.10F2"],["MXP30.10F3"],["MX30.10F3"],["MXP32.10F4"],["MX32.10F4"],["MX34.10F4"],["MX36.10F4"],["MXP38.10R1"],["MXP40.10R3"],["MXP40.10"],["MXP42.10"],["MXP45.10"],["MX150.10F4"],["MX155.10F4"]];
+      for (const [cod] of P1) await save("productos", uid(), { nombre:cod, centro:centroId, unidad:"Stick", metros_finales:10, objetivo_diario:300, coste_objetivo:1.25, procesos_asignados:[], materias_asignadas:[] });
+      const mk=(cod,obj,coste,esc)=>save("productos", uid(), { nombre:cod, centro:centroId, unidad:"Stick", metros_finales:10, objetivo_diario:obj, coste_objetivo:coste, procesos_asignados:[], materias_asignadas:esc.map(([m,k])=>({mp_id:matId[m],capas:k})) });
+      await mk("MX238.10R3",100,3.50,[["MBL60.90",2]]);
+      await mk("MX258.10-10R4",100,3.50,[["MBL60.90",2]]);
+      await mk("MX264.10R4",100,3.50,[["MBL65.90",2]]);
+      await mk("MX268.10R4",100,3.50,[["MBL65.90",2]]);
+      await mk("MX358.10R3",70,5.25,[["MBL60.90",3]]);
+      await mk("MX360.10R3",70,5.25,[["MBL60.90",3]]);
+      await mk("MX364.10R4",70,5.25,[["MBL65.90",3]]);
+      await mk("MX368.10R4",70,5.25,[["MBL65.90",3]]);
+      await mk("MX364.10R4M",45,7.75,[["MBL65.90",3],["MALLA",1]]);
+      await mk("MX368.10R4M",45,7.75,[["MBL65.90",3],["MALLA",1]]);
+      await mk("ESP60.10",50,7.75,[["MBL65.90",2],["ORH4.10",1]]);
+      await mk("ESP65.10",50,7.75,[["MBL65.90",2],["ORH4.10",1]]);
+      await mk("ESP70",50,7.75,[["MBL65.90",2],["ORH4.10",1]]);
+      await mk("ESP75.63",38,9.25,[["MBL65.90",3],["ORH4.10",1]]);
+      add("🏷️ 31 productos con escandallo, objetivo diario y coste de fabricación");
+      // 9) COSTES
+      await save("config_costes", centroId, { amortizacion_mes:2431, alquiler_mes:1200, luz_agua_mes:900, fijos_mensuales:4531, horas_persona_mes:1848 });
+      add("💰 Costes Obrador: 2.431+1.200+900 = 4.531 €/mes ÷ 1.848 h = 2,45 €/h");
+      add("✅ CARGA COMPLETA — revisa cada maestro y ajusta lo que quieras");
+      setDone(true);
+    } catch(e) {
+      add("❌ Error: "+e.message);
+    }
+    setRunning(false);
+  };
+
+  return (
+    <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
+      <Header title="CARGA INICIAL WIKUK" onBack={onBack} sub="El catálogo validado, en un clic"/>
+      <div style={{padding:14}}>
+        <Card style={{marginBottom:14}}>
+          <div style={{fontSize:14,color:C.muted,lineHeight:1.6,marginBottom:12}}>
+            Crea de golpe: 1 centro · 3 líneas · 2 turnos · 11 motivos · 10 procesos · 26 materias · 3 proveedores · 31 productos con escandallo · costes reales. Todo editable después.
+          </div>
+          {!done && <Btn onClick={run} disabled={running}>{running?"⏳ Cargando…":"🚀 Cargar catálogo completo"}</Btn>}
+        </Card>
+        {log.length>0 && (
+          <Card>
+            {log.map((m,i)=><div key={i} style={{padding:"6px 0",fontSize:14,color:C.text,borderBottom:`1px solid ${C.border}`}}>{m}</div>)}
+          </Card>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function CentrosScreen({ onBack }) {
   const [centros] = useCol("centros", "nombre");
   const [nombre, setNombre] = useState("");
@@ -1005,6 +1107,7 @@ function CostesScreen({ onBack, centros }) {
 function Home({ perfil, onGo, onLogout, counts }) {
   const esGerencia = perfil.rol === "gerencia";
   const tiles = [
+    { id:"seed",      icon:"🚀", bg:"#FFF7ED", label:"Carga Inicial",     sub:"Catálogo completo en 1 clic",          roles:["gerencia"] },
     { id:"centros",   icon:"🏭", bg:"#EFF6FF", label:"Centros de Trabajo", sub:`${counts.centros} centros`,           roles:["gerencia"] },
     { id:"lineas",    icon:"⚙️", bg:"#F1F5F9", label:"Líneas de Producción", sub:`${counts.lineas} líneas`,            roles:["gerencia"] },
     { id:"usuarios",  icon:"👥", bg:"#F5F3FF", label:"Usuarios",          sub:`${counts.usuarios} registrados`,      roles:["gerencia"] },
@@ -1136,6 +1239,7 @@ export default function App() {
     <div style={{fontFamily:F.b}}>
       <style>{STYLES}</style>
       {view==="home"      && <Home perfil={perfil} onGo={setView} onLogout={()=>signOut(auth)} counts={counts}/>}
+      {view==="seed"      && <SeedScreen onBack={back}/>}
       {view==="centros"   && <CentrosScreen onBack={back}/>}
       {view==="lineas"    && <LineasScreen onBack={back} centros={centros}/>}
       {view==="motivos"   && <MotivosScreen onBack={back}/>}
