@@ -415,7 +415,7 @@ function SeedScreen({ onBack }) {
       const matId = {};
       for (const [cod,un,mm,pr,ro] of mats) {
         const id = uid(); matId[cod]=id;
-        await save("materias", id, { nombre:cod, unidad:un, precio_ud:pr, rendimiento_objetivo:ro, metros_madeja:mm });
+        await save("materias_primas", id, { nombre:cod, unidad:un, precio_ud:pr, rendimiento_objetivo:ro, metros_madeja:mm });
       }
       add(`📦 ${mats.length} materias (85/95/110%, metros/madeja del código)`);
       // 8) PRODUCTOS  [codigo, obj, coste_fab, escandallo:[mat,capas]]
@@ -2134,6 +2134,20 @@ export default function App() {
 
   const back = () => setView("home");
   const [ordenesRoot] = useCol("ordenes");
+  useEffect(() => {
+    // Migración automática: la Carga Inicial v1 guardó materias en colección "materias" (nombre erróneo)
+    if (!authUser) return;
+    (async () => {
+      try {
+        const dst = await getDocs(collection(db, "materias_primas"));
+        if (!dst.empty) return;
+        const src = await getDocs(collection(db, "materias"));
+        if (src.empty) return;
+        for (const d of src.docs) await setDoc(doc(db, "materias_primas", d.id), d.data());
+        console.log("Migradas", src.size, "materias");
+      } catch(e) { console.warn("migración materias:", e.message); }
+    })();
+  }, [authUser]);
   const [produccionesRoot] = useCol("producciones");
   const counts = { centros:centros.length, lineas:lineas.length, motivos:motivos.length, usuarios:usuarios.length, turnos:turnos.length, procesos:procesos.length, mps:mps.length, provs:provs.length, productos:productos.length };
 
