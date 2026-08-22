@@ -1,1 +1,5 @@
-{ "name": "wikuk-produccion", "version": "1.0.0", "scripts": { "build": "echo ok" } }
+import React from "react";
+import ReactDOM from "react-dom/client";
+import App from "./App.jsx";
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<App />);
