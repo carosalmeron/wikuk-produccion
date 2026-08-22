@@ -1698,8 +1698,18 @@ export default function App() {
   const [productos]= useCol("productos", "nombre");
 
   const [bootSlow, setBootSlow] = useState(false);
+  const [diag, setDiag] = useState(null);
   useEffect(() => onAuthStateChanged(auth, u => setAuthUser(u)), []);
   useEffect(() => { const t = setTimeout(()=>setBootSlow(true), 8000); return ()=>clearTimeout(t); }, []);
+  useEffect(() => {
+    if (!bootSlow || authUser!==undefined) return;
+    const test = async (url) => { try { const r = await fetch(url); return r.ok || r.status===400 || r.status===403; } catch(e){ return false; } };
+    (async()=>{
+      const fs = await test("https://firestore.googleapis.com/v1/projects/wikuk-produccion/databases/(default)/documents/centros?pageSize=1");
+      const au = await test("https://www.googleapis.com/identitytoolkit/v3/relyingparty/getProjectConfig?key=AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA");
+      setDiag({fs, au});
+    })();
+  }, [bootSlow]);
   useEffect(() => {
     // Bootstrap: ¿existe algún usuario?
     getDocs(collection(db, "usuarios")).then(s => setNoUsers(s.empty)).catch(()=>{});
@@ -1723,9 +1733,18 @@ export default function App() {
       <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:"100vh",gap:14,padding:24}}>
         <div style={{fontFamily:F.h,fontSize:20,color:C.muted}}>{bootSlow?"Sin respuesta del servidor":"Cargando…"}</div>
         {bootSlow && <>
-          <p style={{fontSize:14,color:C.muted,textAlign:"center",lineHeight:1.6,maxWidth:340}}>
-            No se puede conectar con Firebase. Suele ser cosa de la red: prueba con datos móviles en vez de wifi (o al revés), o desactiva VPN/ahorro de datos.
-          </p>
+          <div style={{fontSize:14,color:C.muted,textAlign:"center",lineHeight:1.8,maxWidth:340}}>
+            {diag===null && "Diagnosticando conexión…"}
+            {diag && <>
+              <div>Base de datos: {diag.fs?"✅ conecta":"❌ bloqueada"}</div>
+              <div>Servidor de login: {diag.au?"✅ conecta":"❌ bloqueado"}</div>
+              <div style={{marginTop:8,fontSize:13}}>
+                {!diag.au && diag.fs && "Tu red o un bloqueador (ad-block, DNS privado tipo AdGuard, VPN) está cortando el servidor de login de Google. Desactívalo o cambia de red."}
+                {!diag.fs && "Sin salida a los servidores de Google. Cambia de red (wifi ↔ datos)."}
+                {diag.fs && diag.au && "Los servidores responden — reintenta; si persiste, borra caché del navegador o prueba en incógnito."}
+              </div>
+            </>}
+          </div>
           <button onClick={()=>window.location.reload()} style={{background:"#e06000",border:"none",color:"#fff",borderRadius:12,padding:"12px 28px",fontFamily:F.h,fontWeight:800,fontSize:16,cursor:"pointer"}}>🔄 Reintentar</button>
         </>}
       </div>
