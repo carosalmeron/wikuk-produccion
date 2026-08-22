@@ -15,6 +15,8 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
+const APP_VERSION = "v2.7";
+
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
   authDomain: "wikuk-produccion.firebaseapp.com",
@@ -196,7 +198,7 @@ function LoginScreen({ noUsers }) {
       <div style={{width:"100%",maxWidth:420}}>
         <div style={{textAlign:"center",marginBottom:28}}>
           <div style={{width:72,height:72,borderRadius:20,background:C.navy,display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:34,marginBottom:14}}>🏭</div>
-          <div style={{fontFamily:F.h,fontWeight:800,fontSize:28,color:C.text,letterSpacing:-0.5}}>wikuk</div>
+          <div style={{fontFamily:F.h,fontWeight:800,fontSize:28,color:C.text,letterSpacing:-0.5}}>wikuk <span style={{fontSize:12,fontWeight:400,color:C.muted}}>{APP_VERSION}</span></div>
           <p style={{color:C.mutedD,fontSize:15,marginTop:4,fontFamily:F.b}}>
             {modo==="registro" ? "Crear cuenta" : "Control de Producción"}
           </p>
@@ -1971,7 +1973,7 @@ function Home({ perfil, onGo, onLogout, counts, ordenes=[], producciones=[], pro
   return (
     <div style={{background:C.bg,minHeight:"100vh"}}>
       <div style={{background:C.navy,padding:"14px 16px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-        <div style={{fontFamily:F.h,fontWeight:800,fontSize:20,color:"#fff",letterSpacing:-0.3}}>wikuk <span style={{fontWeight:400,fontSize:13,color:"rgba(255,255,255,0.55)"}}>· Producción</span></div>
+        <div style={{fontFamily:F.h,fontWeight:800,fontSize:20,color:"#fff",letterSpacing:-0.3}}>wikuk <span style={{fontWeight:400,fontSize:13,color:"rgba(255,255,255,0.55)"}}>· Producción {APP_VERSION}</span></div>
         <div style={{display:"flex",alignItems:"center",gap:10}}>
           <div style={{textAlign:"right"}}>
             <div style={{fontSize:13,color:"#fff",fontWeight:600,fontFamily:F.b}}>{perfil.nombre}</div>
@@ -2093,7 +2095,7 @@ export default function App() {
   if (authUser === undefined) return (
     <div style={{fontFamily:F.b}}><style>{STYLES}</style>
       <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:"100vh",gap:14,padding:24}}>
-        <div style={{fontFamily:F.h,fontSize:20,color:C.muted}}>{bootSlow?"Sin respuesta del servidor":"Cargando…"}</div>
+        <div style={{fontFamily:F.h,fontSize:20,color:C.muted}}>{bootSlow?"Sin respuesta del servidor":"Cargando…"} <span style={{fontSize:12,opacity:0.5}}>{APP_VERSION}</span></div>
         {bootSlow && <>
           <div style={{fontSize:14,color:C.muted,textAlign:"center",lineHeight:1.8,maxWidth:340}}>
             {diag===null && "Diagnosticando conexión…"}
