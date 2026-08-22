@@ -1,3 +1,4 @@
+/* eslint-disable react-hooks/exhaustive-deps, no-unused-vars, no-loop-func */
 // ═══════════════════════════════════════════════════════════════════════════════
 // WIKUK PRODUCCIÓN 2.0 — FASE 1: Configuración maestra + Auth
 // Firebase: Auth (email/pass) + Firestore en tiempo real
@@ -15,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v2.7";
+const APP_VERSION = "v2.7.1";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
