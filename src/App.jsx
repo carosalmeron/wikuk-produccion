@@ -615,6 +615,7 @@ function CentrosScreen({ onBack }) {
                   <div style={{fontSize:13,color:C.muted,marginTop:2}}>{c.ubicacion||""}{c.tarifa_mo?` · MO ref: ${c.tarifa_mo} €/h`:""}</div>
                 </div>
                 <div style={{display:"flex",gap:6}}>
+                  <IconBtn onClick={()=>startEdit(c)}>✏️</IconBtn>
                   <button onClick={()=>save("centros",c.id,{activo:c.activo===false})}
                     style={{background:"#fff",border:`1.5px solid ${c.activo!==false?C.green:C.border}`,color:c.activo!==false?C.green:C.muted,borderRadius:20,padding:"4px 12px",fontSize:12,fontFamily:F.h,fontWeight:600,cursor:"pointer"}}>
                     {c.activo!==false?"✓ Activo":"Reactivar"}
@@ -641,12 +642,14 @@ function LineasScreen({ onBack, centros }) {
   const [lineas] = useCol("lineas", "nombre");
   const [centro, setCentro] = useState("");
   const [nombre, setNombre] = useState("");
+  const [editId, setEditId] = useState(null);
+  const startEdit = (x)=>{ setEditId(x.id); setNombre(x.nombre||""); setCentro(x.centro||""); window.scrollTo(0,0); };
   useEffect(()=>{ if(!centro && centros.length) setCentro(centros[0].id); },[centros.length]);
 
   const add = async () => {
     if (!nombre.trim() || !centro) return;
-    await save("lineas", uid(), { centro, nombre: nombre.trim(), activo: true });
-    setNombre("");
+    await save("lineas", editId||uid(), { centro, nombre: nombre.trim(), activo: true });
+    setNombre(""); setEditId(null);
   };
   return (
     <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
@@ -656,7 +659,8 @@ function LineasScreen({ onBack, centros }) {
           <Sel label="Centro" value={centro} onChange={setCentro} placeholder="Centro…"
             options={centros.map(x=>({value:x.id,label:`🏭 ${x.nombre}`}))}/>
           <Field label="Nombre de la línea" value={nombre} onChange={setNombre} placeholder="Ej: Maextra / Especta / MX368"/>
-          <Btn v="ghost" onClick={add}>＋ Añadir Línea</Btn>
+          <Btn v="ghost" onClick={add}>{editId?"💾 Guardar cambios":"＋ Añadir Línea"}</Btn>
+          {editId && <button onClick={()=>{setEditId(null);setNombre("");}} style={{marginLeft:8,background:"none",border:"none",color:C.muted,fontSize:14,cursor:"pointer",textDecoration:"underline"}}>Cancelar</button>}
         </Card>
         {centros.map(ct=>{
           const rows = lineas.filter(l=>l.centro===ct.id);
@@ -670,6 +674,7 @@ function LineasScreen({ onBack, centros }) {
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                       <div style={{fontFamily:F.h,fontWeight:700,fontSize:16,color:C.text}}>⚙️ {l.nombre}</div>
                       <div style={{display:"flex",gap:6}}>
+                        <IconBtn onClick={()=>startEdit(l)}>✏️</IconBtn>
                         <button onClick={()=>save("lineas",l.id,{activo:l.activo===false})}
                           style={{background:"#fff",border:`1px solid ${l.activo!==false?C.green:C.border}`,color:l.activo!==false?C.green:C.muted,borderRadius:20,padding:"4px 12px",fontSize:12,fontWeight:600,cursor:"pointer"}}>
                           {l.activo!==false?"✓ Activa":"Reactivar"}
@@ -696,10 +701,12 @@ function MotivosScreen({ onBack }) {
   const [motivos] = useCol("motivos_paro", "nombre");
   const [nombre, setNombre] = useState("");
   const [icono, setIcono] = useState("");
+  const [editId, setEditId] = useState(null);
+  const startEdit = (m)=>{ setEditId(m.id); setNombre(m.nombre||""); setIcono(m.icono||""); window.scrollTo(0,0); };
   const add = async () => {
     if (!nombre.trim()) return;
-    await save("motivos_paro", uid(), { nombre: nombre.trim(), icono: icono.trim()||"⏸" });
-    setNombre(""); setIcono("");
+    await save("motivos_paro", editId||uid(), { nombre: nombre.trim(), icono: icono.trim()||"⏸" });
+    setNombre(""); setIcono(""); setEditId(null);
   };
   const sugerencias = [["🔧","Avería máquina"],["📦","Falta materia prima"],["🔄","Cambio de formato"],["🧽","Limpieza"],["🧪","Pruebas"],["🎓","Formación"],["☕","Descanso"],["✏️","Otro"]];
   return (
@@ -711,7 +718,8 @@ function MotivosScreen({ onBack }) {
             <Field label="Icono" value={icono} onChange={setIcono} placeholder="🔧"/>
             <Field label="Motivo" value={nombre} onChange={setNombre} placeholder="Ej: Avería máquina"/>
           </div>
-          <Btn v="ghost" onClick={add}>＋ Añadir Motivo</Btn>
+          <Btn v="ghost" onClick={add}>{editId?"💾 Guardar cambios":"＋ Añadir Motivo"}</Btn>
+          {editId && <button onClick={()=>{setEditId(null);setNombre("");setIcono("");}} style={{marginLeft:8,background:"none",border:"none",color:C.muted,fontSize:14,cursor:"pointer",textDecoration:"underline"}}>Cancelar</button>}
           {motivos.length===0 && (
             <div style={{marginTop:12}}>
               <div style={{fontSize:12,color:C.mutedD,marginBottom:8}}>Sugerencia rápida — pulsa para crear los 8 típicos:</div>
@@ -724,6 +732,8 @@ function MotivosScreen({ onBack }) {
             <Card key={m.id} style={{textAlign:"center",position:"relative"}}>
               <div style={{fontSize:28}}>{m.icono}</div>
               <div style={{fontFamily:F.h,fontWeight:700,fontSize:14,color:C.text,marginTop:4}}>{m.nombre}</div>
+              <button onClick={()=>startEdit(m)}
+                style={{position:"absolute",top:6,left:8,background:"none",border:"none",cursor:"pointer",fontSize:13}}>✏️</button>
               <button onClick={()=>{if(window.confirm("¿Eliminar motivo?"))del("motivos_paro",m.id);}}
                 style={{position:"absolute",top:6,right:8,background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13}}>✕</button>
             </Card>
@@ -742,11 +752,13 @@ function TurnosScreen({ onBack }) {
   const [nombre, setNombre] = useState("");
   const [hi, setHi] = useState("06:00");
   const [hf, setHf] = useState("14:00");
+  const [editId, setEditId] = useState(null);
+  const startEdit = (t)=>{ setEditId(t.id); setNombre(t.nombre||""); setHi(t.hora_inicio||"06:00"); setHf(t.hora_fin||"14:00"); window.scrollTo(0,0); };
 
   const add = async () => {
     if (!nombre.trim()) return;
-    await save("turnos", uid(), { nombre: nombre.trim(), hora_inicio: hi, hora_fin: hf });
-    setNombre("");
+    await save("turnos", editId||uid(), { nombre: nombre.trim(), hora_inicio: hi, hora_fin: hf });
+    setNombre(""); setEditId(null);
   };
   return (
     <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
@@ -758,7 +770,8 @@ function TurnosScreen({ onBack }) {
             <Field label="Inicio" value={hi} onChange={setHi} type="time"/>
             <Field label="Fin" value={hf} onChange={setHf} type="time"/>
           </div>
-          <Btn v="ghost" onClick={add}>＋ Añadir Turno</Btn>
+          <Btn v="ghost" onClick={add}>{editId?"💾 Guardar cambios":"＋ Añadir Turno"}</Btn>
+          {editId && <button onClick={()=>{setEditId(null);setNombre("");}} style={{marginLeft:8,background:"none",border:"none",color:C.muted,fontSize:14,cursor:"pointer",textDecoration:"underline"}}>Cancelar</button>}
         </Card>
         {turnos.length===0 && <Empty icon="🕐" text="Sin turnos. Crea Mañana y Tarde."/>}
         <div style={{display:"flex",flexDirection:"column",gap:8}}>
@@ -769,7 +782,10 @@ function TurnosScreen({ onBack }) {
                   <span style={{fontFamily:F.h,fontWeight:700,fontSize:18,color:C.text}}>{t.nombre}</span>
                   <span style={{color:C.accent,fontSize:15,marginLeft:12,fontFamily:F.h,fontWeight:600}}>{t.hora_inicio} – {t.hora_fin}</span>
                 </div>
-                <IconBtn danger onClick={()=>{if(window.confirm("¿Eliminar turno?"))del("turnos",t.id);}}>🗑️</IconBtn>
+                <div style={{display:"flex",gap:6}}>
+                  <IconBtn onClick={()=>startEdit(t)}>✏️</IconBtn>
+                  <IconBtn danger onClick={()=>{if(window.confirm("¿Eliminar turno?"))del("turnos",t.id);}}>🗑️</IconBtn>
+                </div>
               </div>
             </Card>
           ))}
@@ -789,11 +805,13 @@ function ProcesosScreen({ onBack }) {
   const [nombre, setNombre] = useState("");
   const [diferido, setDiferido] = useState(false);
   const [apoyo, setApoyo] = useState(false);
+  const [editId, setEditId] = useState(null);
+  const startEdit = (p)=>{ setEditId(p.id); setNombre(p.nombre||""); setDiferido(!!p.diferido); setApoyo(!!p.apoyo); window.scrollTo(0,0); };
 
   const add = async () => {
     if (!nombre.trim()) return;
-    await save("procesos", uid(), { nombre: nombre.trim(), diferido, apoyo });
-    setNombre(""); setDiferido(false); setApoyo(false);
+    await save("procesos", editId||uid(), { nombre: nombre.trim(), diferido, apoyo });
+    setNombre(""); setDiferido(false); setApoyo(false); setEditId(null);
   };
   return (
     <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
@@ -809,7 +827,8 @@ function ProcesosScreen({ onBack }) {
             style={{background:"#fff",border:`1px solid ${apoyo?C.blue:C.border}`,color:apoyo?C.blue:C.muted,borderRadius:20,padding:"6px 16px",fontSize:14,fontFamily:F.h,fontWeight:600,cursor:"pointer",marginBottom:12,marginLeft:8}}>
             {apoyo?"🤝 Apoyo compartido (se reparte entre líneas)":"◯ Apoyo compartido"}
           </button>
-          <Btn v="ghost" onClick={add}>＋ Añadir Proceso</Btn>
+          <Btn v="ghost" onClick={add}>{editId?"💾 Guardar cambios":"＋ Añadir Proceso"}</Btn>
+          {editId && <button onClick={()=>{setEditId(null);setNombre("");setDiferido(false);setApoyo(false);}} style={{marginLeft:8,background:"none",border:"none",color:C.muted,fontSize:14,cursor:"pointer",textDecoration:"underline"}}>Cancelar</button>}
         </Card>
         {procesos.length===0 && <Empty icon="⚙️" text="Sin procesos. Ej: Estirar, Ensanchar, Plisar…"/>}
         <div style={{display:"flex",flexDirection:"column",gap:8}}>
@@ -819,6 +838,7 @@ function ProcesosScreen({ onBack }) {
                 <div style={{fontFamily:F.h,fontWeight:700,fontSize:17,color:C.text}}>
                   {p.nombre} {p.diferido && <Pill color={C.amber} bg={C.amberBg}>⏭ DIFERIDO</Pill>} {p.apoyo && <Pill color={C.blue} bg={C.blueBg}>🤝 APOYO</Pill>}
                 </div>
+                <IconBtn onClick={()=>startEdit(p)}>✏️</IconBtn>
                 <IconBtn danger onClick={()=>{
                   const n = procEnUso(p.id);
                   if (n>0) { window.alert(`⛔ No se puede borrar: ${n} productos usan este proceso. Quítalo primero de esos productos.`); return; }
