@@ -467,6 +467,354 @@ function SeedScreen({ onBack }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // SINCRONIZAR CATÁLOGO — lee grupo-consolidado-crm (solo lectura) y enriquece productos
 // ═══════════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════
+// FASE 2 · ÓRDENES DE PRODUCCIÓN + registro diario
+// ═══════════════════════════════════════════════════════════════════════════════
+function OrdenesScreen({ onBack, perfil, productos, lineas, turnos, centros, mps, motivos, usuarios }) {
+  const [ordenes] = useCol("ordenes", "fecha");
+  const [producciones] = useCol("producciones", "fecha");
+  const [showForm, setShowForm] = useState(false);
+  const [editOrden, setEditOrden] = useState(null);
+  const [regOrden, setRegOrden] = useState(null); // orden a la que registrar producción
+  const [filtro, setFiltro] = useState("activas");
+
+  const prodDe = (oid) => producciones.filter(p=>p.orden_id===oid).reduce((s,p)=>s+(parseFloat(p.cantidad)||0),0);
+  const estadoDe = (o) => {
+    const hechas = prodDe(o.id);
+    if (o.cerrada) return "CERRADA";
+    if (hechas >= (o.cantidad||0) && o.cantidad>0) return "COMPLETA";
+    if (hechas > 0) return "PARCIAL";
+    return "PLANIFICADA";
+  };
+  const EST = { PLANIFICADA:{c:C.muted,bg:C.card2,t:"⚪ Planificada"}, PARCIAL:{c:C.amber,bg:C.amberBg,t:"🟡 En curso"},
+                COMPLETA:{c:C.green,bg:C.greenBg,t:"🟢 Completa"}, CERRADA:{c:C.blue,bg:C.blueBg,t:"✔ Cerrada"} };
+
+  const visibles = ordenes.filter(o=>{
+    const e = estadoDe(o);
+    if (filtro==="activas") return e!=="CERRADA";
+    if (filtro==="cerradas") return e==="CERRADA";
+    return true;
+  }).sort((a,b)=>(b.fecha||"").localeCompare(a.fecha||""));
+
+  if (showForm || editOrden) return <OrdenForm onBack={()=>{setShowForm(false);setEditOrden(null);}} ep={editOrden}
+    productos={productos} lineas={lineas} turnos={turnos} centros={centros}/>;
+  if (regOrden) return <RegistrarProduccion onBack={()=>setRegOrden(null)} orden={regOrden} perfil={perfil}
+    turnos={turnos} hechas={prodDe(regOrden.id)} producciones={producciones.filter(p=>p.orden_id===regOrden.id)}
+    productos={productos} mps={mps} motivos={motivos} usuarios={usuarios}/>;
+
+  return (
+    <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
+      <Header title="ÓRDENES DE PRODUCCIÓN" onBack={onBack} sub="Nº OT · producto · cantidad · lo pendiente vive aquí"/>
+      <div style={{padding:14}}>
+        <Btn onClick={()=>setShowForm(true)}>＋ Nueva Orden</Btn>
+        <div style={{display:"flex",gap:6,margin:"14px 0"}}>
+          {[["activas","Activas"],["cerradas","Cerradas"],["todas","Todas"]].map(([k,l])=>(
+            <button key={k} onClick={()=>setFiltro(k)}
+              style={{background:filtro===k?C.text:"#fff",color:filtro===k?"#fff":C.muted,border:`1px solid ${filtro===k?C.text:C.border}`,borderRadius:20,padding:"6px 16px",fontSize:13,fontFamily:F.h,fontWeight:700,cursor:"pointer"}}>{l}</button>
+          ))}
+        </div>
+        {visibles.length===0 && <Empty icon="📋" text="Sin órdenes aquí. Crea la primera con ＋ Nueva Orden."/>}
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          {visibles.map(o=>{
+            const p = productos.find(x=>x.id===o.producto_id);
+            const l = lineas.find(x=>x.id===o.linea_id);
+            const hechas = prodDe(o.id);
+            const est = estadoDe(o); const E = EST[est];
+            const pdte = Math.max(0,(o.cantidad||0)-hechas);
+            const pct = o.cantidad>0 ? Math.min(100, hechas/o.cantidad*100) : 0;
+            return (
+              <Card key={o.id}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,flexWrap:"wrap"}}>
+                  <div>
+                    <div style={{fontFamily:F.h,fontWeight:800,fontSize:18,color:C.text}}>
+                      {o.numero?`OT ${o.numero} · `:""}{p?.nombre||"?"}
+                    </div>
+                    <div style={{fontSize:13,color:C.muted,marginTop:2}}>
+                      {o.fecha} · {l?.nombre||"sin línea"} · {o.tipo||"Plan"}{o.cliente?` · 👤 ${o.cliente}`:""}
+                    </div>
+                  </div>
+                  <Pill color={E.c} bg={E.bg}>{E.t}</Pill>
+                </div>
+                <div style={{marginTop:10}}>
+                  <div style={{display:"flex",justifyContent:"space-between",fontSize:14,marginBottom:4}}>
+                    <span style={{fontFamily:F.h,fontWeight:800,color:C.text}}>{hechas} / {o.cantidad||0} {p?.unidad||"ud"}</span>
+                    {pdte>0 && est!=="CERRADA" && <span style={{color:C.amber,fontWeight:700}}>faltan {pdte}</span>}
+                  </div>
+                  <div style={{height:8,background:C.card2,borderRadius:4,overflow:"hidden"}}>
+                    <div style={{width:pct+"%",height:"100%",background:pct>=100?C.green:C.accent,borderRadius:4}}/>
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:6,marginTop:12,flexWrap:"wrap"}}>
+                  {!o.cerrada && <Btn v="secondary" onClick={()=>setRegOrden(o)}>➕ Producción</Btn>}
+                  <IconBtn onClick={()=>setEditOrden(o)}>✏️</IconBtn>
+                  {!o.cerrada && est!=="PLANIFICADA" &&
+                    <button onClick={()=>{if(window.confirm(`¿Cerrar la orden con ${hechas}/${o.cantidad}?`))save("ordenes",o.id,{cerrada:true,cerrada_por:perfil?.nombre||"",cerrada_at:new Date().toISOString()});}}
+                      style={{background:"#fff",border:`1.5px solid ${C.green}`,color:C.green,borderRadius:10,padding:"8px 14px",fontFamily:F.h,fontWeight:700,fontSize:14,cursor:"pointer"}}>✔ Cerrar</button>}
+                  {o.cerrada && <button onClick={()=>save("ordenes",o.id,{cerrada:false})}
+                      style={{background:"#fff",border:`1px solid ${C.border}`,color:C.muted,borderRadius:10,padding:"8px 14px",fontSize:13,cursor:"pointer"}}>↺ Reabrir</button>}
+                  <IconBtn danger onClick={()=>{
+                    const n = producciones.filter(x=>x.orden_id===o.id).length;
+                    if (n>0) { window.alert(`⛔ No se puede borrar: tiene ${n} registros de producción. Ciérrala en su lugar.`); return; }
+                    if(window.confirm("¿Eliminar orden sin producción?")) del("ordenes",o.id);
+                  }}>🗑️</IconBtn>
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OrdenForm({ onBack, ep, productos, lineas, turnos, centros }) {
+  const hoy = new Date().toISOString().slice(0,10);
+  const [numero, setNumero] = useState(ep?.numero||"");
+  const [tipo, setTipo] = useState(ep?.tipo||"Plan");
+  const [cliente, setCliente] = useState(ep?.cliente||"");
+  const [productoId, setProductoId] = useState(ep?.producto_id||"");
+  const [lineaId, setLineaId] = useState(ep?.linea_id||"");
+  const [turnoId, setTurnoId] = useState(ep?.turno_id||"");
+  const [fecha, setFecha] = useState(ep?.fecha||hoy);
+  const [cantidad, setCantidad] = useState(ep?.cantidad?.toString()||"");
+
+  const prod = productos.find(p=>p.id===productoId);
+  useEffect(()=>{ if(prod && !ep && !cantidad) setCantidad((prod.objetivo_diario||"").toString()); },[productoId]);
+  const lineasDelCentro = lineas.filter(l=>!prod?.centro || l.centro===prod.centro);
+
+  const guardar = async () => {
+    if (!productoId || !fecha) { window.alert("Producto y fecha son obligatorios"); return; }
+    await save("ordenes", ep?.id||uid(), {
+      numero: numero.trim(), tipo, cliente: cliente.trim(),
+      producto_id: productoId, centro: prod?.centro||"", linea_id: lineaId, turno_id: turnoId,
+      fecha, cantidad: parseFloat(cantidad)||0, cerrada: ep?.cerrada||false,
+      created_at: ep?.created_at||new Date().toISOString(),
+    });
+    onBack();
+  };
+
+  return (
+    <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
+      <Header title={ep?"EDITAR ORDEN":"NUEVA ORDEN"} onBack={onBack}/>
+      <div style={{padding:14}}>
+        <Card style={{marginBottom:14}}>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+            <Field label="Nº OT (SAP)" value={numero} onChange={setNumero} placeholder="1936"/>
+            <Sel label="Tipo" value={tipo} onChange={setTipo}
+              options={[{value:"Plan",label:"Plan"},{value:"Pedido",label:"Pedido"},{value:"Encargo",label:"Encargo cliente"}]}/>
+          </div>
+          {tipo!=="Plan" && <Field label="Cliente (opcional)" value={cliente} onChange={setCliente} placeholder="Ej: Ismael / nº pedido"/>}
+          <Sel label="Producto" value={productoId} onChange={setProductoId} placeholder="Elegir producto…"
+            options={productos.map(p=>({value:p.id,label:`${p.nombre}${p.descripcion?` · ${p.descripcion}`:""}`}))}/>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+            <Sel label="Línea" value={lineaId} onChange={setLineaId} placeholder="Línea…"
+              options={lineasDelCentro.map(l=>({value:l.id,label:l.nombre}))}/>
+            <Sel label="Turno" value={turnoId} onChange={setTurnoId} placeholder="Turno…"
+              options={turnos.map(t=>({value:t.id,label:t.nombre}))}/>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+            <Field label="Fecha" value={fecha} onChange={setFecha} type="date"/>
+            <Field label="Cantidad" value={cantidad} onChange={setCantidad} type="number" placeholder={prod?`obj: ${prod.objetivo_diario}`:"uds"} min="0" step="0.5"/>
+          </div>
+          {prod && <div style={{background:C.card2,borderRadius:10,padding:"10px 12px",fontSize:13,color:C.muted}}>
+            🎯 Objetivo diario del producto: <b>{prod.objetivo_diario||"—"}</b> · Coste obj: <b>{prod.coste_objetivo||"—"} €/{prod.unidad}</b>
+          </div>}
+          <div style={{marginTop:12}}><Btn onClick={guardar}>💾 {ep?"Guardar cambios":"Crear Orden"}</Btn></div>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+function RegistrarProduccion({ onBack, orden, perfil, turnos, hechas, producciones, productos, mps, motivos, usuarios }) {
+  const hoy = new Date().toISOString().slice(0,10);
+  const producto = productos.find(p=>p.id===orden.producto_id);
+  const [cantidad, setCantidad] = useState("");
+  const [fecha, setFecha] = useState(hoy);
+  const [turnoId, setTurnoId] = useState(orden.turno_id||"");
+  const [nota, setNota] = useState("");
+  // Equipo
+  const operarios = usuarios.filter(u=>u.rol==="operario" && u.activo!==false);
+  const [equipo, setEquipo] = useState([]);
+  const [horas, setHoras] = useState("8");
+  // Consumos por lote
+  const [consumos, setConsumos] = useState([]);
+  const [cMat, setCMat] = useState("");
+  const [cLote, setCLote] = useState("");
+  const [cMad, setCMad] = useState("");
+  const [cMet, setCMet] = useState("");
+  // Paros
+  const [paros, setParos] = useState([]);
+  const [pMot, setPMot] = useState("");
+  const [pMin, setPMin] = useState("");
+  const [pNota, setPNota] = useState("");
+
+  const pdte = Math.max(0,(orden.cantidad||0)-hechas);
+  const escandallo = producto?.materias_asignadas||[];
+  const matsEscandallo = escandallo.map(x=>mps.find(m=>m.id===x.mp_id)).filter(Boolean);
+  const matsResto = mps.filter(m=>!escandallo.some(x=>x.mp_id===m.id));
+
+  const capasDe = (mpId) => escandallo.find(x=>x.mp_id===mpId)?.capas||0;
+  const metrosConsumo = (cs) => {
+    const m = mps.find(x=>x.id===cs.materia_id);
+    return (parseFloat(cs.madejas)||0)*(m?.metros_madeja||90) + (parseFloat(cs.metros)||0);
+  };
+  const rendConsumo = (cs) => {
+    const q = parseFloat(cantidad)||0;
+    const capas = capasDe(cs.materia_id);
+    const cons = metrosConsumo(cs);
+    if (!q || !capas || !cons || !producto?.metros_finales) return null;
+    return Math.round(q*producto.metros_finales*capas/cons*1000)/10;
+  };
+
+  const addConsumo = () => {
+    if (!cMat || (!cMad && !cMet)) { window.alert("Elige materia y pon madejas o metros"); return; }
+    setConsumos(prev=>[...prev,{materia_id:cMat, lote:cLote.trim(), madejas:parseFloat(cMad)||0, metros:parseFloat(cMet)||0}]);
+    setCLote(""); setCMad(""); setCMet("");
+  };
+  const addParo = () => {
+    if (!pMot) return;
+    setParos(prev=>[...prev,{motivo_id:pMot, minutos:parseFloat(pMin)||0, nota:pNota.trim()}]);
+    setPMot(""); setPMin(""); setPNota("");
+  };
+
+  const registrar = async () => {
+    const q = parseFloat(cantidad);
+    if (!q || q<=0) { window.alert("Cantidad inválida"); return; }
+    const consumosFinal = consumos.map(cs=>({ ...cs,
+      metros_consumidos: metrosConsumo(cs), rendimiento_pct: rendConsumo(cs), capas: capasDe(cs.materia_id) }));
+    await save("producciones", uid(), {
+      orden_id: orden.id, producto_id: orden.producto_id, fecha, turno_id: turnoId, linea_id: orden.linea_id||"",
+      cantidad: q, nota: nota.trim(),
+      equipo, n_personas: equipo.length||null, horas_equipo: parseFloat(horas)||8,
+      consumos: consumosFinal, paros,
+      registrado_por: perfil?.nombre||perfil?.id||"", registrado_at: new Date().toISOString(),
+    });
+    // Upsert lotes vistos (para el ranking de proveedores)
+    for (const cs of consumosFinal) {
+      if (cs.lote) {
+        const lid = (cs.materia_id+"_"+cs.lote).replace(/[^a-zA-Z0-9_-]/g,"_");
+        await save("lotes", lid, { materia_id: cs.materia_id, codigo: cs.lote, ultima_fecha: fecha });
+      }
+    }
+    onBack();
+  };
+
+  const SelMat = ({value,onChange}) => (
+    <select value={value} onChange={e=>onChange(e.target.value)}
+      style={{width:"100%",padding:"12px",borderRadius:12,border:`1.5px solid ${C.border}`,fontSize:15,fontFamily:F.b,background:"#fff",color:C.text,marginBottom:10}}>
+      <option value="">Materia…</option>
+      {matsEscandallo.length>0 && <optgroup label="── Del escandallo ──">
+        {matsEscandallo.map(m=><option key={m.id} value={m.id}>{m.nombre} · {capasDe(m.id)} capa{capasDe(m.id)>1?"s":""}</option>)}
+      </optgroup>}
+      <optgroup label="── Otras ──">
+        {matsResto.map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}
+      </optgroup>
+    </select>
+  );
+
+  return (
+    <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
+      <Header title="📝 PARTE DE PRODUCCIÓN" onBack={onBack} sub={`${orden.numero?`OT ${orden.numero} · `:""}${producto?.nombre||""} · ${hechas}/${orden.cantidad} · faltan ${pdte}`}/>
+      <div style={{padding:14}}>
+
+        <Card style={{marginBottom:12}}>
+          <Field label="Cantidad producida" value={cantidad} onChange={setCantidad} type="number" placeholder={pdte>0?`faltan ${pdte}`:"uds"} min="0" step="0.5"/>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+            <Field label="Fecha" value={fecha} onChange={setFecha} type="date"/>
+            <Sel label="Turno" value={turnoId} onChange={setTurnoId} placeholder="Turno…"
+              options={turnos.map(t=>({value:t.id,label:t.nombre}))}/>
+          </div>
+        </Card>
+
+        <Card style={{marginBottom:12}}>
+          <div style={{fontFamily:F.h,fontWeight:700,fontSize:15,color:C.text,marginBottom:8}}>👥 EQUIPO</div>
+          {operarios.length===0 && <div style={{fontSize:13,color:C.muted}}>Sin operarios dados de alta — crea usuarios con rol operario y aparecerán aquí como fichas.</div>}
+          <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:10}}>
+            {operarios.map(u=>{
+              const on = equipo.includes(u.id);
+              return <button key={u.id} onClick={()=>setEquipo(prev=>on?prev.filter(x=>x!==u.id):[...prev,u.id])}
+                style={{background:on?C.accent:"#fff",color:on?"#fff":C.muted,border:`1.5px solid ${on?C.accent:C.border}`,borderRadius:20,padding:"7px 14px",fontSize:14,fontFamily:F.h,fontWeight:700,cursor:"pointer"}}>
+                {on?"✓ ":""}{u.nombre}
+              </button>;
+            })}
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+            <div style={{background:C.card2,borderRadius:12,padding:"10px 12px",fontSize:14,color:C.muted}}>Personas: <b style={{color:C.text}}>{equipo.length||"—"}</b></div>
+            <Field label="Horas del equipo" value={horas} onChange={setHoras} type="number" min="0" step="0.5"/>
+          </div>
+        </Card>
+
+        <Card style={{marginBottom:12}}>
+          <div style={{fontFamily:F.h,fontWeight:700,fontSize:15,color:C.text,marginBottom:2}}>📦 CONSUMOS POR LOTE</div>
+          <div style={{fontSize:12,color:C.muted,marginBottom:10}}>Madejas O metros directos · el rendimiento se calcula solo con el escandallo ({producto?.metros_finales||"?"} m/ud)</div>
+          {consumos.map((cs,i)=>{
+            const m = mps.find(x=>x.id===cs.materia_id);
+            const r = rendConsumo(cs);
+            return (
+              <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`1px solid ${C.border}`,fontSize:14,gap:6,flexWrap:"wrap"}}>
+                <span><b>{m?.nombre}</b>{cs.lote?<span style={{background:C.card2,borderRadius:8,padding:"2px 8px",fontSize:12,marginLeft:6}}>{cs.lote}</span>:null}
+                  <span style={{color:C.muted}}> · {cs.madejas?`${cs.madejas} mad`:""}{cs.madejas&&cs.metros?" + ":""}{cs.metros?`${cs.metros} m`:""} = {metrosConsumo(cs).toFixed(0)} m</span></span>
+                <span>{r!=null && <b style={{color:r>=85?C.green:r>=75?C.amber:C.red}}>{r}%</b>}
+                  <button onClick={()=>setConsumos(p=>p.filter((_,j)=>j!==i))} style={{background:"none",border:"none",color:C.red,cursor:"pointer",marginLeft:8}}>✕</button></span>
+              </div>
+            );
+          })}
+          <div style={{marginTop:10}}>
+            <SelMat value={cMat} onChange={setCMat}/>
+            <div style={{display:"grid",gridTemplateColumns:"1.2fr 0.9fr 0.9fr",gap:8}}>
+              <Field value={cLote} onChange={setCLote} placeholder="Lote (ej 26.12/29)"/>
+              <Field value={cMad} onChange={setCMad} type="number" placeholder="madejas" min="0" step="0.5"/>
+              <Field value={cMet} onChange={setCMet} type="number" placeholder="+ metros" min="0" step="0.1"/>
+            </div>
+            <Btn v="ghost" onClick={addConsumo}>＋ Añadir consumo</Btn>
+          </div>
+        </Card>
+
+        <Card style={{marginBottom:12}}>
+          <div style={{fontFamily:F.h,fontWeight:700,fontSize:15,color:C.text,marginBottom:8}}>⏸ PAROS DEL DÍA</div>
+          {paros.map((pa,i)=>{
+            const mo = motivos.find(x=>x.id===pa.motivo_id);
+            return <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"7px 0",borderBottom:`1px solid ${C.border}`,fontSize:14}}>
+              <span>{mo?.icono} {mo?.nombre}{pa.minutos?` · ${pa.minutos}'`:""}{pa.nota?` · ${pa.nota}`:""}</span>
+              <button onClick={()=>setParos(p=>p.filter((_,j)=>j!==i))} style={{background:"none",border:"none",color:C.red,cursor:"pointer"}}>✕</button>
+            </div>;
+          })}
+          <div style={{display:"grid",gridTemplateColumns:"1.4fr 0.6fr",gap:8,marginTop:8}}>
+            <Sel value={pMot} onChange={setPMot} placeholder="Motivo…" options={motivos.map(m=>({value:m.id,label:`${m.icono} ${m.nombre}`}))}/>
+            <Field value={pMin} onChange={setPMin} type="number" placeholder="min" min="0"/>
+          </div>
+          <Field value={pNota} onChange={setPNota} placeholder="Nota del paro (opcional)"/>
+          <Btn v="ghost" onClick={addParo}>＋ Añadir paro</Btn>
+        </Card>
+
+        <Card style={{marginBottom:12}}>
+          <Field label="Observaciones del parte" value={nota} onChange={setNota} placeholder="Ej: tiras largas, no iban rancias · prueba OK"/>
+          <Btn onClick={registrar}>💾 Guardar Parte</Btn>
+        </Card>
+
+        {producciones.length>0 && (
+          <Card>
+            <div style={{fontFamily:F.h,fontWeight:700,fontSize:13,color:C.mutedD,textTransform:"uppercase",letterSpacing:0.5,marginBottom:8}}>Partes de esta orden</div>
+            {producciones.sort((a,b)=>(b.fecha||"").localeCompare(a.fecha||"")).map(r=>(
+              <div key={r.id} style={{padding:"8px 0",borderBottom:`1px solid ${C.border}`,fontSize:13.5}}>
+                <div style={{display:"flex",justifyContent:"space-between",gap:8}}>
+                  <span><b>{r.fecha}</b> · {r.cantidad} uds{r.n_personas?` · ${r.n_personas}p`:""}
+                    {(r.consumos||[]).map((cs,i)=>cs.rendimiento_pct!=null?<span key={i} style={{marginLeft:6,fontWeight:800,color:cs.rendimiento_pct>=85?C.green:cs.rendimiento_pct>=75?C.amber:C.red}}>{cs.rendimiento_pct}%</span>:null)}
+                  </span>
+                  <span style={{color:C.muted,fontSize:12}}>{r.registrado_por}
+                    <button onClick={()=>{if(window.confirm("¿Eliminar parte?"))del("producciones",r.id);}} style={{background:"none",border:"none",color:C.red,cursor:"pointer",marginLeft:6}}>✕</button></span>
+                </div>
+                {r.nota && <div style={{color:C.muted,fontSize:12,marginTop:2}}>📝 {r.nota}</div>}
+              </div>
+            ))}
+          </Card>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function SyncCatalogoScreen({ onBack, productos }) {
   const [estado, setEstado] = useState("idle"); // idle | leyendo | preview | aplicando | fin
   const [cat, setCat] = useState([]);
@@ -1263,6 +1611,7 @@ function CostesScreen({ onBack, centros }) {
 function Home({ perfil, onGo, onLogout, counts }) {
   const esGerencia = perfil.rol === "gerencia";
   const tiles = [
+    { id:"ordenes",   icon:"📋", bg:"#ECFDF5", label:"Órdenes de Producción", sub:"Planificar y registrar",           roles:["gerencia","sup_fabrica","sup_oficina"] },
     { id:"seed",      icon:"🚀", bg:"#FFF7ED", label:"Carga Inicial",     sub:"Catálogo completo en 1 clic",          roles:["gerencia"] },
     { id:"synccat",   icon:"🔗", bg:"#F5F3FF", label:"Sincronizar Catálogo", sub:"Descripciones desde el CRM",         roles:["gerencia"] },
     { id:"centros",   icon:"🏭", bg:"#EFF6FF", label:"Centros de Trabajo", sub:`${counts.centros} centros`,           roles:["gerencia"] },
@@ -1291,8 +1640,8 @@ function Home({ perfil, onGo, onLogout, counts }) {
       </div>
       <div style={{padding:"14px 12px",maxWidth:900,margin:"0 auto"}}>
         <div style={{background:C.amberBg,border:`1.5px solid ${C.amber}`,borderRadius:12,padding:"12px 16px",marginBottom:14}}>
-          <div style={{fontFamily:F.h,fontWeight:700,fontSize:15,color:C.amber}}>🚧 FASE 1 — Configuración maestra</div>
-          <div style={{fontSize:13,color:C.muted,marginTop:3}}>Configura usuarios, turnos, procesos, materias, proveedores y productos. Las fases de producción, calidad e informes se activarán a continuación.</div>
+          <div style={{fontFamily:F.h,fontWeight:700,fontSize:15,color:C.amber}}>🏭 FASE 2 — Órdenes y producción</div>
+          <div style={{fontSize:13,color:C.muted,marginTop:3}}>Crea órdenes con nº OT y registra la producción diaria. Próximo: terminal de planta con paros y consumos por lote.</div>
         </div>
         {perfil.rol==="operario" && (
           <div style={{maxWidth:760,margin:"0 auto"}}>
@@ -1406,6 +1755,7 @@ export default function App() {
     <div style={{fontFamily:F.b}}>
       <style>{STYLES}</style>
       {view==="home"      && <Home perfil={perfil} onGo={setView} onLogout={()=>signOut(auth)} counts={counts}/>}
+      {view==="ordenes"   && <OrdenesScreen onBack={back} perfil={perfil} productos={productos} lineas={lineas} turnos={turnos} centros={centros} mps={mps} motivos={motivos} usuarios={usuarios}/>}
       {view==="seed"      && <SeedScreen onBack={back}/>}
       {view==="synccat"   && <SyncCatalogoScreen onBack={back} productos={productos}/>}
       {view==="centros"   && <CentrosScreen onBack={back}/>}
