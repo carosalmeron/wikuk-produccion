@@ -464,6 +464,114 @@ function SeedScreen({ onBack }) {
   );
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// SINCRONIZAR CATÁLOGO — lee grupo-consolidado-crm (solo lectura) y enriquece productos
+// ═══════════════════════════════════════════════════════════════════════════════
+function SyncCatalogoScreen({ onBack, productos }) {
+  const [estado, setEstado] = useState("idle"); // idle | leyendo | preview | aplicando | fin
+  const [cat, setCat] = useState([]);
+  const [matches, setMatches] = useState([]);
+  const [nuevos, setNuevos] = useState([]);
+  const [crearNuevos, setCrearNuevos] = useState(false);
+  const [log, setLog] = useState("");
+
+  const FB = "https://firestore.googleapis.com/v1/projects/grupo-consolidado-crm/databases/(default)/documents";
+  const sv = (f,k) => (f[k]&&(f[k].stringValue??f[k].doubleValue??f[k].integerValue))||"";
+
+  const leer = async () => {
+    setEstado("leyendo"); setLog("Leyendo catálogo…");
+    try {
+      let acc=[], pt=null;
+      do {
+        const u = FB+"/productos?pageSize=300"+(pt?("&pageToken="+pt):"");
+        const d = await (await fetch(u)).json();
+        (d.documents||[]).forEach(doc=>{
+          const f=doc.fields||{};
+          acc.push({ codigo:String(sv(f,"codigo")).trim(), descripcion:sv(f,"nombre"), formato:sv(f,"formato"),
+                     calibre:sv(f,"calibre")||sv(f,"ca"), metros:sv(f,"medida")||sv(f,"metros")||sv(f,"me"),
+                     precio:sv(f,"precio"), categoria:sv(f,"categoria") });
+        });
+        pt = d.nextPageToken;
+      } while (pt);
+      setCat(acc);
+      const byCode = {}; acc.forEach(x=>{ if(x.codigo) byCode[x.codigo.toUpperCase()]=x; });
+      const mt=[], propios=new Set();
+      productos.forEach(p=>{
+        const k=(p.nombre||"").trim().toUpperCase(); propios.add(k);
+        if (byCode[k]) mt.push({ p, c: byCode[k] });
+      });
+      const nv = acc.filter(x=>x.codigo && !propios.has(x.codigo.toUpperCase()));
+      setMatches(mt); setNuevos(nv);
+      setEstado("preview");
+      setLog(`Catálogo: ${acc.length} productos · coinciden ${mt.length} · nuevos ${nv.length}`);
+    } catch(e) { setEstado("idle"); setLog("❌ Error leyendo catálogo: "+e.message); }
+  };
+
+  const aplicar = async () => {
+    setEstado("aplicando");
+    let na=0, nc=0;
+    for (const {p,c} of matches) {
+      const upd = { descripcion:c.descripcion||"", calibre_catalogo:c.calibre||"", formato_catalogo:c.formato||"",
+                    medida_catalogo:c.metros||"", precio_venta:parseFloat(String(c.precio).replace(",","."))||null,
+                    categoria_catalogo:c.categoria||"", sync_catalogo: new Date().toISOString() };
+      const mNum = parseFloat(String(c.metros).replace(",","."));
+      if (!p.metros_finales && mNum>0 && mNum<=60) upd.metros_finales = mNum;
+      await save("productos", p.id, upd); na++;
+      setLog(`Actualizando… ${na}/${matches.length}`);
+    }
+    if (crearNuevos) {
+      for (const c of nuevos) {
+        await save("productos", uid(), { nombre:c.codigo, descripcion:c.descripcion||"", calibre_catalogo:c.calibre||"",
+          formato_catalogo:c.formato||"", medida_catalogo:c.metros||"", precio_venta:parseFloat(String(c.precio).replace(",","."))||null,
+          categoria_catalogo:c.categoria||"", centro:"", unidad:"Stick", metros_finales:0, objetivo_diario:0, coste_objetivo:0,
+          procesos_asignados:[], materias_asignadas:[], desde_catalogo:true, sync_catalogo:new Date().toISOString() });
+        nc++;
+      }
+    }
+    setLog(`✅ Sincronizado: ${na} productos enriquecidos${crearNuevos?` · ${nc} creados desde el catálogo (sin centro/escandallo — complétalos)`:""}`);
+    setEstado("fin");
+  };
+
+  return (
+    <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
+      <Header title="SINCRONIZAR CATÁLOGO" onBack={onBack} sub="Lee el catálogo del CRM (solo lectura) y enriquece tus productos por código"/>
+      <div style={{padding:14}}>
+        <Card style={{marginBottom:14}}>
+          <div style={{fontSize:14,color:C.muted,lineHeight:1.6,marginBottom:12}}>
+            Fuente: <b>grupo-consolidado-crm</b> · colección <b>productos</b>. Casa por código y trae: descripción, calibre, formato, medida, precio de venta y categoría. Nunca escribe en el catálogo.
+          </div>
+          {estado==="idle" && <Btn onClick={leer}>🔗 Leer catálogo</Btn>}
+          {estado==="preview" && <>
+            <div style={{background:C.card2,borderRadius:12,padding:14,marginBottom:12}}>
+              <div style={{fontFamily:F.h,fontWeight:800,fontSize:16,color:C.text}}>{matches.length} coincidencias · {nuevos.length} solo en catálogo</div>
+              <div style={{fontSize:13,color:C.muted,marginTop:4}}>Se actualizarán los {matches.length} coincidentes. Los metros finales solo se rellenan si están vacíos (tus valores mandan).</div>
+            </div>
+            <button onClick={()=>setCrearNuevos(v=>!v)}
+              style={{background:"#fff",border:`1.5px solid ${crearNuevos?C.blue:C.border}`,color:crearNuevos?C.blue:C.muted,borderRadius:20,padding:"8px 16px",fontSize:14,fontFamily:F.h,fontWeight:700,cursor:"pointer",marginBottom:12,display:"block"}}>
+              {crearNuevos?"☑":"☐"} Crear también los {nuevos.length} productos nuevos del catálogo
+            </button>
+            <Btn onClick={aplicar}>💾 Aplicar sincronización</Btn>
+          </>}
+          {(estado==="leyendo"||estado==="aplicando") && <div style={{fontFamily:F.h,fontSize:16,color:C.muted}}>⏳ {log}</div>}
+          {(estado==="fin"||estado==="idle") && log && <div style={{marginTop:10,fontSize:14,color:C.text}}>{log}</div>}
+          {estado==="fin" && <div style={{marginTop:10}}><Btn v="secondary" onClick={()=>{setEstado("idle");setLog("");}}>↺ Volver a sincronizar</Btn></div>}
+        </Card>
+        {estado==="preview" && matches.length>0 && (
+          <Card>
+            <div style={{fontFamily:F.h,fontWeight:700,fontSize:13,color:C.mutedD,textTransform:"uppercase",letterSpacing:0.5,marginBottom:8}}>Vista previa (primeros 10)</div>
+            {matches.slice(0,10).map(({p,c},i)=>(
+              <div key={i} style={{padding:"8px 0",borderBottom:`1px solid ${C.border}`,fontSize:13}}>
+                <b>{p.nombre}</b> ← <span style={{color:C.blue}}>{c.descripcion||"(sin descripción)"}</span>
+                <span style={{color:C.muted}}> · cal {c.calibre||"—"} · {c.metros||"—"} m · {c.precio?c.precio+" €":""}</span>
+              </div>
+            ))}
+          </Card>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function CentrosScreen({ onBack }) {
   const [centros] = useCol("centros", "nombre");
   const [refLineas] = useCol("lineas");
@@ -1136,6 +1244,7 @@ function Home({ perfil, onGo, onLogout, counts }) {
   const esGerencia = perfil.rol === "gerencia";
   const tiles = [
     { id:"seed",      icon:"🚀", bg:"#FFF7ED", label:"Carga Inicial",     sub:"Catálogo completo en 1 clic",          roles:["gerencia"] },
+    { id:"synccat",   icon:"🔗", bg:"#F5F3FF", label:"Sincronizar Catálogo", sub:"Descripciones desde el CRM",         roles:["gerencia"] },
     { id:"centros",   icon:"🏭", bg:"#EFF6FF", label:"Centros de Trabajo", sub:`${counts.centros} centros`,           roles:["gerencia"] },
     { id:"lineas",    icon:"⚙️", bg:"#F1F5F9", label:"Líneas de Producción", sub:`${counts.lineas} líneas`,            roles:["gerencia"] },
     { id:"usuarios",  icon:"👥", bg:"#F5F3FF", label:"Usuarios",          sub:`${counts.usuarios} registrados`,      roles:["gerencia"] },
@@ -1278,6 +1387,7 @@ export default function App() {
       <style>{STYLES}</style>
       {view==="home"      && <Home perfil={perfil} onGo={setView} onLogout={()=>signOut(auth)} counts={counts}/>}
       {view==="seed"      && <SeedScreen onBack={back}/>}
+      {view==="synccat"   && <SyncCatalogoScreen onBack={back} productos={productos}/>}
       {view==="centros"   && <CentrosScreen onBack={back}/>}
       {view==="lineas"    && <LineasScreen onBack={back} centros={centros}/>}
       {view==="motivos"   && <MotivosScreen onBack={back}/>}
