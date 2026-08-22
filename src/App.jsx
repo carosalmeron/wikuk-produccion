@@ -1191,7 +1191,9 @@ export default function App() {
   const [provs]    = useCol("proveedores", "nombre");
   const [productos]= useCol("productos", "nombre");
 
+  const [bootSlow, setBootSlow] = useState(false);
   useEffect(() => onAuthStateChanged(auth, u => setAuthUser(u)), []);
+  useEffect(() => { const t = setTimeout(()=>setBootSlow(true), 8000); return ()=>clearTimeout(t); }, []);
   useEffect(() => {
     // Bootstrap: ¿existe algún usuario?
     getDocs(collection(db, "usuarios")).then(s => setNoUsers(s.empty)).catch(()=>{});
@@ -1212,7 +1214,15 @@ export default function App() {
 
   if (authUser === undefined) return (
     <div style={{fontFamily:F.b}}><style>{STYLES}</style>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"center",minHeight:"100vh",fontFamily:F.h,fontSize:20,color:C.muted}}>Cargando…</div>
+      <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:"100vh",gap:14,padding:24}}>
+        <div style={{fontFamily:F.h,fontSize:20,color:C.muted}}>{bootSlow?"Sin respuesta del servidor":"Cargando…"}</div>
+        {bootSlow && <>
+          <p style={{fontSize:14,color:C.muted,textAlign:"center",lineHeight:1.6,maxWidth:340}}>
+            No se puede conectar con Firebase. Suele ser cosa de la red: prueba con datos móviles en vez de wifi (o al revés), o desactiva VPN/ahorro de datos.
+          </p>
+          <button onClick={()=>window.location.reload()} style={{background:"#e06000",border:"none",color:"#fff",borderRadius:12,padding:"12px 28px",fontFamily:F.h,fontWeight:800,fontSize:16,cursor:"pointer"}}>🔄 Reintentar</button>
+        </>}
+      </div>
     </div>
   );
 
