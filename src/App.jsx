@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v2.9.5";
+const APP_VERSION = "v2.10.1";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -1310,7 +1310,7 @@ function AnaliticaScreen({ onBack, productos, mps, lineas, turnos, usuarios, cen
 
   // ── P&G: prorrateo de MO por día-línea + pérdida MP vs rendimiento objetivo ──
   const grupos = {};
-  P2.forEach(p=>{ const k=p.fecha+"|"+(p.linea_nombre||linMap[p.linea_id]?.nombre||p.linea_id||("prod_"+(prodMap[p.producto_id]?.nombre||"x").slice(0,4))); const g=grupos[k]=grupos[k]||{np:0,rows:[]}; g.np=Math.max(g.np,p.n_personas||0); g.rows.push(p); });
+  P2.forEach(p=>{ const k=p.fecha+"|"+(p.linea_nombre||linMap[p.linea_id]?.nombre||p.linea_id||("prod_"+(prodMap[p.producto_id]?.nombre||"x").slice(0,4)))+"|"+(p.turno_id||""); const g=grupos[k]=grupos[k]||{np:0,rows:[]}; g.np=Math.max(g.np,p.n_personas||0); g.rows.push(p); });
   const partesPG = [];
   Object.values(grupos).forEach(g=>{
     const np = g.np||3;
@@ -1334,6 +1334,9 @@ function AnaliticaScreen({ onBack, productos, mps, lineas, turnos, usuarios, cen
   const [periodo, setPeriodo] = useState("mes");
   const [openProd, setOpenProd] = useState(null);
   const [openLote, setOpenLote] = useState(null);
+  const [diaSel, setDiaSel] = useState(null);
+  const fmtD = (f)=>{ try{ const d=new Date(f+"T12:00:00");
+    return ["dom","lun","mar","mié","jue","vie","sáb"][d.getDay()]+" "+d.getDate()+" "+["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"][d.getMonth()]; }catch(e){return f;} };
   const perKey = (f)=>{ if(periodo==="mes") return f.slice(0,7);
     const d=new Date(f+"T12:00:00"); const day=(d.getDay()+6)%7; d.setDate(d.getDate()-day);
     return "sem "+d.toISOString().slice(5,10); };
@@ -1483,18 +1486,48 @@ function AnaliticaScreen({ onBack, productos, mps, lineas, turnos, usuarios, cen
                     </div>
                     <div style={{fontSize:12,color:C.muted}}>{x.uds.toFixed(0)} uds · {x.rows.length} jornadas</div>
                   </div>
-                  {open && x.rows.sort((a,b)=>b.fecha.localeCompare(a.fecha)).map((r,i)=>{
-                    const dd=r.real-r.val;
+                  {open && (()=>{
+                    const rs = x.rows.slice().sort((a,b)=>a.fecha.localeCompare(b.fecha));
+                    const buenos = rs.filter(r=>r.real/r.uds<=x.obj*1.02).length;
+                    const peor = rs.reduce((m,r)=>(r.real-r.val)>(m.real-m.val)?r:m,rs[0]);
+                    const mejor = rs.reduce((m,r)=>(r.real/r.uds)<(m.real/m.uds)?r:m,rs[0]);
+                    const con26U = rs.filter(r=>r.lotes.some(l=>l.includes("26U")));
+                    const sel = rs.find(r=>r.fecha===diaSel) || null;
+                    const colorDe = (r)=>{ const k=(r.real/r.uds)/(x.obj||1); return k<=1.02?"#16A34A":k<=1.2?"#84CC16":k<=1.5?"#F59E0B":"#EF4444"; };
                     return (
-                      <div key={i} style={{padding:"7px 0 7px 16px",borderBottom:`1px solid ${C.card2}`,background:C.bg,fontSize:12.5}}>
-                        <div style={{display:"flex",justifyContent:"space-between",gap:6,flexWrap:"wrap"}}>
-                          <span>{r.fecha} · {r.linea}{r.turno?` ${r.turno}`:""} · {r.np}p{r.org==="DECLARADO"?"":" (est.)"}
-                            {r.lotes.map((l,j)=><span key={j} style={{marginLeft:5,background:l.includes("26U")?"#FEF2F2":C.card2,color:l.includes("26U")?C.red:C.muted,borderRadius:6,padding:"0 6px",fontSize:10.5}}>{l}</span>)}</span>
-                          <span><b>{r.uds} uds</b> · {(r.real/r.uds).toFixed(2)} € · <b style={{color:dd>0?C.red:C.green}}>{dd>0?"−":"+"}{Math.abs(dd).toFixed(0)} €</b></span>
+                      <div style={{background:C.bg,borderRadius:12,padding:"10px 12px",marginBottom:6}}>
+                        <div style={{fontSize:13,color:C.mutedD,lineHeight:1.6,marginBottom:8}}>
+                          <b>{rs.length} jornadas</b>: {buenos} en estándar o mejor · el mejor día hizo <b style={{color:C.green}}>{mejor.uds} uds a {(mejor.real/mejor.uds).toFixed(2)} €</b>
+                          {con26U.length>0 && <> · <b style={{color:C.red}}>{con26U.length} días con lote 26U</b> concentran {con26U.reduce((s,r)=>s+Math.max(0,r.real-r.val),0).toFixed(0)} € de sobrecoste</>}
                         </div>
+                        <div style={{display:"flex",flexWrap:"wrap",gap:3,marginBottom:10}}>
+                          {rs.map((r,i)=>(
+                            <div key={i} onClick={(e)=>{e.stopPropagation();setDiaSel(diaSel===r.fecha?null:r.fecha);}}
+                              title={r.fecha}
+                              style={{width:16,height:16,borderRadius:4,background:colorDe(r),cursor:"pointer",
+                                      outline: diaSel===r.fecha?`2px solid ${C.text}`:"none", outlineOffset:1,
+                                      opacity: r.lotes.some(l=>l.includes("26U"))?1:0.92,
+                                      border: r.lotes.some(l=>l.includes("26U"))?"1.5px solid #7F1D1D":"none"}}/>
+                          ))}
+                        </div>
+                        <div style={{fontSize:10.5,color:C.muted,marginBottom:8}}>◼ un cuadrado = un día (izq→der en el tiempo) · verde cumple · rojo caro · borde oscuro = lote 26U · toca uno</div>
+                        {sel && (()=>{ const dd=sel.real-sel.val; const cumple=sel.real/sel.uds<=x.obj*1.02;
+                          return (
+                          <div style={{background:"#fff",border:`1.5px solid ${cumple?C.green:C.red}`,borderRadius:12,padding:"10px 12px"}}>
+                            <div style={{fontFamily:F.h,fontWeight:800,fontSize:15}}>{fmtD(sel.fecha)} <span style={{color:cumple?C.green:C.red}}>{cumple?"✓ cumplió":"✕ caro"}</span></div>
+                            <div style={{fontSize:13.5,lineHeight:1.8,marginTop:4}}>
+                              Se hicieron <b>{sel.uds} uds</b> con <b>{sel.np} personas</b>{sel.org==="DECLARADO"?"":" (estimadas)"} en {sel.linea}{sel.turno?` · ${sel.turno}`:""}.<br/>
+                              Salió a <b style={{color:cumple?C.green:C.red}}>{(sel.real/sel.uds).toFixed(2)} €/ud</b> contra {x.obj.toFixed(2)} de estándar → <b style={{color:dd>0?C.red:C.green}}>{dd>0?`${dd.toFixed(0)} € más caro`:`${Math.abs(dd).toFixed(0)} € mejor`}</b> que el estándar.
+                              {sel.lotes.length>0 && <><br/>Lote: {sel.lotes.map((l,j)=><span key={j} style={{background:l.includes("26U")?"#FEF2F2":C.card2,color:l.includes("26U")?C.red:C.mutedD,borderRadius:6,padding:"1px 8px",fontSize:12,marginRight:4,fontWeight:700}}>{l}{l.includes("26U")?" ⚠":""}</span>)}</>}
+                            </div>
+                          </div>);
+                        })()}
+                        {!sel && peor && (peor.real-peor.val)>20 && (
+                          <div style={{fontSize:12.5,color:C.muted}}>💡 Empieza por el más rojo: {fmtD(peor.fecha)} costó {(peor.real-peor.val).toFixed(0)} € de más{peor.lotes.some(l=>l.includes("26U"))?" — llevaba lote 26U":""}.</div>
+                        )}
                       </div>
                     );
-                  })}
+                  })()}
                 </div>
               );
             })}
@@ -1527,7 +1560,7 @@ function AnaliticaScreen({ onBack, productos, mps, lineas, turnos, usuarios, cen
                   </div>
                   {open && x.rows.sort((a,b)=>b.fecha.localeCompare(a.fecha)).map((r,i)=>(
                     <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"6px 0 6px 16px",borderBottom:`1px solid ${C.card2}`,background:C.bg,fontSize:12.5}}>
-                      <span>{r.fecha} · {r.prod} · {r.mad?`${r.mad} mad`:""}{r.mts?` +${r.mts} m`:""}</span>
+                      <span>{fmtD(r.fecha)} · {r.prod} · {r.mad?`${r.mad} mad`:""}{r.mts?` +${r.mts} m`:""}</span>
                       <b style={{color:r.rend>=x.obj?C.green:r.rend>=x.obj-10?C.amber:C.red}}>{r.rend}%</b>
                     </div>
                   ))}
@@ -2382,7 +2415,8 @@ function Home({ perfil, onGo, onLogout, counts, ordenes=[], producciones=[], pro
   const partesHoy = producciones.filter(p=>p.fecha===hoy);
   const udsHoy = partesHoy.reduce((s,p)=>s+(p.cantidad||0),0);
   const activas = ordenes.filter(o=>!o.cerrada);
-  const planHoy = ordenes.filter(o=>o.fecha===hoy).reduce((s,o)=>s+(o.cantidad||0),0);
+  const planHome = (o)=>{ if(o.plan_origen==="PROD"){ const pr=productos.find(p=>p.id===o.producto_id); return pr?.objetivo_diario||0; } return o.cantidad||0; };
+  const planHoy = ordenes.filter(o=>o.fecha===hoy).reduce((s,o)=>s+planHome(o),0);
   const prodDe = (oid) => producciones.filter(p=>p.orden_id===oid).reduce((s,p)=>s+(p.cantidad||0),0);
   const verDash = perfil.rol!=="operario";
   const ultimaFecha = producciones.reduce((m,p)=>p.fecha>m?p.fecha:m,"");
@@ -2390,7 +2424,7 @@ function Home({ perfil, onGo, onLogout, counts, ordenes=[], producciones=[], pro
   const fechaDash = esHoy ? hoy : ultimaFecha;
   const partesDash = esHoy ? partesHoy : producciones.filter(p=>p.fecha===ultimaFecha);
   const udsDash = partesDash.reduce((s,p)=>s+(p.cantidad||0),0);
-  const planDash = ordenes.filter(o=>o.fecha===fechaDash).reduce((s,o)=>s+(o.cantidad||0),0);
+  const planDash = ordenes.filter(o=>o.fecha===fechaDash).reduce((s,o)=>s+planHome(o),0);
   const fmtFecha = (f)=>{ try { return new Date(f+"T12:00:00").toLocaleDateString("es-ES",{weekday:"long",day:"numeric",month:"2-digit"}); } catch(e){ return f; } };
   const esGerencia = perfil.rol === "gerencia";
   const tiles = [
