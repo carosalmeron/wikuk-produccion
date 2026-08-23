@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v2.9.2";
+const APP_VERSION = "v2.9.3";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -536,6 +536,7 @@ function OrdenesScreen({ onBack, perfil, productos, lineas, turnos, centros, mps
                     <div style={{fontFamily:F.h,fontWeight:800,fontSize:18,color:C.text}}>
                       {o.numero?`OT ${o.numero} · `:""}{p?.nombre||"?"}
                     </div>
+                    {prodSub(p) && <div style={{fontSize:12,color:C.muted,marginTop:1}}>{prodSub(p)}</div>}
                     <div style={{fontSize:13,color:C.muted,marginTop:2}}>
                       {o.fecha} · {l?.nombre||"sin línea"} · {o.tipo||"Plan"}{o.cliente?` · 👤 ${o.cliente}`:""}
                     </div>
@@ -722,7 +723,7 @@ function RegistrarProduccion({ onBack, orden, perfil, turnos, hechas, produccion
 
   return (
     <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
-      <Header title="📝 PARTE DE PRODUCCIÓN" onBack={onBack} sub={`${orden.numero?`OT ${orden.numero} · `:""}${producto?.nombre||""} · ${hechas}/${orden.cantidad} · faltan ${pdte}`}/>
+      <Header title="📝 PARTE DE PRODUCCIÓN" onBack={onBack} sub={`${orden.numero?`OT ${orden.numero} · `:""}${producto?.nombre||""}${prodSub(producto)?` · ${prodSub(producto)}`:""} · ${hechas}/${orden.cantidad}`}/>
       <div style={{padding:14}}>
 
         <Card style={{marginBottom:12}}>
@@ -825,6 +826,12 @@ function RegistrarProduccion({ onBack, orden, perfil, turnos, hechas, produccion
 // ═══════════════════════════════════════════════════════════════════════════════
 // 📖 DIARIO DE FABRICACIÓN — el parte oficial del día (sustituye al WhatsApp)
 // ═══════════════════════════════════════════════════════════════════════════════
+const prodSub = (p) => {
+  if (!p) return "";
+  const cal = p.calibre_catalogo || ((p.nombre||"").match(/(?:MX|MXP|ESP)P?(\d{2})/)||[])[1] || "";
+  return [p.descripcion, cal?`cal ${cal}`:"", p.metros_finales?`${p.metros_finales} m`:""].filter(Boolean).join(" · ");
+};
+
 function DiarioScreen({ onBack, productos, lineas, turnos, mps, motivos, usuarios, centros }) {
   const hoy = new Date().toISOString().slice(0,10);
   const [fecha, setFecha] = useState(hoy);
@@ -889,42 +896,75 @@ function DiarioScreen({ onBack, productos, lineas, turnos, mps, motivos, usuario
                 const orden = ordenes.find(x=>x.id===p.orden_id);
                 const lin = lineas.find(x=>x.id===p.linea_id);
                 const costeFab = p.n_personas&&p.horas_equipo&&p.cantidad ? (p.n_personas*p.horas_equipo*tarifa/p.cantidad) : null;
+                const rendsMP = (p.consumos||[]).map(cs=>cs.rendimiento_pct).filter(r=>r!=null);
+                const rendMP = rendsMP.length? rendsMP.reduce((a,b)=>a+b,0)/rendsMP.length : null;
+                const objUds = orden ? (orden.plan_origen==="PROD" ? (prod?.objetivo_diario||0) : (orden.cantidad||0)) : (prod?.objetivo_diario||0);
+                const rendEq = objUds>0 ? p.cantidad/objUds*100 : null;
+                const det = abierto===p.id;
+                const colPct = (v)=> v>=95?C.green: v>=75?C.amber: C.red;
+                const colMP = (v)=> v>=85?C.green: v>=75?C.amber: C.red;
                 return (
-                  <Card key={p.id} style={{marginBottom:8,cursor:"pointer"}} onClick={()=>setAbierto(abierto===p.id?null:p.id)}>
-                    <div style={{display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:6}}>
-                      <div style={{fontFamily:F.h,fontWeight:800,fontSize:17,color:C.text}}>
-                        {orden?.numero?`OT ${orden.numero} · `:""}{prod?.nombre||"?"} <span style={{color:C.accent}}>· {p.cantidad} uds</span>
+                  <Card key={p.id} style={{marginBottom:8,cursor:"pointer"}} onClick={()=>setAbierto(det?null:p.id)}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:6}}>
+                      <div style={{fontFamily:F.h,fontWeight:800,fontSize:15,color:C.text}}>
+                        {orden?.numero?`OT ${orden.numero} · `:""}{prod?.nombre||"?"}
                       </div>
-                      {lin && <Pill color={C.blue} bg={C.blueBg}>{lin.nombre}</Pill>}
+                      <div style={{display:"flex",gap:5,alignItems:"center"}}>
+                        {lin && <Pill color={C.blue} bg={C.blueBg}>{lin.nombre}</Pill>}
+                        <span style={{color:C.muted,fontSize:13}}>{det?"▲":"▼"}</span>
+                      </div>
                     </div>
-                    {((p.equipo||[]).length>0 || (p.equipo_nombres||[]).length>0 || p.n_personas) &&
-                      <div style={{fontSize:13,color:C.muted,marginTop:4}}>👷 {(p.equipo||[]).length>0 ? (p.equipo||[]).map(nombreDe).join(" · ")
-                        : (p.equipo_nombres||[]).length>0 ? p.equipo_nombres.join(" · ")
-                        : `${p.n_personas} personas${p.origen_personas==="DECLARADO"?"":" (estimado)"}`} · {p.horas_equipo||8} h</div>}
-                    {(p.consumos||[]).map((cs,i)=>{
-                      const m = mps.find(x=>x.id===cs.materia_id);
-                      const det = abierto===p.id;
-                      const teor = prod?.metros_finales && cs.capas ? (p.cantidad*prod.metros_finales*cs.capas) : null;
-                      return <div key={i} style={{fontSize:13.5,padding:"5px 0",borderBottom:`1px solid ${C.border}`}}>
-                        <div style={{display:"flex",justifyContent:"space-between"}}>
-                          <span>{m?.nombre}{cs.lote?<span style={{background:C.card2,borderRadius:8,padding:"1px 7px",fontSize:11,marginLeft:6}}>{cs.lote}</span>:null}
-                            <span style={{color:C.muted}}> · {cs.madejas?`${cs.madejas} mad`:""}{cs.metros?` +${cs.metros} m`:""}</span></span>
-                          {cs.rendimiento_pct!=null && <b style={{color:cs.rendimiento_pct>=85?C.green:cs.rendimiento_pct>=75?C.amber:C.red}}>{cs.rendimiento_pct}%</b>}
-                        </div>
-                        {det && <div style={{fontSize:12,color:C.muted,marginTop:2}}>
-                          consumido {(cs.metros_consumidos||0).toFixed(0)} m{teor?` · teórico ${teor.toFixed(0)} m (${cs.capas} capa${cs.capas>1?"s":""} × ${prod.metros_finales} m)`:""}{m?.rendimiento_objetivo?` · objetivo ${m.rendimiento_objetivo}%`:""}
-                        </div>}
-                      </div>;
-                    })}
-                    {(p.paros||[]).map((pa,i)=>{
-                      const mo = motivos.find(x=>x.id===pa.motivo_id);
-                      return <div key={i} style={{fontSize:13,color:C.amber,marginTop:4}}>⏸ {mo?.icono} {mo?.nombre}{pa.minutos?` · ${pa.minutos}'`:""}{pa.nota?` — ${pa.nota}`:""}</div>;
-                    })}
-                    {p.nota && <div style={{fontSize:13,color:C.muted,marginTop:6,background:C.card2,borderRadius:10,padding:"8px 10px"}}>📝 {p.nota}</div>}
-                    <div style={{display:"flex",justifyContent:"space-between",marginTop:8,fontSize:12,color:C.muted}}>
-                      <span>{costeFab!=null && <>Fabricación: <b style={{color:prod?.coste_objetivo&&costeFab<=prod.coste_objetivo?C.green:C.red}}>{costeFab.toFixed(2)} €/ud</b>{prod?.coste_objetivo?` (obj ${prod.coste_objetivo})`:""}</>}</span>
-                      <span>✍ {p.registrado_por}</span>
+                    <div style={{display:"flex",alignItems:"baseline",gap:8,marginTop:8}}>
+                      <span style={{fontFamily:F.h,fontWeight:900,fontSize:26,color:C.text}}>{p.cantidad}<span style={{fontSize:15,color:C.muted,fontWeight:700}}> / {objUds||"—"} uds</span></span>
+                      {rendEq!=null && <b style={{color:colPct(rendEq),fontSize:16}}>{rendEq.toFixed(0)}%</b>}
                     </div>
+                    {objUds>0 && <div style={{height:7,background:C.card2,borderRadius:4,overflow:"hidden",marginTop:4}}>
+                      <div style={{width:Math.min(100,rendEq)+"%",height:"100%",background:colPct(rendEq),borderRadius:4}}/></div>}
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginTop:10}}>
+                      <div style={{background:C.card2,borderRadius:10,padding:"8px 10px"}}>
+                        <div style={{fontSize:10,color:C.muted,fontWeight:800}}>📦 REND. MATERIA</div>
+                        <b style={{fontSize:16,color:rendMP!=null?colMP(rendMP):C.muted}}>{rendMP!=null?rendMP.toFixed(0)+"%":"—"}</b>
+                        <span style={{fontSize:11,color:C.muted}}> obj 85%</span>
+                      </div>
+                      <div style={{background:C.card2,borderRadius:10,padding:"8px 10px"}}>
+                        <div style={{fontSize:10,color:C.muted,fontWeight:800}}>👷 REND. EQUIPO</div>
+                        <b style={{fontSize:16,color:rendEq!=null?colPct(rendEq):C.muted}}>{rendEq!=null?rendEq.toFixed(0)+"%":"—"}</b>
+                        <span style={{fontSize:11,color:C.muted}}> {p.n_personas||((p.equipo||[]).length)||"?"}p · {p.horas_equipo||8}h</span>
+                      </div>
+                    </div>
+                    {det && <div style={{marginTop:12,borderTop:`1px solid ${C.border}`,paddingTop:10}}>
+                      <div style={{fontSize:11,color:C.mutedD,fontWeight:800,marginBottom:4}}>👷 EQUIPO</div>
+                      <div style={{fontSize:13.5,color:C.text,marginBottom:10}}>
+                        {(p.equipo||[]).length>0 ? (p.equipo||[]).map(nombreDe).join(" · ")
+                          : (p.equipo_nombres||[]).length>0 ? p.equipo_nombres.join(" · ")
+                          : `${p.n_personas||"?"} personas (estimado — sin nombres en el histórico)`} · {p.horas_equipo||8} h
+                        {costeFab!=null && <span style={{color:C.muted}}> · fabricación <b style={{color:prod?.coste_objetivo&&costeFab<=prod.coste_objetivo?C.green:C.red}}>{costeFab.toFixed(2)} €/ud</b> (obj {prod?.coste_objetivo||"—"})</span>}
+                      </div>
+                      <div style={{fontSize:11,color:C.mutedD,fontWeight:800,marginBottom:4}}>📦 MATERIA PRIMA · LOTES</div>
+                      {(p.consumos||[]).length===0 && <div style={{fontSize:13,color:C.muted}}>Sin consumos registrados</div>}
+                      {(p.consumos||[]).map((cs,i)=>{
+                        const m = mps.find(x=>x.id===cs.materia_id);
+                        const teor = prod?.metros_finales && cs.capas ? (p.cantidad*prod.metros_finales*cs.capas) : null;
+                        return <div key={i} style={{fontSize:13,padding:"6px 0",borderBottom:`1px solid ${C.border}`}}>
+                          <div style={{display:"flex",justifyContent:"space-between"}}>
+                            <span><b>{m?.nombre||"?"}</b>{cs.lote?<span style={{background:C.card2,borderRadius:8,padding:"1px 7px",fontSize:11,marginLeft:6}}>{cs.lote}</span>:null}</span>
+                            {cs.rendimiento_pct!=null && <b style={{color:colMP(cs.rendimiento_pct)}}>{cs.rendimiento_pct}%</b>}
+                          </div>
+                          <div style={{fontSize:12,color:C.muted,marginTop:2}}>
+                            {cs.madejas?`${cs.madejas} madejas`:""}{cs.metros?` + ${cs.metros} m`:""} → {(cs.metros_consumidos||0).toFixed(0)} m consumidos{teor?` · teórico ${teor.toFixed(0)} m (${cs.capas} capa${cs.capas>1?"s":""})`:""}{m?.rendimiento_objetivo?` · obj ${m.rendimiento_objetivo}%`:""}
+                          </div>
+                        </div>;
+                      })}
+                      {(p.paros||[]).length>0 && <>
+                        <div style={{fontSize:11,color:C.mutedD,fontWeight:800,margin:"10px 0 4px"}}>⏸ PAROS</div>
+                        {(p.paros||[]).map((pa,i)=>{
+                          const mo = motivos.find(x=>x.id===pa.motivo_id);
+                          return <div key={i} style={{fontSize:13,color:C.amber}}>{mo?.icono} {mo?.nombre}{pa.minutos?` · ${pa.minutos}'`:""}{pa.nota?` — ${pa.nota}`:""}</div>;
+                        })}
+                      </>}
+                      {p.nota && <div style={{fontSize:13,color:C.muted,marginTop:10,background:C.card2,borderRadius:10,padding:"8px 10px"}}>📝 {p.nota}</div>}
+                      <div style={{textAlign:"right",fontSize:12,color:C.muted,marginTop:8}}>✍ {p.registrado_por}</div>
+                    </div>}
                   </Card>
                 );
               })}
