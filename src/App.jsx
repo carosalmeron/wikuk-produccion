@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v2.10.1";
+const APP_VERSION = "v2.10.2";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -2155,6 +2155,19 @@ function ProvForm({ onBack, ep, mps }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // PRODUCTOS (coste objetivo + procesos con tiempo + materias con consumo)
 // ═══════════════════════════════════════════════════════════════════════════════
+
+function prodInfo(nombre){
+  const n=String(nombre||"");
+  let m, fam="", cal="", capas="";
+  if((m=n.match(/^ESP(\d{2})/))){ fam="Especta"; cal=m[1]; capas="2 capas + semirrizado"; }
+  else if((m=n.match(/^MX(\d)(\d{2})\..*M$/))){ fam="Maextra +"; cal=m[2]; capas=m[1]+" capas + MALLA"; }
+  else if((m=n.match(/^MX(\d)(\d{2})\.\d+(-\d+)?R/))){ fam="Maextra +"; cal=m[2]; capas=m[1]+" capas"; }
+  else if((m=n.match(/^MXP?(\d{2,3})\./))){ fam="Maextra Pro"; cal=m[1]; capas="fina"; }
+  const mm=n.match(/\.(\d+)/); const metros=mm?mm[1]:"10";
+  if(!fam) return {desc:"", linea2:""};
+  return {desc:fam+" ("+capas+")", linea2:fam+" ("+capas+") · Ø"+cal+" · "+metros+" m"};
+}
+
 function ProductosScreen({ onBack, procesos, mps, centros }) {
   const [productos] = useCol("productos", "nombre");
   const [edit, setEdit] = useState(null);
@@ -2175,7 +2188,8 @@ function ProductosScreen({ onBack, procesos, mps, centros }) {
             <Card key={p.id}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10}}>
                 <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontFamily:F.h,fontWeight:700,fontSize:18,color:C.text}}>{p.nombre}</div>
+                  <div style={{fontFamily:F.h,fontWeight:800,fontSize:22,color:C.text,letterSpacing:.3}}>{p.nombre}</div>
+                  {(()=>{const cat=[p.descripcion, p.calibre_catalogo?`Ø${p.calibre_catalogo}`:null, p.metros_finales?`${p.metros_finales} m`:null].filter(Boolean).join(" · "); const l=cat||prodInfo(p.nombre).linea2; return l?<div style={{fontSize:13.5,color:C.blue,fontWeight:600,marginTop:1}}>{l}</div>:null;})()}
                   <div style={{fontSize:13,color:C.muted,marginTop:2}}>
                     🏭 {centros.find(c=>c.id===p.centro)?.nombre||"sin centro"}
                     {" · "}Obj: <span style={{color:C.blue,fontWeight:700}}>{p.objetivo_diario||0}/día</span>
