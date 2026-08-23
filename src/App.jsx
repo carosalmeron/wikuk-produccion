@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v2.7.2";
+const APP_VERSION = "v2.9";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -1151,6 +1151,313 @@ function ImportHistoricoScreen({ onBack, productos, mps, lineas, turnos }) {
   );
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// 📊 ANALÍTICA — evolución, costes ref vs real, lotes, equipos, turnos, operarios
+// ═══════════════════════════════════════════════════════════════════════════════
+function AnaliticaScreen({ onBack, productos, mps, lineas, turnos, usuarios, centros }) {
+  const [ordenes] = useCol("ordenes");
+  const [producciones] = useCol("producciones");
+  const [regsOp] = useCol("registros_operario");
+  const [cfg] = useCol("config_costes");
+  const [tab, setTab] = useState("dx");
+
+  const centro = centros[0];
+  const estructura = cfg[0] && cfg[0].horas_persona_mes ? cfg[0].fijos_mensuales/cfg[0].horas_persona_mes : 2.45;
+  const tarifaCargada = (centro?.tarifa_mo||12.5) + estructura;
+  const prodMap = {}; productos.forEach(p=>prodMap[p.id]=p);
+  const mpMap = {}; mps.forEach(m=>mpMap[m.id]=m);
+  const linMap = {}; lineas.forEach(l=>linMap[l.id]=l);
+  const P2 = producciones.filter(p=>p.fecha && p.cantidad>0);
+
+  const costeReal = (p) => p.n_personas && p.cantidad ? (p.n_personas*(p.horas_equipo||8)*tarifaCargada/p.cantidad) : null;
+  const Bar = ({pct,color,label,value}) => (
+    <div style={{display:"flex",alignItems:"center",gap:8,margin:"5px 0"}}>
+      <span style={{width:74,fontSize:12,fontWeight:700,color:C.mutedD,flexShrink:0}}>{label}</span>
+      <div style={{flex:1,height:20,background:C.card2,borderRadius:6,overflow:"hidden"}}>
+        <div style={{width:Math.min(100,pct)+"%",height:"100%",background:color,borderRadius:6,display:"flex",alignItems:"center",paddingLeft:7,fontSize:11,fontWeight:800,color:"#fff",whiteSpace:"nowrap"}}>{value}</div>
+      </div>
+    </div>
+  );
+  const colR = (r)=> r>=85?C.green: r>=75?C.amber: C.red;
+
+  // ── EVOLUCIÓN mensual ──
+  const meses = {};
+  P2.forEach(p=>{
+    const m = p.fecha.slice(0,7);
+    const d = meses[m] = meses[m]||{uds:0,val:0,persDias:{},dias:new Set()};
+    d.uds += p.cantidad; d.dias.add(p.fecha);
+    const pr = prodMap[p.producto_id];
+    d.val += p.cantidad*(pr?.coste_objetivo||3.5);
+    if (p.n_personas) { const k=p.fecha+"_"+(p.linea_id||"x"); d.persDias[k]=Math.max(d.persDias[k]||0,p.n_personas); }
+  });
+  const mesesArr = Object.entries(meses).sort((a,b)=>a[0].localeCompare(b[0])).map(([m,d])=>{
+    const pd = Object.values(d.persDias).reduce((s,n)=>s+n,0);
+    return {mes:m, uds:d.uds, dias:d.dias.size, valPD: pd? d.val/pd : null};
+  });
+  const maxUds = Math.max(1,...mesesArr.map(x=>x.uds));
+
+  // ── COSTES por producto: real vs objetivo ──
+  const porProd = {};
+  P2.forEach(p=>{
+    const cr = costeReal(p); if (cr==null) return;
+    const d = porProd[p.producto_id] = porProd[p.producto_id]||{sum:0,uds:0,n:0};
+    d.sum += cr*p.cantidad; d.uds += p.cantidad; d.n++;
+  });
+  const costesArr = Object.entries(porProd).map(([pid,d])=>({
+    nombre: prodMap[pid]?.nombre||"?", obj: prodMap[pid]?.coste_objetivo||0,
+    real: d.sum/d.uds, uds: d.uds, n: d.n,
+  })).filter(x=>x.uds>=10).sort((a,b)=>b.uds-a.uds);
+
+  // ── LOTES: rendimiento medio ──
+  const porLote = {};
+  P2.forEach(p=>(p.consumos||[]).forEach(cs=>{
+    if (!cs.lote || cs.rendimiento_pct==null) return;
+    const k = (mpMap[cs.materia_id]?.nombre||"?")+" · "+cs.lote;
+    const d = porLote[k] = porLote[k]||{sum:0,n:0};
+    d.sum += cs.rendimiento_pct; d.n++;
+  }));
+  const lotesArr = Object.entries(porLote).map(([k,d])=>({lote:k, rend:d.sum/d.n, n:d.n}))
+    .filter(x=>x.n>=3).sort((a,b)=>b.rend-a.rend);
+
+  // ── EQUIPOS: uds/persona-día por línea y tamaño (solo DECLARADO) ──
+  const eq = {};
+  P2.filter(p=>p.origen_personas==="DECLARADO"||((p.equipo||[]).length>0)).forEach(p=>{
+    const lin = linMap[p.linea_id]?.nombre||"—";
+    const np = Math.round(p.n_personas||((p.equipo||[]).length)); if(!np) return;
+    const k = lin+"|"+np;
+    const d = eq[k] = eq[k]||{uds:0,dias:new Set(),np,lin};
+    d.uds += p.cantidad; d.dias.add(p.fecha);
+  });
+  const eqArr = Object.values(eq).map(d=>({...d, udsDia:d.uds/d.dias.size, porPers:d.uds/d.dias.size/d.np, n:d.dias.size}))
+    .filter(x=>x.n>=2).sort((a,b)=>a.lin.localeCompare(b.lin)||a.np-b.np);
+
+  // ── TURNOS ──
+  const porTurno = {};
+  P2.forEach(p=>{
+    const t = turnos.find(x=>x.id===p.turno_id)?.nombre||"—";
+    const d = porTurno[t] = porTurno[t]||{uds:0,dias:new Set(),coste:0,cuds:0};
+    d.uds+=p.cantidad; d.dias.add(p.fecha);
+    const cr = costeReal(p); if(cr!=null){ d.coste+=cr*p.cantidad; d.cuds+=p.cantidad; }
+  });
+
+  // ── OPERARIOS (partes con equipo nominal + terminal) ──
+  const porOp = {};
+  P2.forEach(p=>{
+    (p.equipo||[]).forEach(uid2=>{
+      const nom = usuarios.find(u=>u.id===uid2)?.nombre||uid2;
+      const d = porOp[nom] = porOp[nom]||{uds:0,dias:new Set()};
+      d.uds += p.cantidad/(p.equipo.length||1); d.dias.add(p.fecha);
+    });
+  });
+  const opsArr = Object.entries(porOp).map(([n,d])=>({nombre:n, udsDia:d.uds/d.dias.size, n:d.dias.size})).sort((a,b)=>b.udsDia-a.udsDia);
+  const regsPorOp = {};
+  regsOp.forEach(r=>{
+    const d = regsPorOp[r.operario] = regsPorOp[r.operario]||{sum:0,n:0,mejor:null};
+    if (r.delta_pct!=null){ d.sum+=r.delta_pct; d.n++; }
+  });
+
+  // ── P&G: prorrateo de MO por día-línea + pérdida MP vs rendimiento objetivo ──
+  const grupos = {};
+  P2.forEach(p=>{ const k=p.fecha+"|"+(p.linea_id||"x"); const g=grupos[k]=grupos[k]||{np:0,rows:[]}; g.np=Math.max(g.np,p.n_personas||0); g.rows.push(p); });
+  const partesPG = [];
+  Object.values(grupos).forEach(g=>{
+    const np = g.np||3;
+    const udsTot = g.rows.reduce((s,p)=>s+p.cantidad,0)||1;
+    const costeDia = np*8*tarifaCargada;
+    g.rows.forEach(p=>{
+      const pr = prodMap[p.producto_id];
+      const real = costeDia*(p.cantidad/udsTot);
+      const val = p.cantidad*(pr?.coste_objetivo||3.5);
+      let mp = 0;
+      (p.consumos||[]).forEach(cs=>{
+        const m = mpMap[cs.materia_id]; if(!m||cs.rendimiento_pct==null||cs.rendimiento_pct<=0) return;
+        const objR = (m.rendimiento_objetivo||85)/100, r2 = cs.rendimiento_pct/100;
+        if (r2<objR) { const teor=(cs.metros_consumidos||0)*r2; mp += (teor/r2 - teor/objR)*(m.precio_ud||0); }
+      });
+      partesPG.push({fecha:p.fecha, cod:pr?.nombre||"?", val, real, desvMO:real-val, mp});
+    });
+  });
+  const [periodo, setPeriodo] = useState("mes");
+  const perKey = (f)=>{ if(periodo==="mes") return f.slice(0,7);
+    const d=new Date(f+"T12:00:00"); const day=(d.getDay()+6)%7; d.setDate(d.getDate()-day);
+    return "sem "+d.toISOString().slice(5,10); };
+  const pg = {};
+  partesPG.forEach(x=>{ const k=perKey(x.fecha); const d=pg[k]=pg[k]||{val:0,desvMO:0,mp:0}; d.val+=x.val; d.desvMO+=x.desvMO; d.mp+=x.mp; });
+  const pgArr = Object.entries(pg).sort((a,b)=>a[0].localeCompare(b[0]));
+  const totMO = partesPG.reduce((s,x)=>s+x.desvMO,0), totMP = partesPG.reduce((s,x)=>s+x.mp,0);
+  // Diagnóstico
+  const dxProd = {};
+  partesPG.forEach(x=>{ const d=dxProd[x.cod]=dxProd[x.cod]||{desv:0,uds:0,real:0,val:0}; d.desv+=x.desvMO+x.mp; d.real+=x.real; d.val+=x.val; });
+  const dxProdArr = Object.entries(dxProd).map(([cod,d])=>({cod,...d})).sort((a,b)=>b.desv-a.desv).slice(0,3);
+  const dxLotes = Object.entries((()=>{ const o={}; P2.forEach(p=>(p.consumos||[]).forEach(cs=>{
+    const m=mpMap[cs.materia_id]; if(!m||cs.rendimiento_pct==null||!cs.lote) return;
+    const objR=(m.rendimiento_objetivo||85)/100, r2=cs.rendimiento_pct/100; if(r2>=objR||r2<=0) return;
+    const teor=(cs.metros_consumidos||0)*r2; const perd=(teor/r2-teor/objR)*(m.precio_ud||0);
+    const k=m.nombre+" · "+cs.lote; o[k]=(o[k]||0)+perd; })); return o; })()).sort((a,b)=>b[1]-a[1]).slice(0,3);
+  const dxParos = Object.entries((()=>{ const o={}; P2.forEach(p=>(p.paros||[]).forEach(pa=>{
+    const mo=null; const nom=(pa.motivo_id&&"paro")||"paro"; o[pa.motivo_id]=(o[pa.motivo_id]||0)+(pa.minutos||0); })); return o; })()).sort((a,b)=>b[1]-a[1]).slice(0,2);
+  const hoy14 = (d)=>{ const x=new Date(); x.setDate(x.getDate()-d); return x.toISOString().slice(0,10); };
+  const desvUlt = partesPG.filter(x=>x.fecha>=hoy14(14)).reduce((s,x)=>s+x.desvMO+x.mp,0);
+  const desvPrev = partesPG.filter(x=>x.fecha>=hoy14(28)&&x.fecha<hoy14(14)).reduce((s,x)=>s+x.desvMO+x.mp,0);
+  const eur = (n)=> (n>=0?"+":"−")+Math.abs(n).toFixed(0)+" €";
+
+  const TABS = [["dx","🚨 Diagnóstico"],["resultado","💶 Resultado"],["evolucion","📈 Evolución"],["costes","💰 Costes"],["lotes","📦 Lotes"],["equipos","👥 Equipos"],["turnos","🕐 Turnos"]];
+  const vacio = P2.length===0;
+
+  return (
+    <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
+      <Header title="📊 ANALÍTICA" onBack={onBack} sub={`${P2.length} partes · tarifa cargada ${tarifaCargada.toFixed(2)} €/h (MO ${centro?.tarifa_mo||"?"} + estructura ${estructura.toFixed(2)})`}/>
+      <div style={{padding:14}}>
+        <div style={{display:"flex",gap:6,marginBottom:14,overflowX:"auto",paddingBottom:4}}>
+          {TABS.map(([k,l])=>(
+            <button key={k} onClick={()=>setTab(k)}
+              style={{background:tab===k?C.text:"#fff",color:tab===k?"#fff":C.muted,border:`1px solid ${tab===k?C.text:C.border}`,borderRadius:20,padding:"7px 14px",fontSize:13,fontFamily:F.h,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}}>{l}</button>
+          ))}
+        </div>
+        {vacio && <Empty icon="📊" text="Sin datos aún. Importa el histórico o registra partes y esto cobra vida."/>}
+
+        {!vacio && tab==="dx" && <>
+          <div style={{background:C.navy,color:"#fff",borderRadius:16,padding:16,marginBottom:12}}>
+            <div style={{fontSize:11,letterSpacing:1,color:"rgba(255,255,255,.5)",fontWeight:800,marginBottom:6}}>RESULTADO DEL PERIODO vs ESTÁNDAR</div>
+            <div style={{fontFamily:F.h,fontWeight:900,fontSize:30,color:(totMO+totMP)>0?"#FCA5A5":"#86EFAC"}}>{eur(-(totMO+totMP)).replace("+","+").replace("−","−")} {(totMO+totMP)>0?"— sobrecoste":"— ahorro"}</div>
+            <div style={{fontSize:13,color:"rgba(255,255,255,.65)",marginTop:4}}>MO {eur(totMO)} · Materia por rendimiento {totMP.toFixed(0)} € · {desvPrev!==0 && <span>tendencia 14 días: <b style={{color:desvUlt<desvPrev?"#86EFAC":"#FCA5A5"}}>{desvUlt<desvPrev?"mejorando ↓":"empeorando ↑"}</b></span>}</div>
+          </div>
+          {dxProdArr.map((x,i)=>(
+            <Card key={x.cod} style={{marginBottom:10,borderLeft:`4px solid ${i===0?C.red:C.amber}`}}>
+              <div style={{fontFamily:F.h,fontWeight:800,fontSize:15}}>🔴 {i+1} · {x.cod} concentra <span style={{color:C.red}}>{x.desv.toFixed(0)} €</span> de sobrecoste</div>
+              <div style={{fontSize:13,color:C.muted,marginTop:4}}>Coste real {x.real.toFixed(0)} € vs objetivo {x.val.toFixed(0)} € ({x.val>0?"+"+((x.real-x.val)/x.val*100).toFixed(0)+"%":"—"})</div>
+              <div style={{fontSize:13,color:C.mutedD,marginTop:2,lineHeight:1.6}}>➜ Acciones: revisar si el estándar es realista, atacar el ritmo (mira los mejores días en 📈), o reasignar equipo (👥).</div>
+            </Card>
+          ))}
+          {dxLotes.map(([k,v],i)=>(
+            <Card key={k} style={{marginBottom:10,borderLeft:`4px solid ${C.amber}`}}>
+              <div style={{fontFamily:F.h,fontWeight:800,fontSize:15}}>📦 Lote problemático: {k}</div>
+              <div style={{fontSize:13,color:C.mutedD,marginTop:4,lineHeight:1.6}}>Te ha costado <b style={{color:C.red}}>{v.toFixed(0)} €</b> extra de materia por rendir bajo objetivo. ➜ Reclamar al proveedor / priorizar los lotes verdes de 📦 Lotes.</div>
+            </Card>
+          ))}
+          <Card style={{marginBottom:10,borderLeft:`4px solid ${C.blue}`}}>
+            <div style={{fontFamily:F.h,fontWeight:800,fontSize:15}}>👥 La 3ª persona no se paga</div>
+            <div style={{fontSize:13,color:C.mutedD,marginTop:4,lineHeight:1.6}}>Donde hay datos declarados, los equipos de 2 producen más por persona y más barato por ud (ver 👥 Equipos). ➜ Prueba 2 semanas la configuración 2+2+2 con apoyo rotatorio, medida con el sistema.</div>
+          </Card>
+        </>}
+
+        {!vacio && tab==="resultado" && <>
+          <div style={{display:"flex",gap:6,marginBottom:12}}>
+            {[["mes","Por mes"],["semana","Por semana"]].map(([k,l])=>(
+              <button key={k} onClick={()=>setPeriodo(k)} style={{background:periodo===k?C.text:"#fff",color:periodo===k?"#fff":C.muted,border:`1px solid ${periodo===k?C.text:C.border}`,borderRadius:20,padding:"6px 14px",fontSize:13,fontFamily:F.h,fontWeight:700,cursor:"pointer"}}>{l}</button>
+            ))}
+          </div>
+          <Card>
+            <div style={{fontFamily:F.h,fontWeight:800,fontSize:15,marginBottom:4}}>Resultado de fabricación vs estándar</div>
+            <div style={{fontSize:12,color:C.muted,marginBottom:10}}>Desvío = coste real (MO prorrateada por día-línea) − valor a coste objetivo. + rojo = sobrecoste. MP = € perdidos por rendir bajo el objetivo de la materia.</div>
+            {pgArr.map(([k,d])=>{
+              const tot = d.desvMO+d.mp;
+              return (
+                <div key={k} style={{padding:"9px 0",borderBottom:`1px solid ${C.border}`}}>
+                  <div style={{display:"flex",justifyContent:"space-between",fontSize:14}}>
+                    <b>{k}</b>
+                    <b style={{color:tot>0?C.red:C.green}}>{eur(-tot).replace("−","−").replace("+","+")}{tot>0?" sobrecoste":" ahorro"}</b>
+                  </div>
+                  <div style={{fontSize:12,color:C.muted}}>valor obj {d.val.toFixed(0)} € · MO {eur(d.desvMO)} · MP {d.mp.toFixed(0)} €</div>
+                </div>
+              );
+            })}
+            <div style={{marginTop:10,padding:"10px 12px",background:C.card2,borderRadius:10,fontSize:14}}>
+              <b>Total periodo: <span style={{color:(totMO+totMP)>0?C.red:C.green}}>{(totMO+totMP).toFixed(0)} €</span></b> <span style={{color:C.muted,fontSize:12}}>(MO {totMO.toFixed(0)} + MP {totMP.toFixed(0)})</span>
+            </div>
+          </Card>
+        </>}
+
+        {!vacio && tab==="evolucion" && <>
+          <Card style={{marginBottom:12}}>
+            <div style={{fontFamily:F.h,fontWeight:800,fontSize:15,marginBottom:10,color:C.text}}>Sticks por mes</div>
+            {mesesArr.map(x=><Bar key={x.mes} label={x.mes.slice(5)+"/"+x.mes.slice(2,4)} pct={x.uds/maxUds*100} color={C.accent2} value={`${x.uds.toFixed(0)} uds · ${x.dias} días`}/>)}
+          </Card>
+          <Card>
+            <div style={{fontFamily:F.h,fontWeight:800,fontSize:15,marginBottom:4,color:C.text}}>€ de fabricación producidos por persona·día</div>
+            <div style={{fontSize:12,color:C.muted,marginBottom:10}}>Valor a coste estándar ÷ personas. Equilibrio: {(tarifaCargada*8).toFixed(0)} € (una persona/día). Normaliza el cambio de mix.</div>
+            {mesesArr.filter(x=>x.valPD).map(x=>{
+              const eq8 = tarifaCargada*8;
+              return <Bar key={x.mes} label={x.mes.slice(5)+"/"+x.mes.slice(2,4)} pct={x.valPD/eq8*66} color={x.valPD>=eq8?C.green:x.valPD>=eq8*0.85?C.amber:C.red} value={`${x.valPD.toFixed(0)} €`}/>;
+            })}
+          </Card>
+        </>}
+
+        {!vacio && tab==="costes" && (
+          <Card>
+            <div style={{fontFamily:F.h,fontWeight:800,fontSize:15,marginBottom:4,color:C.text}}>Coste real vs objetivo por producto</div>
+            <div style={{fontSize:12,color:C.muted,marginBottom:10}}>Real = personas × horas × {tarifaCargada.toFixed(2)} €/h ÷ uds (partes con personas conocidas, ≥10 uds)</div>
+            {costesArr.map(x=>(
+              <div key={x.nombre} style={{padding:"9px 0",borderBottom:`1px solid ${C.border}`}}>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:14}}>
+                  <b>{x.nombre}</b>
+                  <span><b style={{color:x.obj&&x.real<=x.obj?C.green:C.red}}>{x.real.toFixed(2)} €</b><span style={{color:C.muted,fontSize:12}}> / obj {x.obj||"—"}</span></span>
+                </div>
+                <div style={{fontSize:12,color:C.muted}}>{x.uds.toFixed(0)} uds · {x.n} partes · desvío {x.obj?((x.real-x.obj)/x.obj*100).toFixed(0)+"%":"—"}</div>
+              </div>
+            ))}
+          </Card>
+        )}
+
+        {!vacio && tab==="lotes" && (
+          <Card>
+            <div style={{fontFamily:F.h,fontWeight:800,fontSize:15,marginBottom:4,color:C.text}}>Ranking de lotes por rendimiento</div>
+            <div style={{fontSize:12,color:C.muted,marginBottom:10}}>Media de rendimiento real (≥3 partes). El lote decide más que la marca.</div>
+            {lotesArr.map(x=>(
+              <div key={x.lote} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:`1px solid ${C.border}`,fontSize:13.5,gap:8}}>
+                <span>{x.lote} <span style={{color:C.muted,fontSize:11}}>({x.n})</span></span>
+                <b style={{color:colR(x.rend)}}>{x.rend.toFixed(1)}%</b>
+              </div>
+            ))}
+            {lotesArr.length===0 && <div style={{fontSize:13,color:C.muted}}>Aún sin lotes con ≥3 partes.</div>}
+          </Card>
+        )}
+
+        {!vacio && tab==="equipos" && (
+          <Card>
+            <div style={{fontFamily:F.h,fontWeight:800,fontSize:15,marginBottom:4,color:C.text}}>¿2 ó 3 personas? — por línea</div>
+            <div style={{fontSize:12,color:C.muted,marginBottom:10}}>Solo días con equipo declarado. La cifra que manda: uds por persona.</div>
+            {eqArr.map((x,i)=>(
+              <div key={i} style={{padding:"9px 0",borderBottom:`1px solid ${C.border}`}}>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:14}}>
+                  <b>{x.lin} · {x.np} personas</b>
+                  <span><b style={{color:C.accent2}}>{x.porPers.toFixed(1)}</b><span style={{fontSize:12,color:C.muted}}> uds/pers·día</span></span>
+                </div>
+                <div style={{fontSize:12,color:C.muted}}>{x.udsDia.toFixed(1)} uds/día · {x.n} días · fabricación {(x.np*8*tarifaCargada/x.udsDia).toFixed(2)} €/ud</div>
+              </div>
+            ))}
+            {eqArr.length===0 && <div style={{fontSize:13,color:C.muted}}>Aún sin días con equipo declarado — registra partes marcando las fichas de operarios.</div>}
+            {opsArr.length>0 && <>
+              <div style={{fontFamily:F.h,fontWeight:800,fontSize:15,margin:"16px 0 4px",color:C.text}}>Por operario (uds atribuidas/día)</div>
+              {opsArr.map(x=>(
+                <div key={x.nombre} style={{display:"flex",justifyContent:"space-between",padding:"7px 0",borderBottom:`1px solid ${C.border}`,fontSize:13.5}}>
+                  <span>👷 {x.nombre} <span style={{color:C.muted,fontSize:11}}>({x.n} días)</span></span>
+                  <b>{x.udsDia.toFixed(1)}</b>
+                </div>
+              ))}
+            </>}
+          </Card>
+        )}
+
+        {!vacio && tab==="turnos" && (
+          <Card>
+            <div style={{fontFamily:F.h,fontWeight:800,fontSize:15,marginBottom:10,color:C.text}}>Comparativa por turno</div>
+            {Object.entries(porTurno).map(([t,d])=>(
+              <div key={t} style={{padding:"9px 0",borderBottom:`1px solid ${C.border}`}}>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:14}}>
+                  <b>🕐 {t}</b>
+                  <span><b>{d.uds.toFixed(0)}</b><span style={{fontSize:12,color:C.muted}}> uds · {d.dias.size} días</span></span>
+                </div>
+                <div style={{fontSize:12,color:C.muted}}>{(d.uds/d.dias.size).toFixed(1)} uds/día{d.cuds?` · fabricación media ${(d.coste/d.cuds).toFixed(2)} €/ud`:""}</div>
+              </div>
+            ))}
+          </Card>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function SyncCatalogoScreen({ onBack, productos }) {
   const [estado, setEstado] = useState("idle"); // idle | leyendo | preview | aplicando | fin
   const [cat, setCat] = useState([]);
@@ -1952,10 +2259,18 @@ function Home({ perfil, onGo, onLogout, counts, ordenes=[], producciones=[], pro
   const planHoy = ordenes.filter(o=>o.fecha===hoy).reduce((s,o)=>s+(o.cantidad||0),0);
   const prodDe = (oid) => producciones.filter(p=>p.orden_id===oid).reduce((s,p)=>s+(p.cantidad||0),0);
   const verDash = perfil.rol!=="operario";
+  const ultimaFecha = producciones.reduce((m,p)=>p.fecha>m?p.fecha:m,"");
+  const esHoy = partesHoy.length>0;
+  const fechaDash = esHoy ? hoy : ultimaFecha;
+  const partesDash = esHoy ? partesHoy : producciones.filter(p=>p.fecha===ultimaFecha);
+  const udsDash = partesDash.reduce((s,p)=>s+(p.cantidad||0),0);
+  const planDash = ordenes.filter(o=>o.fecha===fechaDash).reduce((s,o)=>s+(o.cantidad||0),0);
+  const fmtFecha = (f)=>{ try { return new Date(f+"T12:00:00").toLocaleDateString("es-ES",{weekday:"long",day:"numeric",month:"2-digit"}); } catch(e){ return f; } };
   const esGerencia = perfil.rol === "gerencia";
   const tiles = [
     { id:"ordenes",   icon:"📋", bg:"#ECFDF5", label:"Órdenes de Producción", sub:"Planificar y registrar",           roles:["gerencia","sup_fabrica","sup_oficina"] },
     { id:"diario",    icon:"📖", bg:"#EFF6FF", label:"Diario de Fabricación", sub:"El parte oficial del día",          roles:["gerencia","sup_fabrica","sup_oficina"] },
+    { id:"analitica", icon:"📊", bg:"#FDF2F8", label:"Analítica",         sub:"Evolución · costes · lotes · equipos", roles:["gerencia","sup_fabrica"] },
     { id:"seed",      icon:"🚀", bg:"#FFF7ED", label:"Carga Inicial",     sub:"Catálogo completo en 1 clic",          roles:["gerencia"] },
     { id:"synccat",   icon:"🔗", bg:"#F5F3FF", label:"Sincronizar Catálogo", sub:"Descripciones desde el CRM",         roles:["gerencia"] },
     { id:"importhist",icon:"📥", bg:"#FFFBEB", label:"Importar Histórico", sub:"Excel maestro → Firebase",              roles:["gerencia"] },
@@ -1991,22 +2306,31 @@ function Home({ perfil, onGo, onLogout, counts, ordenes=[], producciones=[], pro
         {perfil.rol==="operario" && (
           <TerminalOperario perfil={perfil} productos={productos}/>
         )}
-        {verDash && (activas.length>0 || partesHoy.length>0) && (
+        {verDash && (activas.length>0 || producciones.length>0) && (
           <div style={{background:"#fff",border:`1px solid ${C.border}`,borderRadius:16,padding:14,marginBottom:14,boxShadow:"0 1px 2px rgba(15,23,42,.04)"}}>
             <div style={{fontSize:11,color:C.mutedD,fontWeight:800,textTransform:"uppercase",letterSpacing:0.5,marginBottom:10,display:"flex",justifyContent:"space-between"}}>
-              <span>📅 HOY · {new Date().toLocaleDateString("es-ES",{weekday:"long",day:"numeric",month:"2-digit"})}</span>
+              <span>📅 {esHoy?"HOY":"ÚLTIMA JORNADA"} · {fmtFecha(fechaDash)}</span>
               <button onClick={()=>onGo("diario")} style={{background:"none",border:"none",color:C.blue,fontSize:11,fontWeight:800,cursor:"pointer"}}>Ver diario →</button>
             </div>
             <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
               {[[activas.length,"Órdenes activas",C.accent],
-                [planHoy?`${udsHoy}/${planHoy}`:String(udsHoy),"Uds hoy"+(planHoy?" / plan":""),C.text],
-                [planHoy?Math.round(udsHoy/planHoy*100)+"%":"—","Del plan",planHoy&&udsHoy/planHoy>=1?C.green:C.amber]].map(([n,l,col],i)=>(
+                [planDash?`${udsDash}/${planDash}`:String(udsDash),(esHoy?"Uds hoy":"Uds ese día")+(planDash?" / plan":""),C.text],
+                [planDash?Math.round(udsDash/planDash*100)+"%":"—","Del plan",planDash&&udsDash/planDash>=1?C.green:C.amber]].map(([n,l,col],i)=>(
                 <div key={i} style={{background:C.card2,borderRadius:12,padding:"10px 6px",textAlign:"center"}}>
                   <div style={{fontFamily:F.h,fontWeight:900,fontSize:22,color:col}}>{n}</div>
                   <div style={{fontSize:10,color:C.muted,marginTop:2}}>{l}</div>
                 </div>
               ))}
             </div>
+            {!esHoy && activas.length===0 && partesDash.slice(0,4).map(p2=>{
+              const pr = productos.find(x=>x.id===p2.producto_id);
+              return (
+                <div key={p2.id} onClick={()=>onGo("diario")} style={{display:"flex",justifyContent:"space-between",padding:"9px 0",borderBottom:`1px solid ${C.card2}`,cursor:"pointer",fontSize:13}}>
+                  <b style={{color:C.text}}>{pr?.nombre||"?"}</b>
+                  <span style={{fontWeight:800,color:C.accent}}>{p2.cantidad} uds{p2.n_personas?` · ${p2.n_personas}p`:""}</span>
+                </div>
+              );
+            })}
             {activas.slice(0,4).map(o=>{
               const p = productos.find(x=>x.id===o.producto_id);
               const hechas = prodDe(o.id);
@@ -2160,6 +2484,7 @@ export default function App() {
       {view==="home"      && <Home perfil={perfil} onGo={setView} onLogout={()=>signOut(auth)} counts={counts} ordenes={ordenesRoot} producciones={produccionesRoot} productos={productos}/>}
       {view==="ordenes"   && <OrdenesScreen onBack={back} perfil={perfil} productos={productos} lineas={lineas} turnos={turnos} centros={centros} mps={mps} motivos={motivos} usuarios={usuarios}/>}
       {view==="diario"    && <DiarioScreen onBack={back} productos={productos} lineas={lineas} turnos={turnos} mps={mps} motivos={motivos} usuarios={usuarios} centros={centros}/>}
+      {view==="analitica" && <AnaliticaScreen onBack={back} productos={productos} mps={mps} lineas={lineas} turnos={turnos} usuarios={usuarios} centros={centros}/>}
       {view==="seed"      && <SeedScreen onBack={back}/>}
       {view==="synccat"   && <SyncCatalogoScreen onBack={back} productos={productos}/>}
       {view==="importhist"&& <ImportHistoricoScreen onBack={back} productos={productos} mps={mps} lineas={lineas} turnos={turnos}/>}
