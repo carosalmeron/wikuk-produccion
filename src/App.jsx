@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v2.9";
+const APP_VERSION = "v2.9.2";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -833,7 +833,10 @@ function DiarioScreen({ onBack, productos, lineas, turnos, mps, motivos, usuario
 
   const partes = producciones.filter(p=>p.fecha===fecha);
   const totalUds = partes.reduce((s,p)=>s+(p.cantidad||0),0);
-  const planDia = ordenes.filter(o=>o.fecha===fecha).reduce((s,o)=>s+(o.cantidad||0),0);
+  const planDe = (o)=>{ if(o.plan_origen==="PROD"){ const pr=productos.find(p=>p.id===o.producto_id); return pr?.objetivo_diario||0; } return o.cantidad||0; };
+  const ordenesDia = ordenes.filter(o=>o.fecha===fecha);
+  const planDia = ordenesDia.reduce((s,o)=>s+planDe(o),0);
+  const [abierto, setAbierto] = useState(null);
   const totalParosMin = partes.reduce((s,p)=>s+(p.paros||[]).reduce((x,pa)=>x+(pa.minutos||0),0),0);
   const rendimientos = partes.flatMap(p=>(p.consumos||[]).map(cs=>cs.rendimiento_pct).filter(r=>r!=null));
   const rendMedio = rendimientos.length? Math.round(rendimientos.reduce((a,b)=>a+b,0)/rendimientos.length) : null;
@@ -887,21 +890,30 @@ function DiarioScreen({ onBack, productos, lineas, turnos, mps, motivos, usuario
                 const lin = lineas.find(x=>x.id===p.linea_id);
                 const costeFab = p.n_personas&&p.horas_equipo&&p.cantidad ? (p.n_personas*p.horas_equipo*tarifa/p.cantidad) : null;
                 return (
-                  <Card key={p.id} style={{marginBottom:8}}>
+                  <Card key={p.id} style={{marginBottom:8,cursor:"pointer"}} onClick={()=>setAbierto(abierto===p.id?null:p.id)}>
                     <div style={{display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:6}}>
                       <div style={{fontFamily:F.h,fontWeight:800,fontSize:17,color:C.text}}>
                         {orden?.numero?`OT ${orden.numero} · `:""}{prod?.nombre||"?"} <span style={{color:C.accent}}>· {p.cantidad} uds</span>
                       </div>
                       {lin && <Pill color={C.blue} bg={C.blueBg}>{lin.nombre}</Pill>}
                     </div>
-                    {(p.equipo||[]).length>0 &&
-                      <div style={{fontSize:13,color:C.muted,marginTop:4}}>👷 {(p.equipo||[]).map(nombreDe).join(" · ")} · {p.horas_equipo||8} h</div>}
+                    {((p.equipo||[]).length>0 || (p.equipo_nombres||[]).length>0 || p.n_personas) &&
+                      <div style={{fontSize:13,color:C.muted,marginTop:4}}>👷 {(p.equipo||[]).length>0 ? (p.equipo||[]).map(nombreDe).join(" · ")
+                        : (p.equipo_nombres||[]).length>0 ? p.equipo_nombres.join(" · ")
+                        : `${p.n_personas} personas${p.origen_personas==="DECLARADO"?"":" (estimado)"}`} · {p.horas_equipo||8} h</div>}
                     {(p.consumos||[]).map((cs,i)=>{
                       const m = mps.find(x=>x.id===cs.materia_id);
-                      return <div key={i} style={{display:"flex",justifyContent:"space-between",fontSize:13.5,padding:"5px 0",borderBottom:`1px solid ${C.border}`}}>
-                        <span>{m?.nombre}{cs.lote?<span style={{background:C.card2,borderRadius:8,padding:"1px 7px",fontSize:11,marginLeft:6}}>{cs.lote}</span>:null}
-                          <span style={{color:C.muted}}> · {cs.madejas?`${cs.madejas} mad`:""}{cs.metros?` +${cs.metros} m`:""}</span></span>
-                        {cs.rendimiento_pct!=null && <b style={{color:cs.rendimiento_pct>=85?C.green:cs.rendimiento_pct>=75?C.amber:C.red}}>{cs.rendimiento_pct}%</b>}
+                      const det = abierto===p.id;
+                      const teor = prod?.metros_finales && cs.capas ? (p.cantidad*prod.metros_finales*cs.capas) : null;
+                      return <div key={i} style={{fontSize:13.5,padding:"5px 0",borderBottom:`1px solid ${C.border}`}}>
+                        <div style={{display:"flex",justifyContent:"space-between"}}>
+                          <span>{m?.nombre}{cs.lote?<span style={{background:C.card2,borderRadius:8,padding:"1px 7px",fontSize:11,marginLeft:6}}>{cs.lote}</span>:null}
+                            <span style={{color:C.muted}}> · {cs.madejas?`${cs.madejas} mad`:""}{cs.metros?` +${cs.metros} m`:""}</span></span>
+                          {cs.rendimiento_pct!=null && <b style={{color:cs.rendimiento_pct>=85?C.green:cs.rendimiento_pct>=75?C.amber:C.red}}>{cs.rendimiento_pct}%</b>}
+                        </div>
+                        {det && <div style={{fontSize:12,color:C.muted,marginTop:2}}>
+                          consumido {(cs.metros_consumidos||0).toFixed(0)} m{teor?` · teórico ${teor.toFixed(0)} m (${cs.capas} capa${cs.capas>1?"s":""} × ${prod.metros_finales} m)`:""}{m?.rendimiento_objetivo?` · objetivo ${m.rendimiento_objetivo}%`:""}
+                        </div>}
                       </div>;
                     })}
                     {(p.paros||[]).map((pa,i)=>{
@@ -1089,8 +1101,8 @@ function ImportHistoricoScreen({ onBack, productos, mps, lineas, turnos }) {
       await save("ordenes", oid, {
         numero: o.n?String(o.n):"", tipo: o.tipo||"Plan", cliente: o.cli||"",
         producto_id: pid, centro: productos.find(x=>x.id===pid)?.centro||"",
-        linea_id: mapLin[norm(o.l)]||"", turno_id: o.t==="T2"?turnoT2:(o.t==="T1"?turnoT1:""),
-        fecha: o.f, cantidad: o.req||o.q||0, cerrada: true, historico: true,
+        linea_id: mapLin[norm(o.l)]||"", linea_nombre: o.l||"", turno_id: o.t==="T2"?turnoT2:(o.t==="T1"?turnoT1:""),
+        fecha: o.f, cantidad: o.req||o.q||0, plan_origen: o.req?"REQ":"PROD", cerrada: true, historico: true,
         created_at: new Date().toISOString(),
       });
       no++;
@@ -1102,8 +1114,8 @@ function ImportHistoricoScreen({ onBack, productos, mps, lineas, turnos }) {
         }));
         await save("producciones", "P"+oid, {
           orden_id: oid, producto_id: pid, fecha: o.f, turno_id: o.t==="T2"?turnoT2:turnoT1,
-          linea_id: mapLin[norm(o.l)]||"", cantidad: o.q, nota: o.nota||"",
-          n_personas: o.np||null, origen_personas: o.op||"", equipo: [], paros: [],
+          linea_id: mapLin[norm(o.l)]||"", linea_nombre: o.l||"", cantidad: o.q, nota: o.nota||"",
+          n_personas: o.np||null, origen_personas: o.op||"", equipo: [], equipo_nombres: o.eq||[], paros: [],
           consumos, historico: true, registrado_por: "histórico",
           registrado_at: new Date().toISOString(),
         });
@@ -1258,7 +1270,7 @@ function AnaliticaScreen({ onBack, productos, mps, lineas, turnos, usuarios, cen
 
   // ── P&G: prorrateo de MO por día-línea + pérdida MP vs rendimiento objetivo ──
   const grupos = {};
-  P2.forEach(p=>{ const k=p.fecha+"|"+(p.linea_id||"x"); const g=grupos[k]=grupos[k]||{np:0,rows:[]}; g.np=Math.max(g.np,p.n_personas||0); g.rows.push(p); });
+  P2.forEach(p=>{ const k=p.fecha+"|"+(p.linea_nombre||linMap[p.linea_id]?.nombre||p.linea_id||("prod_"+(prodMap[p.producto_id]?.nombre||"x").slice(0,4))); const g=grupos[k]=grupos[k]||{np:0,rows:[]}; g.np=Math.max(g.np,p.n_personas||0); g.rows.push(p); });
   const partesPG = [];
   Object.values(grupos).forEach(g=>{
     const np = g.np||3;
@@ -1274,7 +1286,7 @@ function AnaliticaScreen({ onBack, productos, mps, lineas, turnos, usuarios, cen
         const objR = (m.rendimiento_objetivo||85)/100, r2 = cs.rendimiento_pct/100;
         if (r2<objR) { const teor=(cs.metros_consumidos||0)*r2; mp += (teor/r2 - teor/objR)*(m.precio_ud||0); }
       });
-      partesPG.push({fecha:p.fecha, cod:pr?.nombre||"?", val, real, desvMO:real-val, mp});
+      partesPG.push({fecha:p.fecha, cod:pr?.nombre||"?", val, real, desvMO:real-val, mp, uds:p.cantidad});
     });
   });
   const [periodo, setPeriodo] = useState("mes");
@@ -1282,7 +1294,10 @@ function AnaliticaScreen({ onBack, productos, mps, lineas, turnos, usuarios, cen
     const d=new Date(f+"T12:00:00"); const day=(d.getDay()+6)%7; d.setDate(d.getDate()-day);
     return "sem "+d.toISOString().slice(5,10); };
   const pg = {};
-  partesPG.forEach(x=>{ const k=perKey(x.fecha); const d=pg[k]=pg[k]||{val:0,desvMO:0,mp:0}; d.val+=x.val; d.desvMO+=x.desvMO; d.mp+=x.mp; });
+  partesPG.forEach(x=>{ const k=perKey(x.fecha); const d=pg[k]=pg[k]||{val:0,desvMO:0,mp:0,uds:0,coste:0,obj:0,valObj:0}; d.val+=x.val; d.desvMO+=x.desvMO; d.mp+=x.mp; d.uds+=x.uds||0; d.coste+=x.real; });
+  ordenes.filter(o=>o.fecha).forEach(o=>{ const k=perKey(o.fecha); if(!pg[k]) return; const pr=prodMap[o.producto_id];
+    const planUds = o.plan_origen==="PROD" ? (pr?.objetivo_diario||0) : (o.cantidad||0);
+    pg[k].obj += planUds; pg[k].valObj += planUds*(pr?.coste_objetivo||3.5); });
   const pgArr = Object.entries(pg).sort((a,b)=>a[0].localeCompare(b[0]));
   const totMO = partesPG.reduce((s,x)=>s+x.desvMO,0), totMP = partesPG.reduce((s,x)=>s+x.mp,0);
   // Diagnóstico
@@ -1347,24 +1362,44 @@ function AnaliticaScreen({ onBack, productos, mps, lineas, turnos, usuarios, cen
               <button key={k} onClick={()=>setPeriodo(k)} style={{background:periodo===k?C.text:"#fff",color:periodo===k?"#fff":C.muted,border:`1px solid ${periodo===k?C.text:C.border}`,borderRadius:20,padding:"6px 14px",fontSize:13,fontFamily:F.h,fontWeight:700,cursor:"pointer"}}>{l}</button>
             ))}
           </div>
-          <Card>
-            <div style={{fontFamily:F.h,fontWeight:800,fontSize:15,marginBottom:4}}>Resultado de fabricación vs estándar</div>
-            <div style={{fontSize:12,color:C.muted,marginBottom:10}}>Desvío = coste real (MO prorrateada por día-línea) − valor a coste objetivo. + rojo = sobrecoste. MP = € perdidos por rendir bajo el objetivo de la materia.</div>
-            {pgArr.map(([k,d])=>{
-              const tot = d.desvMO+d.mp;
-              return (
-                <div key={k} style={{padding:"9px 0",borderBottom:`1px solid ${C.border}`}}>
-                  <div style={{display:"flex",justifyContent:"space-between",fontSize:14}}>
-                    <b>{k}</b>
-                    <b style={{color:tot>0?C.red:C.green}}>{eur(-tot).replace("−","−").replace("+","+")}{tot>0?" sobrecoste":" ahorro"}</b>
-                  </div>
-                  <div style={{fontSize:12,color:C.muted}}>valor obj {d.val.toFixed(0)} € · MO {eur(d.desvMO)} · MP {d.mp.toFixed(0)} €</div>
-                </div>
-              );
-            })}
-            <div style={{marginTop:10,padding:"10px 12px",background:C.card2,borderRadius:10,fontSize:14}}>
-              <b>Total periodo: <span style={{color:(totMO+totMP)>0?C.red:C.green}}>{(totMO+totMP).toFixed(0)} €</span></b> <span style={{color:C.muted,fontSize:12}}>(MO {totMO.toFixed(0)} + MP {totMP.toFixed(0)})</span>
+          <Card style={{marginBottom:10,background:C.card2,border:"none"}}>
+            <div style={{fontSize:13,color:C.mutedD,lineHeight:1.7}}>
+              <b>La cuenta, simple:</b> si el plan es 100 sticks a 1 € y produces 50 con el mismo equipo, tu coste real es 2 €/ud. Aquí, cada periodo: lo previsto, lo producido, lo que costó el equipo, y el <b>resultado en €</b>.
             </div>
+          </Card>
+          {pgArr.map(([k,d])=>{
+            const resultado = d.val - d.coste - d.mp;
+            const pctPlan = d.obj>0 ? d.uds/d.obj*100 : null;
+            const cReal = d.uds>0 ? (d.coste+d.mp)/d.uds : 0;
+            const cObj = d.uds>0 ? d.val/d.uds : 0;
+            return (
+              <Card key={k} style={{marginBottom:10,borderLeft:`4px solid ${resultado>=0?C.green:C.red}`}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <b style={{fontFamily:F.h,fontSize:16}}>{k}</b>
+                  <span style={{fontFamily:F.h,fontWeight:900,fontSize:22,color:resultado>=0?C.green:C.red}}>{resultado>=0?"+":"−"}{Math.abs(resultado).toFixed(0)} €</span>
+                </div>
+                <div style={{marginTop:8}}>
+                  <div style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:3}}>
+                    <span>📦 Producido <b>{d.uds.toFixed(0)}</b>{d.obj>0?<span style={{color:C.muted}}> de {d.obj.toFixed(0)} previstas</span>:null}</span>
+                    {pctPlan!=null && <b style={{color:pctPlan>=95?C.green:pctPlan>=75?C.amber:C.red}}>{pctPlan.toFixed(0)}%</b>}
+                  </div>
+                  {pctPlan!=null && <div style={{height:7,background:C.card2,borderRadius:4,overflow:"hidden"}}>
+                    <div style={{width:Math.min(100,pctPlan)+"%",height:"100%",background:pctPlan>=95?C.green:pctPlan>=75?C.amber:C.red,borderRadius:4}}/></div>}
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,marginTop:10,fontSize:12.5}}>
+                  <div style={{background:C.card2,borderRadius:10,padding:"8px 10px"}}><div style={{color:C.muted,fontSize:10.5}}>VALOR PRODUCIDO</div><b>{d.val.toFixed(0)} €</b></div>
+                  <div style={{background:C.card2,borderRadius:10,padding:"8px 10px"}}><div style={{color:C.muted,fontSize:10.5}}>COSTE EQUIPO+MP</div><b>{(d.coste+d.mp).toFixed(0)} €</b></div>
+                  <div style={{background:C.card2,borderRadius:10,padding:"8px 10px"}}><div style={{color:C.muted,fontSize:10.5}}>€/UD REAL·OBJ</div><b style={{color:cReal<=cObj?C.green:C.red}}>{cReal.toFixed(2)}</b><span style={{color:C.muted}}> · {cObj.toFixed(2)}</span></div>
+                </div>
+              </Card>
+            );
+          })}
+          <Card>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:15}}>
+              <b>Total periodo</b>
+              <b style={{fontFamily:F.h,fontSize:18,color:(totMO+totMP)<=0?C.green:C.red}}>{(totMO+totMP)<=0?"+":"−"}{Math.abs(totMO+totMP).toFixed(0)} €</b>
+            </div>
+            <div style={{fontSize:12,color:C.muted,marginTop:4}}>Equipo {totMO>0?"−":"+"}{Math.abs(totMO).toFixed(0)} € vs estándar · Materia −{totMP.toFixed(0)} € por rendimiento</div>
           </Card>
         </>}
 
