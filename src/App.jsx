@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v2.9.3";
+const APP_VERSION = "v2.9.5";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -957,7 +957,7 @@ function DiarioScreen({ onBack, productos, lineas, turnos, mps, motivos, usuario
                       })}
                       {(p.paros||[]).length>0 && <>
                         <div style={{fontSize:11,color:C.mutedD,fontWeight:800,margin:"10px 0 4px"}}>⏸ PAROS</div>
-                        {(p.paros||[]).map((pa,i)=>{
+                        {det && (p.paros||[]).map((pa,i)=>{
                           const mo = motivos.find(x=>x.id===pa.motivo_id);
                           return <div key={i} style={{fontSize:13,color:C.amber}}>{mo?.icono} {mo?.nombre}{pa.minutos?` · ${pa.minutos}'`:""}{pa.nota?` — ${pa.nota}`:""}</div>;
                         })}
@@ -1326,10 +1326,14 @@ function AnaliticaScreen({ onBack, productos, mps, lineas, turnos, usuarios, cen
         const objR = (m.rendimiento_objetivo||85)/100, r2 = cs.rendimiento_pct/100;
         if (r2<objR) { const teor=(cs.metros_consumidos||0)*r2; mp += (teor/r2 - teor/objR)*(m.precio_ud||0); }
       });
-      partesPG.push({fecha:p.fecha, cod:pr?.nombre||"?", val, real, desvMO:real-val, mp, uds:p.cantidad});
+      partesPG.push({fecha:p.fecha, cod:pr?.nombre||"?", val, real, desvMO:real-val, mp, uds:p.cantidad,
+        np:np, org:p.origen_personas||"", linea:(p.linea_nombre||linMap[p.linea_id]?.nombre||""), turno:turnos.find(t=>t.id===p.turno_id)?.nombre||"",
+        lotes:[...new Set((p.consumos||[]).map(cs=>cs.lote).filter(Boolean))], obj:pr?.coste_objetivo||0});
     });
   });
   const [periodo, setPeriodo] = useState("mes");
+  const [openProd, setOpenProd] = useState(null);
+  const [openLote, setOpenLote] = useState(null);
   const perKey = (f)=>{ if(periodo==="mes") return f.slice(0,7);
     const d=new Date(f+"T12:00:00"); const day=(d.getDay()+6)%7; d.setDate(d.getDate()-day);
     return "sem "+d.toISOString().slice(5,10); };
@@ -1458,35 +1462,82 @@ function AnaliticaScreen({ onBack, productos, mps, lineas, turnos, usuarios, cen
           </Card>
         </>}
 
-        {!vacio && tab==="costes" && (
+        {!vacio && tab==="costes" && (()=>{
+          const porProd2 = {};
+          partesPG.forEach(x=>{ const d=porProd2[x.cod]=porProd2[x.cod]||{uds:0,real:0,val:0,obj:x.obj,rows:[]}; d.uds+=x.uds; d.real+=x.real; d.val+=x.val; d.rows.push(x); });
+          const arr = Object.entries(porProd2).map(([cod,d])=>({cod,...d,desv:d.real-d.val})).filter(x=>x.uds>=10).sort((a,b)=>b.desv-a.desv);
+          return (
           <Card>
-            <div style={{fontFamily:F.h,fontWeight:800,fontSize:15,marginBottom:4,color:C.text}}>Coste real vs objetivo por producto</div>
-            <div style={{fontSize:12,color:C.muted,marginBottom:10}}>Real = personas × horas × {tarifaCargada.toFixed(2)} €/h ÷ uds (partes con personas conocidas, ≥10 uds)</div>
-            {costesArr.map(x=>(
-              <div key={x.nombre} style={{padding:"9px 0",borderBottom:`1px solid ${C.border}`}}>
-                <div style={{display:"flex",justifyContent:"space-between",fontSize:14}}>
-                  <b>{x.nombre}</b>
-                  <span><b style={{color:x.obj&&x.real<=x.obj?C.green:C.red}}>{x.real.toFixed(2)} €</b><span style={{color:C.muted,fontSize:12}}> / obj {x.obj||"—"}</span></span>
+            <div style={{fontFamily:F.h,fontWeight:800,fontSize:15,marginBottom:4,color:C.text}}>Coste real vs objetivo · toca para abrir jornadas</div>
+            <div style={{fontSize:12,color:C.muted,marginBottom:10}}>MO del equipo repartida entre las órdenes de cada línea-día por unidades</div>
+            {arr.map(x=>{
+              const rud=x.real/x.uds, oud=x.obj||x.val/x.uds;
+              const open = openProd===x.cod;
+              return (
+                <div key={x.cod}>
+                  <div onClick={()=>setOpenProd(open?null:x.cod)} style={{padding:"9px 0",borderBottom:`1px solid ${C.border}`,cursor:"pointer"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",fontSize:14}}>
+                      <b>{open?"▾":"▸"} {x.cod}</b>
+                      <span><b style={{color:rud<=oud?C.green:C.red}}>{rud.toFixed(2)} €</b><span style={{color:C.muted,fontSize:12}}> / obj {oud.toFixed(2)}</span>
+                        <b style={{marginLeft:8,color:x.desv>0?C.red:C.green}}>{x.desv>0?"−":"+"}{Math.abs(x.desv).toFixed(0)} €</b></span>
+                    </div>
+                    <div style={{fontSize:12,color:C.muted}}>{x.uds.toFixed(0)} uds · {x.rows.length} jornadas</div>
+                  </div>
+                  {open && x.rows.sort((a,b)=>b.fecha.localeCompare(a.fecha)).map((r,i)=>{
+                    const dd=r.real-r.val;
+                    return (
+                      <div key={i} style={{padding:"7px 0 7px 16px",borderBottom:`1px solid ${C.card2}`,background:C.bg,fontSize:12.5}}>
+                        <div style={{display:"flex",justifyContent:"space-between",gap:6,flexWrap:"wrap"}}>
+                          <span>{r.fecha} · {r.linea}{r.turno?` ${r.turno}`:""} · {r.np}p{r.org==="DECLARADO"?"":" (est.)"}
+                            {r.lotes.map((l,j)=><span key={j} style={{marginLeft:5,background:l.includes("26U")?"#FEF2F2":C.card2,color:l.includes("26U")?C.red:C.muted,borderRadius:6,padding:"0 6px",fontSize:10.5}}>{l}</span>)}</span>
+                          <span><b>{r.uds} uds</b> · {(r.real/r.uds).toFixed(2)} € · <b style={{color:dd>0?C.red:C.green}}>{dd>0?"−":"+"}{Math.abs(dd).toFixed(0)} €</b></span>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
-                <div style={{fontSize:12,color:C.muted}}>{x.uds.toFixed(0)} uds · {x.n} partes · desvío {x.obj?((x.real-x.obj)/x.obj*100).toFixed(0)+"%":"—"}</div>
-              </div>
-            ))}
+              );
+            })}
           </Card>
-        )}
+          );
+        })()}
 
-        {!vacio && tab==="lotes" && (
+        {!vacio && tab==="lotes" && (()=>{
+          const porLote2 = {};
+          P2.forEach(p=>(p.consumos||[]).forEach(cs=>{
+            if (!cs.lote || cs.rendimiento_pct==null) return;
+            const m = mpMap[cs.materia_id];
+            const k = (m?.nombre||"?")+" · "+cs.lote;
+            const d = porLote2[k]=porLote2[k]||{sum:0,n:0,rows:[],obj:m?.rendimiento_objetivo||85};
+            d.sum+=cs.rendimiento_pct; d.n++;
+            d.rows.push({fecha:p.fecha, prod:prodMap[p.producto_id]?.nombre||"?", rend:cs.rendimiento_pct, mad:cs.madejas, mts:cs.metros});
+          }));
+          const arr = Object.entries(porLote2).map(([k,d])=>({k,...d,rend:d.sum/d.n})).filter(x=>x.n>=2).sort((a,b)=>a.rend-b.rend);
+          return (
           <Card>
-            <div style={{fontFamily:F.h,fontWeight:800,fontSize:15,marginBottom:4,color:C.text}}>Ranking de lotes por rendimiento</div>
-            <div style={{fontSize:12,color:C.muted,marginBottom:10}}>Media de rendimiento real (≥3 partes). El lote decide más que la marca.</div>
-            {lotesArr.map(x=>(
-              <div key={x.lote} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:`1px solid ${C.border}`,fontSize:13.5,gap:8}}>
-                <span>{x.lote} <span style={{color:C.muted,fontSize:11}}>({x.n})</span></span>
-                <b style={{color:colR(x.rend)}}>{x.rend.toFixed(1)}%</b>
-              </div>
-            ))}
-            {lotesArr.length===0 && <div style={{fontSize:13,color:C.muted}}>Aún sin lotes con ≥3 partes.</div>}
+            <div style={{fontFamily:F.h,fontWeight:800,fontSize:15,marginBottom:4,color:C.text}}>Lotes por rendimiento · toca para abrir jornadas</div>
+            <div style={{fontSize:12,color:C.muted,marginBottom:10}}>Los peores arriba. Semirrizado ORH: &gt;100% es normal (objetivo 110)</div>
+            {arr.map(x=>{
+              const open = openLote===x.k;
+              return (
+                <div key={x.k}>
+                  <div onClick={()=>setOpenLote(open?null:x.k)} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:`1px solid ${C.border}`,fontSize:13.5,cursor:"pointer",gap:8}}>
+                    <span>{open?"▾":"▸"} {x.k} <span style={{color:C.muted,fontSize:11}}>({x.n})</span></span>
+                    <b style={{color:x.rend>=x.obj?C.green:x.rend>=x.obj-10?C.amber:C.red}}>{x.rend.toFixed(1)}%</b>
+                  </div>
+                  {open && x.rows.sort((a,b)=>b.fecha.localeCompare(a.fecha)).map((r,i)=>(
+                    <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"6px 0 6px 16px",borderBottom:`1px solid ${C.card2}`,background:C.bg,fontSize:12.5}}>
+                      <span>{r.fecha} · {r.prod} · {r.mad?`${r.mad} mad`:""}{r.mts?` +${r.mts} m`:""}</span>
+                      <b style={{color:r.rend>=x.obj?C.green:r.rend>=x.obj-10?C.amber:C.red}}>{r.rend}%</b>
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
+            {arr.length===0 && <div style={{fontSize:13,color:C.muted}}>Aún sin lotes con ≥2 jornadas.</div>}
           </Card>
-        )}
+          );
+        })()}
 
         {!vacio && tab==="equipos" && (
           <Card>
