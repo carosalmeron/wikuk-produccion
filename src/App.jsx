@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v2.11.0";
+const APP_VERSION = "v2.11.1";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -2447,6 +2447,17 @@ function ProductosScreen({ onBack, procesos, mps, centros }) {
   );
 }
 
+// Input pequeño para editar en línea dentro del escandallo
+const NumIn = ({ value, onChange, suf, w=72, step="0.01", ph="" }) => (
+  <div style={{display:"flex",alignItems:"center",gap:4}}>
+    <input type="number" value={value??""} placeholder={ph} step={step} min="0"
+      onChange={e=>onChange(e.target.value)}
+      style={{width:w,padding:"9px 8px",borderRadius:10,border:`1.5px solid ${C.border}`,fontSize:15,
+        fontFamily:F.h,fontWeight:700,textAlign:"right",background:"#fff",color:C.text,boxSizing:"border-box"}}/>
+    {suf && <span style={{fontSize:12,color:C.mutedD,whiteSpace:"nowrap"}}>{suf}</span>}
+  </div>
+);
+
 function ProductoForm({ onBack, ep, procesos, mps, centros }) {
   const [nombre, setNombre] = useState(ep?.nombre||"");
   const [centro, setCentro] = useState(ep?.centro||"");
@@ -2466,7 +2477,7 @@ function ProductoForm({ onBack, ep, procesos, mps, centros }) {
   const [precioMp, setPrecioMp] = useState("");
   const [rendMp, setRendMp]     = useState("");
 
-  const tarifaMO = centros.find(c=>c.id===centro)?.tarifa_mo || 12.5;
+  const tarifaMO = centros.find(c=>c.id===centro)?.tarifa_mo || TARIFA_MO;
 
   const onSelMp = (id) => {
     setSelMp(id);
@@ -2497,9 +2508,13 @@ function ProductoForm({ onBack, ep, procesos, mps, centros }) {
     setSelProc(""); setMinObj("");
   };
   const addMp = () => {
-    if (!selMp || !capas) return;
-    if (ma.find(x=>x.mp_id===selMp)) return;
-    setMa(prev=>[...prev,{mp_id:selMp,capas:parseInt(capas),precio_ud:parseFloat(precioMp)||0,rendimiento:parseFloat(rendMp)||100}]);
+    if (!selMp) { window.alert("Elige una materia prima"); return; }
+    if (ma.find(x=>x.mp_id===selMp)) { window.alert("Esa materia ya está en el escandallo. Edítala arriba."); return; }
+    const g = mps.find(z=>z.id===selMp);
+    setMa(prev=>[...prev,{ mp_id:selMp,
+      capas: parseInt(capas)||1,
+      precio_ud: parseFloat(precioMp)||parseFloat(g?.precio_ud)||0,
+      rendimiento: parseFloat(rendMp)||parseFloat(g?.rendimiento_objetivo)||85 }]);
     setSelMp(""); setCapas(""); setPrecioMp(""); setRendMp("");
   };
   const guardar = async () => {
@@ -2565,7 +2580,7 @@ function ProductoForm({ onBack, ep, procesos, mps, centros }) {
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                   <div>
                     <span style={{fontFamily:F.h,fontWeight:600,fontSize:16,color:C.text}}>{pr?.diferido?"⏭ ":""}{pr?.nombre||"?"}</span>
-                    <span style={{color:C.accent,fontSize:14,marginLeft:10,fontWeight:600}}>{x.min_obj} min/{unidad||"ud"}</span>
+                    <span style={{color:C.accent,fontSize:14,marginLeft:10,fontWeight:600}}>min/{unidad||"ud"}</span>
                   </div>
                   <div style={{display:"flex",gap:6,alignItems:"center"}}>
                     <button onClick={()=>setPa(prev=>prev.map(z=>({...z,define_cantidad:z.proceso_id===x.proceso_id})))}
@@ -2576,7 +2591,13 @@ function ProductoForm({ onBack, ep, procesos, mps, centros }) {
                       style={{background:"none",border:"none",color:C.red,fontSize:18,cursor:"pointer"}}>✕</button>
                   </div>
                 </div>
-                <div style={{fontSize:12.5,color:C.green,fontWeight:700,marginTop:2}}>→ {cst.toFixed(3)} €/{unidad||"ud"} de mano de obra</div>
+                <div style={{display:"flex",alignItems:"center",gap:10,marginTop:6}}>
+                  <NumIn value={x.min_obj} step="0.01" suf={`min/${unidad||"ud"}`}
+                    onChange={v=>setPa(prev=>prev.map(z=>z.proceso_id===x.proceso_id?{...z,min_obj:parseFloat(v)||0}:z))}/>
+                  <span style={{fontSize:12.5,color:cst>0?C.green:C.red,fontWeight:800}}>
+                    {cst>0 ? `→ ${cst.toFixed(3)} €/${unidad||"ud"} de mano de obra` : "⚠️ falta el tiempo"}
+                  </span>
+                </div>
               </div>
             );
           })}
@@ -2601,34 +2622,65 @@ function ProductoForm({ onBack, ep, procesos, mps, centros }) {
           {ma.map(x=>{
             const m = mps.find(z=>z.id===x.mp_id);
             const cst = costeMatLinea(x.capas, x.precio_ud||0, x.rendimiento||100);
+            const upd = (campo,val)=>setMa(prev=>prev.map(z=>z.mp_id===x.mp_id?{...z,[campo]:parseFloat(val)||0}:z));
+            const falta = !(x.precio_ud>0) || !(x.rendimiento>0);
             return (
-              <div key={x.mp_id} style={{padding:"9px 0",borderBottom:`1px solid ${C.border}`}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                  <div>
-                    <span style={{fontFamily:F.h,fontWeight:600,fontSize:16,color:C.text}}>{m?.nombre||"?"}</span>
-                    <span style={{color:C.blue,fontSize:14,marginLeft:10,fontWeight:700}}>{x.capas} capa{x.capas>1?"s":""}</span>
-                  </div>
-                  <button onClick={()=>setMa(prev=>prev.filter(z=>z.mp_id!==x.mp_id))}
+              <div key={x.mp_id} style={{padding:"11px 0",borderBottom:`1px solid ${C.border}`}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                  <span style={{fontFamily:F.h,fontWeight:700,fontSize:16,color:C.text}}>{m?.nombre||"?"}</span>
+                  <button onClick={()=>{ if(window.confirm(`¿Quitar ${m?.nombre||"esta materia"} del escandallo?`)) setMa(prev=>prev.filter(z=>z.mp_id!==x.mp_id)); }}
                     style={{background:"none",border:"none",color:C.red,fontSize:18,cursor:"pointer"}}>✕</button>
                 </div>
-                <div style={{fontSize:12.5,color:C.muted,marginTop:2}}>
-                  {((parseFloat(mFinales)||0)*x.capas).toFixed(1)} m/ud · {x.precio_ud} €/m · rend. {x.rendimiento}%
-                  <span style={{color:C.green,fontWeight:700,marginLeft:8}}>→ {cst.toFixed(3)} €/{unidad||"ud"}</span>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:8}}>
+                  <div>
+                    <div style={{fontSize:11,color:C.mutedD,fontWeight:700,marginBottom:3}}>CAPAS</div>
+                    <NumIn value={x.capas} onChange={v=>upd("capas",v)} step="1" w="100%"/>
+                  </div>
+                  <div>
+                    <div style={{fontSize:11,color:C.mutedD,fontWeight:700,marginBottom:3}}>€/METRO</div>
+                    <NumIn value={x.precio_ud} onChange={v=>upd("precio_ud",v)} step="0.001" ph="0.090" w="100%"/>
+                  </div>
+                  <div>
+                    <div style={{fontSize:11,color:C.mutedD,fontWeight:700,marginBottom:3}}>REND. %</div>
+                    <NumIn value={x.rendimiento} onChange={v=>upd("rendimiento",v)} step="1" ph="85" w="100%"/>
+                  </div>
+                </div>
+                <div style={{fontSize:12.5,color:falta?C.red:C.mutedD,background:falta?C.redBg:C.card2,borderRadius:9,padding:"7px 10px"}}>
+                  {((parseFloat(mFinales)||0)*(x.capas||0)).toFixed(1)} m/ud
+                  {falta
+                    ? <b style={{marginLeft:8}}>⚠️ falta {!(x.precio_ud>0)?"precio":""}{(!(x.precio_ud>0)&&!(x.rendimiento>0))?" y ":""}{!(x.rendimiento>0)?"rendimiento":""}</b>
+                    : <span style={{color:C.green,fontWeight:800,marginLeft:8}}>→ {cst.toFixed(3)} €/{unidad||"ud"}</span>}
                 </div>
               </div>
             );
           })}
+          {ma.some(x=>!(x.precio_ud>0)||!(x.rendimiento>0)) && (
+            <button onClick={()=>setMa(prev=>prev.map(x=>{
+              const g = mps.find(z=>z.id===x.mp_id);
+              return { ...x,
+                precio_ud: x.precio_ud>0 ? x.precio_ud : (parseFloat(g?.precio_ud)||0),
+                rendimiento: x.rendimiento>0 ? x.rendimiento : (parseFloat(g?.rendimiento_objetivo)||85) };
+            }))}
+              style={{width:"100%",marginTop:10,background:C.blueBg,border:`1.5px solid ${C.blue}55`,color:C.blue,borderRadius:11,padding:"12px",fontFamily:F.h,fontWeight:800,fontSize:14,cursor:"pointer"}}>
+              ↧ Rellenar lo que falta con los datos de la materia
+            </button>
+          )}
           <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:8,marginTop:12}}>
             <Sel value={selMp} onChange={onSelMp} placeholder="Materia prima…"
               options={mps.filter(m=>!ma.find(x=>x.mp_id===m.id)).map(m=>({value:m.id,label:m.nombre}))}/>
             <Field label="Capas" value={capas} onChange={setCapas} type="number" placeholder="1-4" min="1" step="1"/>
           </div>
           {selMp && (
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr auto",gap:8,alignItems:"end"}}>
-              <Field label="Precio (€/m)" value={precioMp} onChange={setPrecioMp} type="number" placeholder="0.09" min="0" step="0.001"/>
-              <Field label="Rendimiento (%)" value={rendMp} onChange={setRendMp} type="number" placeholder="85" min="1" step="1"/>
-              <button onClick={addMp} style={{background:C.accent,border:"none",color:"#fff",borderRadius:11,padding:"13px 18px",fontFamily:F.h,fontWeight:700,fontSize:17,cursor:"pointer",marginBottom:14}}>＋</button>
-            </div>
+            <>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                <Field label="Precio (€/m)" value={precioMp} onChange={setPrecioMp} type="number" placeholder="0.09" min="0" step="0.001"/>
+                <Field label="Rendimiento (%)" value={rendMp} onChange={setRendMp} type="number" placeholder="85" min="1" step="1"/>
+              </div>
+              <button onClick={addMp} style={{width:"100%",background:C.accent,border:"none",color:"#fff",borderRadius:12,padding:"14px",fontFamily:F.h,fontWeight:800,fontSize:15,cursor:"pointer"}}>
+                ＋ Añadir al escandallo
+              </button>
+              <div style={{fontSize:11.5,color:C.mutedD,marginTop:6,lineHeight:1.5}}>Si lo dejas en blanco lo añade igual y luego lo editas arriba.</div>
+            </>
           )}
           {ma.length>0 && (
             <div style={{marginTop:10,paddingTop:10,borderTop:`1.5px solid ${C.border}`,display:"flex",justifyContent:"space-between"}}>
@@ -2641,6 +2693,11 @@ function ProductoForm({ onBack, ep, procesos, mps, centros }) {
         {/* RESUMEN DE COSTE OBJETIVO */}
         <Card style={{marginBottom:14,background:C.blueBg,border:`1.5px solid ${C.blue}`}}>
           <div style={{fontFamily:F.h,fontWeight:800,fontSize:16,color:C.blue,marginBottom:10}}>💶 COSTE OBJETIVO DE PRODUCTO FINAL</div>
+          {(ma.some(x=>!(x.precio_ud>0)||!(x.rendimiento>0)) || pa.some(x=>!(x.min_obj>0))) && (
+            <div style={{background:C.redBg,border:`1.5px solid ${C.red}`,borderRadius:10,padding:"10px 12px",marginBottom:10,fontSize:12.5,color:C.red,fontWeight:700,lineHeight:1.5}}>
+              ⚠️ El coste está incompleto: hay líneas sin precio, sin rendimiento o sin tiempo. Rellénalas arriba.
+            </div>
+          )}
           <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0",fontSize:14}}>
             <span style={{color:C.text}}>Materia prima</span><span style={{fontWeight:700,color:C.text}}>{costeMPTotal.toFixed(2)} €</span>
           </div>
