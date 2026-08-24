@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v2.14.0";
+const APP_VERSION = "v2.14.1";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -54,6 +54,12 @@ const P = {
   fh:"'Barlow Condensed','Arial Narrow',sans-serif",
 };
 const uid = () => Math.random().toString(36).slice(2, 10);
+// Acepta coma o punto como separador decimal (teclados móviles españoles)
+const toNum = (v) => {
+  if (v === "" || v === null || v === undefined) return 0;
+  const n = parseFloat(String(v).replace(",", "."));
+  return isNaN(n) ? 0 : n;
+};
 
 // ── PLANIFICACIÓN: constantes y utilidades de calendario ───────────────────────
 const TARIFA_MO = 15.25;            // €/h coste real (27.444 €/año ÷ 1.800 h)
@@ -190,10 +196,11 @@ const Btn = ({ children, onClick, v = "primary", disabled, style = {} }) => {
   };
   return <button onClick={disabled?undefined:onClick} style={{fontFamily:F.h,fontWeight:700,fontSize:15,borderRadius:12,padding:"14px 20px",cursor:disabled?"not-allowed":"pointer",width:"100%",textAlign:"center",opacity:disabled?0.35:1,...vs[v],...style}}>{children}</button>;
 };
-const Field = ({ label, value, onChange, type = "text", placeholder, min, step }) => (
+const Field = ({ label, value, onChange, type = "text", placeholder, min, step, dec }) => (
   <div style={{marginBottom:14}}>
     {label && <label style={{display:"block",fontFamily:F.h,fontWeight:600,fontSize:12,color:C.mutedD,marginBottom:5,letterSpacing:0.2}}>{label}</label>}
-    <input type={type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} min={min} step={step}
+    <input type={dec?"text":type} inputMode={dec?"decimal":undefined}
+      value={value} onChange={e=>onChange(dec?e.target.value.replace(/[^0-9.,]/g,""):e.target.value)} placeholder={placeholder} min={min} step={step}
       style={{width:"100%",background:"#fff",border:`1px solid ${C.border}`,color:C.text,borderRadius:12,padding:"12px 14px",fontFamily:F.b,fontSize:15,outline:"none",boxSizing:"border-box"}}/>
   </div>
 );
@@ -2450,8 +2457,8 @@ function ProductosScreen({ onBack, procesos, mps, centros }) {
 // Input pequeño para editar en línea dentro del escandallo
 const NumIn = ({ value, onChange, suf, w=72, step="0.01", ph="" }) => (
   <div style={{display:"flex",alignItems:"center",gap:4}}>
-    <input type="number" value={value??""} placeholder={ph} step={step} min="0"
-      onChange={e=>onChange(e.target.value)}
+    <input type="text" inputMode="decimal" value={value??""} placeholder={ph}
+      onChange={e=>onChange(e.target.value.replace(/[^0-9.,]/g,""))}
       style={{width:w,padding:"9px 8px",borderRadius:10,border:`1.5px solid ${C.border}`,fontSize:15,
         fontFamily:F.h,fontWeight:700,textAlign:"right",background:"#fff",color:C.text,boxSizing:"border-box"}}/>
     {suf && <span style={{fontSize:12,color:C.mutedD,whiteSpace:"nowrap"}}>{suf}</span>}
@@ -2488,23 +2495,23 @@ function ProductoForm({ onBack, ep, procesos, mps, centros }) {
 
   // Coste de materia prima objetivo por línea del escandallo: metros teóricos ÷ rendimiento × precio
   const costeMatLinea = (capasN, precioN, rendN) => {
-    const metros = (parseFloat(mFinales)||0) * capasN;
+    const metros = toNum(mFinales) * capasN;
     const rend = rendN>0 ? rendN/100 : 1;
     return rend>0 ? (metros/rend)*precioN : 0;
   };
-  const costeMPTotal = ma.reduce((s,x)=>s+costeMatLinea(x.capas, x.precio_ud||0, x.rendimiento||100), 0);
+  const costeMPTotal = ma.reduce((s,x)=>s+costeMatLinea(toNum(x.capas), toNum(x.precio_ud), toNum(x.rendimiento)||100), 0);
   // Coste de mano de obra objetivo por proceso: minutos/ud ÷ 60 × tarifa del centro
   const costeProcLinea = (minObjN) => (minObjN/60)*tarifaMO;
-  const costeMOTotal = pa.reduce((s,x)=>s+costeProcLinea(x.min_obj||0), 0);
+  const costeMOTotal = pa.reduce((s,x)=>s+costeProcLinea(toNum(x.min_obj)), 0);
   const costeCalculado = costeMPTotal + costeMOTotal;
-  const costeFinal = parseFloat(coste)||0;
-  const pv = parseFloat(precioVenta)||0;
+  const costeFinal = toNum(coste);
+  const pv = toNum(precioVenta);
   const margenPct = pv>0 ? ((pv-costeFinal)/pv*100) : null;
 
   const addProc = () => {
     if (!selProc || !minObj) return;
     if (pa.find(x=>x.proceso_id===selProc)) return;
-    setPa(prev=>[...prev,{proceso_id:selProc,min_obj:parseFloat(minObj),define_cantidad:prev.length===0}]);
+    setPa(prev=>[...prev,{proceso_id:selProc,min_obj:toNum(minObj),define_cantidad:prev.length===0}]);
     setSelProc(""); setMinObj("");
   };
   const addMp = () => {
@@ -2512,9 +2519,9 @@ function ProductoForm({ onBack, ep, procesos, mps, centros }) {
     if (ma.find(x=>x.mp_id===selMp)) { window.alert("Esa materia ya está en el escandallo. Edítala arriba."); return; }
     const g = mps.find(z=>z.id===selMp);
     setMa(prev=>[...prev,{ mp_id:selMp,
-      capas: parseInt(capas)||1,
-      precio_ud: parseFloat(precioMp)||parseFloat(g?.precio_ud)||0,
-      rendimiento: parseFloat(rendMp)||parseFloat(g?.rendimiento_objetivo)||85 }]);
+      capas: toNum(capas)||1,
+      precio_ud: toNum(precioMp)||parseFloat(g?.precio_ud)||0,
+      rendimiento: toNum(rendMp)||parseFloat(g?.rendimiento_objetivo)||85 }]);
     setSelMp(""); setCapas(""); setPrecioMp(""); setRendMp("");
   };
   const guardar = async () => {
@@ -2522,14 +2529,15 @@ function ProductoForm({ onBack, ep, procesos, mps, centros }) {
     if (!centro) { alert("Asigna el producto a un centro"); return; }
     await save("productos", ep?.id||uid(), {
       nombre: nombre.trim(), centro, unidad: unidad.trim()||"ud",
-      coste_objetivo: parseFloat(coste)||0,
+      coste_objetivo: toNum(coste),
       coste_mp_objetivo: costeMPTotal, coste_mo_objetivo: costeMOTotal,
       precio_venta: pv||null,
-      metros_finales: parseFloat(mFinales)||0,
-      objetivo_diario: parseFloat(objDiario)||0,
-      uds_turno_linea: parseFloat(udsTurno)||0,
+      metros_finales: toNum(mFinales),
+      objetivo_diario: toNum(objDiario),
+      uds_turno_linea: toNum(udsTurno),
       personas_linea: parseInt(persLinea)||3,
-      procesos_asignados: pa, materias_asignadas: ma,
+      procesos_asignados: pa.map(x=>({...x, min_obj: toNum(x.min_obj)})),
+      materias_asignadas: ma.map(x=>({...x, capas: toNum(x.capas), precio_ud: toNum(x.precio_ud), rendimiento: toNum(x.rendimiento)||85 })),
     });
     onBack();
   };
@@ -2543,11 +2551,11 @@ function ProductoForm({ onBack, ep, procesos, mps, centros }) {
             options={centros.map(c=>({value:c.id,label:`🏭 ${c.nombre}`}))}/>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
             <Field label="Unidad" value={unidad} onChange={setUnidad} placeholder="Stick"/>
-            <Field label="Metros finales/ud" value={mFinales} onChange={setMFinales} type="number" placeholder="10" min="0" step="0.1"/>
+            <Field dec label="Metros finales/ud" value={mFinales} onChange={setMFinales} type="number" placeholder="10" min="0" step="0.1"/>
           </div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-            <Field label="Objetivo diario (uds)" value={objDiario} onChange={setObjDiario} type="number" placeholder="100" min="0" step="1"/>
-            <Field label="Precio medio de venta (€)" value={precioVenta} onChange={setPrecioVenta} type="number" placeholder="9.00" min="0" step="0.01"/>
+            <Field dec label="Objetivo diario (uds)" value={objDiario} onChange={setObjDiario} type="number" placeholder="100" min="0" step="1"/>
+            <Field dec label="Precio medio de venta (€)" value={precioVenta} onChange={setPrecioVenta} type="number" placeholder="9.00" min="0" step="0.01"/>
           </div>
         </Card>
 
@@ -2556,12 +2564,12 @@ function ProductoForm({ onBack, ep, procesos, mps, centros }) {
           <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text,marginBottom:3}}>⏱️ Ritmo de fabricación</div>
           <div style={{fontSize:12,color:C.mutedD,marginBottom:12,lineHeight:1.5}}>Cuántas unidades salen de <b>una línea en un turno</b>. Es la base de toda la planificación: sin este dato el plan no puede calcular recursos.</div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-            <Field label="Uds por turno-línea" value={udsTurno} onChange={setUdsTurno} type="number" placeholder="150" min="0" step="1"/>
-            <Field label="Personas por línea" value={persLinea} onChange={setPersLinea} type="number" placeholder="3" min="1" step="1"/>
+            <Field dec label="Uds por turno-línea" value={udsTurno} onChange={setUdsTurno} type="number" placeholder="150" min="0" step="1"/>
+            <Field dec label="Personas por línea" value={persLinea} onChange={setPersLinea} type="number" placeholder="3" min="1" step="1"/>
           </div>
-          {parseFloat(udsTurno)>0 && (
+          {toNum(udsTurno)>0 && (
             <div style={{background:C.blueBg,borderRadius:10,padding:"10px 12px",fontSize:13,color:C.text,lineHeight:1.6}}>
-              Consume <b>{((parseInt(persLinea)||3)/3).toFixed(2).replace(/\.00$/,"")}</b> hueco{((parseInt(persLinea)||3)/3)!==1?"s":""} de línea · MO objetivo <b>{(((parseInt(persLinea)||3)*8*TARIFA_MO)/parseFloat(udsTurno)).toFixed(2)} €/ud</b>
+              Consume <b>{((parseInt(persLinea)||3)/3).toFixed(2).replace(/\.00$/,"")}</b> hueco{((parseInt(persLinea)||3)/3)!==1?"s":""} de línea · MO objetivo <b>{(((parseInt(persLinea)||3)*8*TARIFA_MO)/toNum(udsTurno)).toFixed(2)} €/ud</b>
               <div style={{fontSize:11,color:C.mutedD,marginTop:3}}>{parseInt(persLinea)||3} personas × 8 h × {TARIFA_MO} €/h ÷ {udsTurno} uds</div>
             </div>
           )}
@@ -2572,9 +2580,14 @@ function ProductoForm({ onBack, ep, procesos, mps, centros }) {
           <div style={{fontFamily:F.h,fontWeight:700,fontSize:17,color:C.text,marginBottom:4}}>PROCESOS</div>
           <div style={{fontSize:13,color:C.muted,marginBottom:12}}>Del catálogo global, con tiempo objetivo por {unidad||"ud"}. ★ = define la cantidad producida</div>
           <div style={{fontSize:12,color:C.blue,fontWeight:700,marginBottom:8}}>Tarifa del centro: {tarifaMO.toFixed(2)} €/h — el coste de mano de obra se calcula solo</div>
+          {Math.abs(tarifaMO - TARIFA_MO) > 0.01 && (
+            <div style={{background:C.amberBg,border:`1.5px solid ${C.amber}`,borderRadius:10,padding:"10px 12px",marginBottom:10,fontSize:12.5,color:C.amber,fontWeight:700,lineHeight:1.55}}>
+              ⚠️ Este centro tiene {tarifaMO.toFixed(2)} €/h, pero el coste real de nómina es {TARIFA_MO} €/h. El coste de mano de obra te está saliendo {tarifaMO<TARIFA_MO?"más barato":"más caro"} de lo que es. Corrígelo en Costes Fijos.
+            </div>
+          )}
           {pa.map(x=>{
             const pr = procesos.find(z=>z.id===x.proceso_id);
-            const cst = costeProcLinea(x.min_obj||0);
+            const cst = costeProcLinea(toNum(x.min_obj));
             return (
               <div key={x.proceso_id} style={{padding:"9px 0",borderBottom:`1px solid ${C.border}`}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
@@ -2593,7 +2606,7 @@ function ProductoForm({ onBack, ep, procesos, mps, centros }) {
                 </div>
                 <div style={{display:"flex",alignItems:"center",gap:10,marginTop:6}}>
                   <NumIn value={x.min_obj} step="0.01" suf={`min/${unidad||"ud"}`}
-                    onChange={v=>setPa(prev=>prev.map(z=>z.proceso_id===x.proceso_id?{...z,min_obj:parseFloat(v)||0}:z))}/>
+                    onChange={v=>setPa(prev=>prev.map(z=>z.proceso_id===x.proceso_id?{...z,min_obj:v}:z))}/>
                   <span style={{fontSize:12.5,color:cst>0?C.green:C.red,fontWeight:800}}>
                     {cst>0 ? `→ ${cst.toFixed(3)} €/${unidad||"ud"} de mano de obra` : "⚠️ falta el tiempo"}
                   </span>
@@ -2604,7 +2617,7 @@ function ProductoForm({ onBack, ep, procesos, mps, centros }) {
           <div style={{display:"grid",gridTemplateColumns:"2fr 1fr auto",gap:8,marginTop:12,alignItems:"end"}}>
             <Sel value={selProc} onChange={setSelProc} placeholder="Proceso…"
               options={procesos.filter(p=>!pa.find(x=>x.proceso_id===p.id)).map(p=>({value:p.id,label:p.nombre}))}/>
-            <Field label="Tiempo (min/ud)" value={minObj} onChange={setMinObj} type="number" placeholder="min/ud" min="0.01" step="0.01"/>
+            <Field dec label="Tiempo (min/ud)" value={minObj} onChange={setMinObj} type="number" placeholder="min/ud" min="0.01" step="0.01"/>
             <button onClick={addProc} style={{background:C.accent,border:"none",color:"#fff",borderRadius:11,padding:"13px 18px",fontFamily:F.h,fontWeight:700,fontSize:17,cursor:"pointer",marginBottom:14}}>＋</button>
           </div>
           {pa.length>0 && (
@@ -2621,9 +2634,9 @@ function ProductoForm({ onBack, ep, procesos, mps, centros }) {
           <div style={{fontSize:13,color:C.muted,marginBottom:12}}>Teórico = {mFinales||"?"} m finales × nº capas ÷ rendimiento × precio</div>
           {ma.map(x=>{
             const m = mps.find(z=>z.id===x.mp_id);
-            const cst = costeMatLinea(x.capas, x.precio_ud||0, x.rendimiento||100);
-            const upd = (campo,val)=>setMa(prev=>prev.map(z=>z.mp_id===x.mp_id?{...z,[campo]:parseFloat(val)||0}:z));
-            const falta = !(x.precio_ud>0) || !(x.rendimiento>0);
+            const cst = costeMatLinea(toNum(x.capas), toNum(x.precio_ud), toNum(x.rendimiento)||100);
+            const upd = (campo,val)=>setMa(prev=>prev.map(z=>z.mp_id===x.mp_id?{...z,[campo]:val}:z));
+            const falta = !(toNum(x.precio_ud)>0) || !(toNum(x.rendimiento)>0);
             return (
               <div key={x.mp_id} style={{padding:"11px 0",borderBottom:`1px solid ${C.border}`}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
@@ -2646,20 +2659,20 @@ function ProductoForm({ onBack, ep, procesos, mps, centros }) {
                   </div>
                 </div>
                 <div style={{fontSize:12.5,color:falta?C.red:C.mutedD,background:falta?C.redBg:C.card2,borderRadius:9,padding:"7px 10px"}}>
-                  {((parseFloat(mFinales)||0)*(x.capas||0)).toFixed(1)} m/ud
+                  {(toNum(mFinales)*toNum(x.capas)).toFixed(1)} m/ud
                   {falta
-                    ? <b style={{marginLeft:8}}>⚠️ falta {!(x.precio_ud>0)?"precio":""}{(!(x.precio_ud>0)&&!(x.rendimiento>0))?" y ":""}{!(x.rendimiento>0)?"rendimiento":""}</b>
+                    ? <b style={{marginLeft:8}}>⚠️ falta {!(toNum(x.precio_ud)>0)?"precio":""}{(!(toNum(x.precio_ud)>0)&&!(toNum(x.rendimiento)>0))?" y ":""}{!(toNum(x.rendimiento)>0)?"rendimiento":""}</b>
                     : <span style={{color:C.green,fontWeight:800,marginLeft:8}}>→ {cst.toFixed(3)} €/{unidad||"ud"}</span>}
                 </div>
               </div>
             );
           })}
-          {ma.some(x=>!(x.precio_ud>0)||!(x.rendimiento>0)) && (
+          {ma.some(x=>!(toNum(x.precio_ud)>0)||!(toNum(x.rendimiento)>0)) && (
             <button onClick={()=>setMa(prev=>prev.map(x=>{
               const g = mps.find(z=>z.id===x.mp_id);
               return { ...x,
-                precio_ud: x.precio_ud>0 ? x.precio_ud : (parseFloat(g?.precio_ud)||0),
-                rendimiento: x.rendimiento>0 ? x.rendimiento : (parseFloat(g?.rendimiento_objetivo)||85) };
+                precio_ud: toNum(x.precio_ud)>0 ? x.precio_ud : (parseFloat(g?.precio_ud)||0),
+                rendimiento: toNum(x.rendimiento)>0 ? x.rendimiento : (parseFloat(g?.rendimiento_objetivo)||85) };
             }))}
               style={{width:"100%",marginTop:10,background:C.blueBg,border:`1.5px solid ${C.blue}55`,color:C.blue,borderRadius:11,padding:"12px",fontFamily:F.h,fontWeight:800,fontSize:14,cursor:"pointer"}}>
               ↧ Rellenar lo que falta con los datos de la materia
@@ -2668,13 +2681,13 @@ function ProductoForm({ onBack, ep, procesos, mps, centros }) {
           <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:8,marginTop:12}}>
             <Sel value={selMp} onChange={onSelMp} placeholder="Materia prima…"
               options={mps.filter(m=>!ma.find(x=>x.mp_id===m.id)).map(m=>({value:m.id,label:m.nombre}))}/>
-            <Field label="Capas" value={capas} onChange={setCapas} type="number" placeholder="1-4" min="1" step="1"/>
+            <Field dec label="Capas" value={capas} onChange={setCapas} type="number" placeholder="1-4" min="1" step="1"/>
           </div>
           {selMp && (
             <>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-                <Field label="Precio (€/m)" value={precioMp} onChange={setPrecioMp} type="number" placeholder="0.09" min="0" step="0.001"/>
-                <Field label="Rendimiento (%)" value={rendMp} onChange={setRendMp} type="number" placeholder="85" min="1" step="1"/>
+                <Field dec label="Precio (€/m)" value={precioMp} onChange={setPrecioMp} type="number" placeholder="0.09" min="0" step="0.001"/>
+                <Field dec label="Rendimiento (%)" value={rendMp} onChange={setRendMp} type="number" placeholder="85" min="1" step="1"/>
               </div>
               <button onClick={addMp} style={{width:"100%",background:C.accent,border:"none",color:"#fff",borderRadius:12,padding:"14px",fontFamily:F.h,fontWeight:800,fontSize:15,cursor:"pointer"}}>
                 ＋ Añadir al escandallo
@@ -2693,7 +2706,7 @@ function ProductoForm({ onBack, ep, procesos, mps, centros }) {
         {/* RESUMEN DE COSTE OBJETIVO */}
         <Card style={{marginBottom:14,background:C.blueBg,border:`1.5px solid ${C.blue}`}}>
           <div style={{fontFamily:F.h,fontWeight:800,fontSize:16,color:C.blue,marginBottom:10}}>💶 COSTE OBJETIVO DE PRODUCTO FINAL</div>
-          {(ma.some(x=>!(x.precio_ud>0)||!(x.rendimiento>0)) || pa.some(x=>!(x.min_obj>0))) && (
+          {(ma.some(x=>!(toNum(x.precio_ud)>0)||!(toNum(x.rendimiento)>0)) || pa.some(x=>!(toNum(x.min_obj)>0))) && (
             <div style={{background:C.redBg,border:`1.5px solid ${C.red}`,borderRadius:10,padding:"10px 12px",marginBottom:10,fontSize:12.5,color:C.red,fontWeight:700,lineHeight:1.5}}>
               ⚠️ El coste está incompleto: hay líneas sin precio, sin rendimiento o sin tiempo. Rellénalas arriba.
             </div>
@@ -2709,7 +2722,7 @@ function ProductoForm({ onBack, ep, procesos, mps, centros }) {
             <span style={{fontFamily:F.h,fontWeight:800,fontSize:18,color:C.blue}}>{costeCalculado.toFixed(2)} €/{unidad||"ud"}</span>
           </div>
           <div style={{display:"grid",gridTemplateColumns:"1fr auto",gap:8,alignItems:"end",marginTop:10}}>
-            <Field label="Coste objetivo a guardar (€/ud)" value={coste} onChange={setCoste} type="number" placeholder="3.50" min="0" step="0.01"/>
+            <Field dec label="Coste objetivo a guardar (€/ud)" value={coste} onChange={setCoste} type="number" placeholder="3.50" min="0" step="0.01"/>
             {costeCalculado>0 && <button onClick={()=>setCoste(costeCalculado.toFixed(2))}
               style={{background:"#fff",border:`1.5px solid ${C.blue}`,color:C.blue,borderRadius:11,padding:"12px 14px",fontFamily:F.h,fontWeight:700,fontSize:13,cursor:"pointer",marginBottom:14,whiteSpace:"nowrap"}}>
               ↧ Usar calculado
