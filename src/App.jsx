@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v2.11.1";
+const APP_VERSION = "v2.12.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -2863,15 +2863,19 @@ const RecursosCard = ({ r, mps, dias, titulo="Recursos necesarios" }) => (
   <Card style={{marginBottom:12}}>
     <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text,marginBottom:10}}>🧮 {titulo}</div>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
-      {[[num(r.uds),"Unidades"],
-        [r.slots.toFixed(1),"Turnos-línea"],
-        [Math.ceil(r.personaTurnos/(dias||1)/1)+" p","Personas/día medio"],
-        [eur(r.coste),"Coste objetivo"]].map(([v,l],i)=>(
+      {[[num(r.uds),"Unidades a fabricar"],
+        [eur(r.coste),"Coste objetivo"],
+        [Math.ceil(r.personaTurnos/(dias||1))+" personas","Cada día, en total"],
+        [(r.slots/(dias||1)).toFixed(1)+" de "+SLOTS_DIA,"Líneas ocupadas al día"]].map(([v,l],i)=>(
         <div key={i} style={{background:C.card2,borderRadius:12,padding:"11px 8px",textAlign:"center"}}>
           <div style={{fontFamily:F.h,fontWeight:900,fontSize:20,color:C.text}}>{v}</div>
           <div style={{fontSize:10.5,color:C.mutedD,marginTop:2}}>{l}</div>
         </div>
       ))}
+    </div>
+    <div style={{background:C.blueBg,borderRadius:10,padding:"10px 12px",marginBottom:10,fontSize:12.5,color:C.text,lineHeight:1.6}}>
+      Repartido en <b>{dias} día{dias!==1?"s":""}</b>: necesitas <b>{Math.ceil(r.personaTurnos/(dias||1))} personas cada día</b> y tener funcionando <b>{(r.slots/(dias||1)).toFixed(1)}</b> de las {SLOTS_DIA} líneas-turno disponibles.
+      <div style={{fontSize:11.5,color:C.mutedD,marginTop:3}}>Fábrica completa = {LINEAS_FISICAS} líneas × {TURNOS_ABIERTOS} turnos × 3 personas = {LINEAS_FISICAS*TURNOS_ABIERTOS*3} personas al día.</div>
     </div>
     <div style={{fontSize:12.5,color:C.mutedD,lineHeight:1.7,borderTop:`1px solid ${C.border}`,paddingTop:9}}>
       Materia prima <b style={{color:C.text}}>{eur(r.costeMP)}</b> · Mano de obra <b style={{color:C.text}}>{eur(r.costeMO)}</b>
@@ -2989,21 +2993,21 @@ function PlanMesTab({ periodo, setPeriodo, plan, guardar, productos, mps, semana
         <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text,marginBottom:10}}>⚖️ Capacidad del mes</div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
           <div style={{background:C.card2,borderRadius:12,padding:"11px 8px",textAlign:"center"}}>
-            <div style={{fontFamily:F.h,fontWeight:900,fontSize:22,color:C.text}}>{r.slots.toFixed(0)}</div>
-            <div style={{fontSize:10.5,color:C.mutedD}}>Necesito</div>
+            <div style={{fontFamily:F.h,fontWeight:900,fontSize:22,color:col}}>{Math.ceil(r.personaTurnos/(dias||1))}</div>
+            <div style={{fontSize:10.5,color:C.mutedD}}>Personas que necesito al día</div>
           </div>
           <div style={{background:C.card2,borderRadius:12,padding:"11px 8px",textAlign:"center"}}>
-            <div style={{fontFamily:F.h,fontWeight:900,fontSize:22,color:C.text}}>{capacidad}</div>
-            <div style={{fontSize:10.5,color:C.mutedD}}>Tengo ({dias} días × {SLOTS_DIA})</div>
+            <div style={{fontFamily:F.h,fontWeight:900,fontSize:22,color:C.text}}>{LINEAS_FISICAS*TURNOS_ABIERTOS*3}</div>
+            <div style={{fontSize:10.5,color:C.mutedD}}>Personas disponibles</div>
           </div>
         </div>
         <div style={{height:10,background:C.card2,borderRadius:5,overflow:"hidden",marginBottom:10}}>
           <div style={{width:Math.min(100,ocupacion*100)+"%",height:"100%",background:col,borderRadius:5}}/>
         </div>
         <div style={{background:bg,border:`1.5px solid ${col}`,borderRadius:10,padding:"11px 13px",fontSize:13.5,color:col,fontFamily:F.h,fontWeight:700,lineHeight:1.5}}>
-          {estado==="ok" && `✔ Cuadrado — ${Math.round(ocupacion*100)}% de ocupación`}
-          {estado==="falta" && `⛔ Falta capacidad — te sobran ${(r.slots-capacidad).toFixed(1)} turnos-línea de trabajo`}
-          {estado==="sobra" && `⚠️ Sobra capacidad — quedan ${(capacidad-r.slots).toFixed(1)} turnos-línea libres. Mete más producción.`}
+          {estado==="ok" && `✔ Cuadrado — la fábrica va al ${Math.round(ocupacion*100)}%`}
+          {estado==="falta" && `⛔ No cabe — harían falta ${Math.ceil(r.personaTurnos/(dias||1)) - LINEAS_FISICAS*TURNOS_ABIERTOS*3} personas más al día, o ${Math.ceil((r.slots-capacidad)/SLOTS_DIA)} día(s) más de fábrica`}
+          {estado==="sobra" && `⚠️ Sobra fábrica — quedan ${((capacidad-r.slots)/SLOTS_DIA).toFixed(1)} días libres. Mete más producción.`}
         </div>
       </Card>
 
@@ -3062,29 +3066,31 @@ function PlanSemanaTab({ semana, setSemana, semanas, plan, guardar, productos, m
         <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text,marginBottom:10}}>⚖️ Cuadre</div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
           <div style={{background:C.card2,borderRadius:12,padding:"11px 8px",textAlign:"center"}}>
-            <div style={{fontFamily:F.h,fontWeight:900,fontSize:24,color:C.text}}>{r.slots.toFixed(1)}</div>
-            <div style={{fontSize:10.5,color:C.mutedD}}>Necesito</div>
+            <div style={{fontFamily:F.h,fontWeight:900,fontSize:24,color:col}}>{Math.ceil(r.personaTurnos/5)}</div>
+            <div style={{fontSize:10.5,color:C.mutedD}}>Personas al día que necesito</div>
           </div>
           <div style={{background:C.card2,borderRadius:12,padding:"11px 8px",textAlign:"center"}}>
-            <div style={{fontFamily:F.h,fontWeight:900,fontSize:24,color:C.text}}>{dispo}</div>
-            <div style={{fontSize:10.5,color:C.mutedD}}>Tengo</div>
+            <div style={{fontFamily:F.h,fontWeight:900,fontSize:24,color:C.text}}>{Math.round(dispo/5*3)}</div>
+            <div style={{fontSize:10.5,color:C.mutedD}}>Personas al día que tengo</div>
           </div>
         </div>
         {!bloqueado && (
           <div style={{marginBottom:12}}>
-            <div style={{fontFamily:F.h,fontWeight:700,fontSize:12,color:C.mutedD,marginBottom:6}}>TURNOS-LÍNEA DISPONIBLES ESTA SEMANA</div>
+            <div style={{fontFamily:F.h,fontWeight:700,fontSize:12,color:C.mutedD,marginBottom:6}}>LÍNEAS-TURNO DISPONIBLES ESTA SEMANA</div>
             <div style={{display:"flex",alignItems:"center",gap:10}}>
               <button onClick={()=>guardar({slots_disponibles:Math.max(0,dispo-1)})} style={{width:52,height:52,borderRadius:12,border:`1.5px solid ${C.border}`,background:"#fff",fontSize:24,color:C.text,cursor:"pointer"}}>−</button>
               <div style={{flex:1,height:52,display:"flex",alignItems:"center",justifyContent:"center",borderRadius:12,background:C.card2,fontFamily:F.h,fontWeight:900,fontSize:26,color:C.text}}>{dispo}</div>
               <button onClick={()=>guardar({slots_disponibles:dispo+1})} style={{width:52,height:52,borderRadius:12,border:`1.5px solid ${C.border}`,background:"#fff",fontSize:24,color:C.text,cursor:"pointer"}}>+</button>
             </div>
-            <div style={{fontSize:11.5,color:C.mutedD,marginTop:6,lineHeight:1.5}}>Semana completa = {SLOTS_DIA*5} ({LINEAS_FISICAS} líneas × {TURNOS_ABIERTOS} turnos × 5 días). Baja el número por bajas, vacaciones o festivos.</div>
+            <div style={{fontSize:11.5,color:C.mutedD,marginTop:6,lineHeight:1.5}}>
+              Ahora mismo: <b style={{color:C.text}}>{Math.round(dispo/5*3)} personas al día</b>. Semana completa = {SLOTS_DIA*5} ({LINEAS_FISICAS} líneas × {TURNOS_ABIERTOS} turnos × 5 días) = {LINEAS_FISICAS*TURNOS_ABIERTOS*3} personas. Baja el número por bajas, vacaciones o festivos: cada punto son 3 personas menos en un turno.
+            </div>
           </div>
         )}
         <div style={{background:bg,border:`1.5px solid ${col}`,borderRadius:10,padding:"11px 13px",fontSize:13.5,color:col,fontFamily:F.h,fontWeight:700,lineHeight:1.5}}>
           {estado==="ok" && "✔ Cuadra. Puedes cerrar el plan."}
-          {estado==="falta" && `⛔ Faltan ${dif.toFixed(1)} turnos-línea. Quita producción o suma gente.`}
-          {estado==="sobra" && `⚠️ Sobran ${(-dif).toFixed(1)} turnos-línea. Mete más producción.`}
+          {estado==="falta" && `⛔ Faltan ${Math.ceil(dif*3/5)} personas al día. Quita producción o suma gente.`}
+          {estado==="sobra" && `⚠️ Sobran ${Math.floor(-dif*3/5)} personas al día sin trabajo asignado. Mete más producción.`}
         </div>
       </Card>
 
