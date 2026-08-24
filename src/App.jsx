@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v2.10.5";
+const APP_VERSION = "v2.11.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -54,6 +54,91 @@ const P = {
   fh:"'Barlow Condensed','Arial Narrow',sans-serif",
 };
 const uid = () => Math.random().toString(36).slice(2, 10);
+
+// ── PLANIFICACIÓN: constantes y utilidades de calendario ───────────────────────
+const TARIFA_MO = 15.25;            // €/h coste real (27.444 €/año ÷ 1.800 h)
+const LINEAS_FISICAS = 2;
+const TURNOS_ABIERTOS = 2;
+const SLOTS_DIA = LINEAS_FISICAS * TURNOS_ABIERTOS;   // huecos línea-turno por día
+const pad2 = n => String(n).padStart(2, "0");
+const eur = n => (Math.round(n)).toLocaleString("es-ES") + " €";
+const num = n => (Math.round(n)).toLocaleString("es-ES");
+
+const isoWeek = (fecha) => {
+  if (!fecha) return "";
+  const t = new Date(fecha + "T12:00:00");
+  t.setDate(t.getDate() + 4 - (t.getDay() || 7));
+  const y0 = new Date(t.getFullYear(), 0, 1);
+  const w = Math.ceil((((t - y0) / 86400000) + 1) / 7);
+  return `${t.getFullYear()}-W${pad2(w)}`;
+};
+const lunesDeSemana = (key) => {
+  const [y, w] = key.split("-W").map(Number);
+  const jan4 = new Date(y, 0, 4);
+  const d = new Date(jan4);
+  d.setDate(jan4.getDate() - ((jan4.getDay() || 7) - 1) + (w - 1) * 7);
+  return d;
+};
+const ymd = (d) => `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
+const diasDeSemana = (key) => {
+  const l = lunesDeSemana(key);
+  return [0,1,2,3,4].map(i => { const d = new Date(l); d.setDate(l.getDate()+i); return ymd(d); });
+};
+const diasLaborablesMes = (periodo) => {
+  const [y, m] = periodo.split("-").map(Number);
+  const out = [];
+  const d = new Date(y, m-1, 1);
+  while (d.getMonth() === m-1) {
+    const wd = d.getDay();
+    if (wd >= 1 && wd <= 5) out.push(ymd(d));
+    d.setDate(d.getDate()+1);
+  }
+  return out;
+};
+const semanasDeMes = (periodo) => [...new Set(diasLaborablesMes(periodo).map(isoWeek))];
+const nombreMes = (periodo) => {
+  const [y, m] = periodo.split("-").map(Number);
+  return new Date(y, m-1, 1).toLocaleDateString("es-ES", { month:"long", year:"numeric" });
+};
+const rotuloSemana = (key) => {
+  const ds = diasDeSemana(key);
+  const f = (s) => new Date(s+"T12:00:00").toLocaleDateString("es-ES",{day:"numeric",month:"short"});
+  return `${f(ds[0])} – ${f(ds[4])}`;
+};
+const periodoActual = () => { const d = new Date(); return `${d.getFullYear()}-${pad2(d.getMonth()+1)}`; };
+const sumaPeriodo = (periodo, delta) => {
+  const [y, m] = periodo.split("-").map(Number);
+  const d = new Date(y, m-1+delta, 1);
+  return `${d.getFullYear()}-${pad2(d.getMonth()+1)}`;
+};
+
+// Recursos necesarios para una lista de {producto_id, cantidad}
+const calcRecursos = (items, productos) => {
+  let uds=0, slots=0, personaTurnos=0, costeMP=0, costeMO=0;
+  const materias = {};
+  const sinRitmo = [];
+  (items||[]).forEach(it => {
+    const p = productos.find(x => x.id === it.producto_id);
+    if (!p) return;
+    const q = parseFloat(it.cantidad)||0;
+    uds += q;
+    const ritmo = parseFloat(p.uds_turno_linea)||0;
+    const pers  = parseInt(p.personas_linea)||3;
+    if (ritmo <= 0) { if (!sinRitmo.includes(p.nombre)) sinRitmo.push(p.nombre); }
+    const turnos = ritmo > 0 ? q/ritmo : 0;
+    slots += turnos * (pers/3);
+    personaTurnos += turnos * pers;
+    costeMP += (parseFloat(p.coste_mp_objetivo)||0) * q;
+    costeMO += turnos * pers * 8 * TARIFA_MO;
+    (p.materias_asignadas||[]).forEach(m => {
+      const rend = (parseFloat(m.rendimiento)||100)/100;
+      const metros = (parseFloat(p.metros_finales)||0) * (parseFloat(m.capas)||0) / (rend||1) * q;
+      materias[m.mp_id] = (materias[m.mp_id]||0) + metros;
+    });
+  });
+  return { uds, slots, personaTurnos, costeMP, costeMO, coste: costeMP+costeMO, materias, sinRitmo };
+};
+
 
 const ROLES = {
   operario:    { label:"Operario",             icon:"👷" },
@@ -1634,6 +1719,22 @@ function SyncCatalogoScreen({ onBack, productos }) {
     setLote({ ts: ultimoTs, items });
   }, [productos]);
 
+  // Señal universal (vale para CUALQUIER versión de la app): un producto real
+  // nunca se puede guardar sin centro — el formulario lo impide. Todo lo que
+  // esté "sin centro" viene de una creación masiva del catálogo, sea de hoy o de antes.
+  const sinCentro = productos.filter(p => !p.centro);
+  const [deshaciendoSC, setDeshaciendoSC] = useState(false);
+  const deshacerSinCentro = async () => {
+    if (!sinCentro.length) return;
+    const conf = window.prompt(`Vas a BORRAR ${sinCentro.length} productos SIN CENTRO asignado (la señal de que se crearon por error desde el catálogo).\n\nEscribe el número ${sinCentro.length} para confirmar:`);
+    if (conf !== String(sinCentro.length)) return;
+    setDeshaciendoSC(true);
+    let n=0;
+    for (const p of sinCentro) { await del("productos", p.id); n++; setLog(`Borrando… ${n}/${sinCentro.length}`); }
+    setLog(`✅ Limpieza completa: ${n} productos sin centro eliminados.`);
+    setDeshaciendoSC(false);
+  };
+
   const deshacerLote = async () => {
     if (!lote) return;
     if (!window.confirm(`Esto BORRARÁ los ${lote.items.length} productos creados automáticamente el ${new Date(lote.ts).toLocaleString()}.\n\nSolo se tocan productos marcados "desde_catalogo" de ese lote exacto — nada más.\n\n¿Confirmas?`)) return;
@@ -1707,6 +1808,21 @@ function SyncCatalogoScreen({ onBack, productos }) {
     <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
       <Header title="SINCRONIZAR CATÁLOGO" onBack={onBack} sub="Lee el catálogo del CRM (solo lectura) y enriquece tus productos por código"/>
       <div style={{padding:14}}>
+        {sinCentro.length>0 && (
+          <Card style={{marginBottom:14,border:`1.5px solid ${C.red||"#DC2626"}`}}>
+            <div style={{fontSize:14,fontWeight:700,color:C.red||"#DC2626",marginBottom:4}}>⚠️ {sinCentro.length} productos SIN CENTRO asignado</div>
+            <div style={{fontSize:13,color:C.muted,marginBottom:10}}>
+              Ningún producto real puede guardarse sin centro — esto detecta creaciones masivas accidentales de CUALQUIER momento, no solo la de hoy.
+            </div>
+            <div style={{maxHeight:140,overflowY:"auto",background:C.bg,borderRadius:8,padding:8,marginBottom:10,fontSize:12,color:C.muted}}>
+              {sinCentro.slice(0,15).map(p=><div key={p.id}>{p.nombre}</div>)}
+              {sinCentro.length>15 && <div style={{fontWeight:700,marginTop:4}}>… y {sinCentro.length-15} más</div>}
+            </div>
+            <Btn onClick={deshacerSinCentro} disabled={deshaciendoSC} style={{background:C.red||"#DC2626"}}>
+              {deshaciendoSC?"⏳ Borrando…":`🗑️ Borrar los ${sinCentro.length} sin centro`}
+            </Btn>
+          </Card>
+        )}
         {lote && lote.items.length>0 && (
           <Card style={{marginBottom:14,border:`1.5px solid ${C.red||"#DC2626"}`}}>
             <div style={{fontSize:14,fontWeight:700,color:C.red||"#DC2626",marginBottom:4}}>⚠️ Último lote creado automáticamente</div>
@@ -2288,6 +2404,9 @@ function ProductosScreen({ onBack, procesos, mps, centros }) {
                   <div style={{fontSize:13,color:C.muted,marginTop:2}}>
                     🏭 {centros.find(c=>c.id===p.centro)?.nombre||"sin centro"}
                     {" · "}Obj: <span style={{color:C.blue,fontWeight:700}}>{p.objetivo_diario||0}/día</span>
+                    {p.uds_turno_linea>0
+                      ? <>{" · "}<span style={{color:C.green,fontWeight:700}}>⏱️ {p.uds_turno_linea}/turno · {p.personas_linea||3}p</span></>
+                      : <>{" · "}<span style={{color:C.red,fontWeight:700}}>⏱️ sin ritmo</span></>}
                     {" · "}Coste obj: <span style={{color:C.text,fontWeight:700}}>{p.coste_objetivo}€/{p.unidad}</span>
                     {" · "}{p.procesos_asignados?.length||0} procesos · {p.materias_asignadas?.length||0} materias
                   </div>
@@ -2336,6 +2455,8 @@ function ProductoForm({ onBack, ep, procesos, mps, centros }) {
   const [precioVenta, setPrecioVenta] = useState(ep?.precio_venta?.toString()||"");
   const [mFinales, setMFinales] = useState(ep?.metros_finales?.toString()||"");
   const [objDiario, setObjDiario] = useState(ep?.objetivo_diario?.toString()||"");
+  const [udsTurno, setUdsTurno] = useState(ep?.uds_turno_linea?.toString()||"");
+  const [persLinea, setPersLinea] = useState(ep?.personas_linea?.toString()||"3");
   const [pa, setPa]         = useState(ep?.procesos_asignados||[]); // [{proceso_id,min_obj,define_cantidad}]
   const [ma, setMa]         = useState(ep?.materias_asignadas||[]); // [{mp_id,capas,precio_ud,rendimiento}]
   const [selProc, setSelProc] = useState("");
@@ -2391,6 +2512,8 @@ function ProductoForm({ onBack, ep, procesos, mps, centros }) {
       precio_venta: pv||null,
       metros_finales: parseFloat(mFinales)||0,
       objetivo_diario: parseFloat(objDiario)||0,
+      uds_turno_linea: parseFloat(udsTurno)||0,
+      personas_linea: parseInt(persLinea)||3,
       procesos_asignados: pa, materias_asignadas: ma,
     });
     onBack();
@@ -2411,6 +2534,22 @@ function ProductoForm({ onBack, ep, procesos, mps, centros }) {
             <Field label="Objetivo diario (uds)" value={objDiario} onChange={setObjDiario} type="number" placeholder="100" min="0" step="1"/>
             <Field label="Precio medio de venta (€)" value={precioVenta} onChange={setPrecioVenta} type="number" placeholder="9.00" min="0" step="0.01"/>
           </div>
+        </Card>
+
+        {/* RITMO — base de la planificación */}
+        <Card style={{marginBottom:14}} color={C.blue+"55"}>
+          <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text,marginBottom:3}}>⏱️ Ritmo de fabricación</div>
+          <div style={{fontSize:12,color:C.mutedD,marginBottom:12,lineHeight:1.5}}>Cuántas unidades salen de <b>una línea en un turno</b>. Es la base de toda la planificación: sin este dato el plan no puede calcular recursos.</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+            <Field label="Uds por turno-línea" value={udsTurno} onChange={setUdsTurno} type="number" placeholder="150" min="0" step="1"/>
+            <Field label="Personas por línea" value={persLinea} onChange={setPersLinea} type="number" placeholder="3" min="1" step="1"/>
+          </div>
+          {parseFloat(udsTurno)>0 && (
+            <div style={{background:C.blueBg,borderRadius:10,padding:"10px 12px",fontSize:13,color:C.text,lineHeight:1.6}}>
+              Consume <b>{((parseInt(persLinea)||3)/3).toFixed(2).replace(/\.00$/,"")}</b> hueco{((parseInt(persLinea)||3)/3)!==1?"s":""} de línea · MO objetivo <b>{(((parseInt(persLinea)||3)*8*TARIFA_MO)/parseFloat(udsTurno)).toFixed(2)} €/ud</b>
+              <div style={{fontSize:11,color:C.mutedD,marginTop:3}}>{parseInt(persLinea)||3} personas × 8 h × {TARIFA_MO} €/h ÷ {udsTurno} uds</div>
+            </div>
+          )}
         </Card>
 
         {/* PROCESOS */}
@@ -2619,6 +2758,476 @@ function CostesScreen({ onBack, centros }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // HOME (menú por rol)
 // ═══════════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════
+// PLANIFICACIÓN — plan mensual → recursos → organizador → cuadre → cierre semanal
+// ═══════════════════════════════════════════════════════════════════════════════
+function PlanificacionScreen({ onBack, perfil, productos, mps, producciones }) {
+  const [tab, setTab] = useState("mes");
+  const [periodo, setPeriodo] = useState(periodoActual());
+  const semanas = semanasDeMes(periodo);
+  const semanaHoy = isoWeek(new Date().toISOString().slice(0,10));
+  const [semana, setSemana] = useState(semanas.includes(semanaHoy) ? semanaHoy : semanas[0]);
+  useEffect(()=>{ const ss = semanasDeMes(periodo); if(!ss.includes(semana)) setSemana(ss[0]); },[periodo]);
+
+  const [planesMes]  = useCol("planes_mes");
+  const [planesSem]  = useCol("planes_semana");
+  const planMes = planesMes.find(p => p.id === periodo) || { items: [] };
+  const planSem = planesSem.find(p => p.id === semana) || { items: [], slots_disponibles: SLOTS_DIA*5 };
+
+  const guardarMes = (data) => save("planes_mes", periodo, { periodo, ...data });
+  const guardarSem = (data) => save("planes_semana", semana, { semana, periodo, ...data });
+
+  const TABS = [["mes","📅 Mes"],["semana","🗓️ Semana"],["cierre","🔒 Cierre"]];
+
+  return (
+    <div style={{background:C.bg,minHeight:"100vh",paddingBottom:40}}>
+      <Header title="PLANIFICACIÓN" onBack={onBack} sub={nombreMes(periodo)}/>
+      <div style={{display:"flex",gap:6,padding:"10px 12px",background:C.navy,position:"sticky",top:0,zIndex:9}}>
+        {TABS.map(([k,l])=>(
+          <button key={k} onClick={()=>setTab(k)}
+            style={{flex:1,background:tab===k?"#fff":"rgba(255,255,255,0.12)",color:tab===k?C.navy:"#fff",
+              border:"none",borderRadius:10,padding:"11px 4px",fontFamily:F.h,fontWeight:800,fontSize:13,cursor:"pointer"}}>{l}</button>
+        ))}
+      </div>
+      <div style={{padding:12,maxWidth:900,margin:"0 auto"}}>
+        {tab==="mes" && <PlanMesTab periodo={periodo} setPeriodo={setPeriodo} plan={planMes} guardar={guardarMes}
+          productos={productos} mps={mps} semanas={semanas} planesSem={planesSem}/>}
+        {tab==="semana" && <PlanSemanaTab semana={semana} setSemana={setSemana} semanas={semanas} plan={planSem}
+          guardar={guardarSem} productos={productos} mps={mps} perfil={perfil}/>}
+        {tab==="cierre" && <CierreSemanaTab semana={semana} setSemana={setSemana} semanas={semanas} plan={planSem}
+          guardar={guardarSem} productos={productos} mps={mps} producciones={producciones} perfil={perfil}/>}
+      </div>
+    </div>
+  );
+}
+
+// ── Tarjeta reutilizable de recursos ───────────────────────────────────────────
+const RecursosCard = ({ r, mps, dias, titulo="Recursos necesarios" }) => (
+  <Card style={{marginBottom:12}}>
+    <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text,marginBottom:10}}>🧮 {titulo}</div>
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
+      {[[num(r.uds),"Unidades"],
+        [r.slots.toFixed(1),"Turnos-línea"],
+        [Math.ceil(r.personaTurnos/(dias||1)/1)+" p","Personas/día medio"],
+        [eur(r.coste),"Coste objetivo"]].map(([v,l],i)=>(
+        <div key={i} style={{background:C.card2,borderRadius:12,padding:"11px 8px",textAlign:"center"}}>
+          <div style={{fontFamily:F.h,fontWeight:900,fontSize:20,color:C.text}}>{v}</div>
+          <div style={{fontSize:10.5,color:C.mutedD,marginTop:2}}>{l}</div>
+        </div>
+      ))}
+    </div>
+    <div style={{fontSize:12.5,color:C.mutedD,lineHeight:1.7,borderTop:`1px solid ${C.border}`,paddingTop:9}}>
+      Materia prima <b style={{color:C.text}}>{eur(r.costeMP)}</b> · Mano de obra <b style={{color:C.text}}>{eur(r.costeMO)}</b>
+    </div>
+    {Object.keys(r.materias).length>0 && (
+      <div style={{marginTop:9,borderTop:`1px solid ${C.border}`,paddingTop:9}}>
+        <div style={{fontSize:11,color:C.mutedD,fontWeight:800,textTransform:"uppercase",letterSpacing:0.4,marginBottom:6}}>📦 Materias primas</div>
+        {Object.entries(r.materias).sort((a,b)=>b[1]-a[1]).map(([id,m])=>{
+          const mp = mps.find(x=>x.id===id);
+          const madejas = m/((mp?.metros_madeja)||90);
+          return (
+            <div key={id} style={{display:"flex",justifyContent:"space-between",fontSize:13,padding:"5px 0"}}>
+              <span style={{color:C.text}}>{mp?.nombre||"?"}</span>
+              <span style={{fontWeight:700,color:C.text}}>{num(m)} m <span style={{color:C.muted,fontWeight:400}}>· {num(madejas)} madejas</span></span>
+            </div>
+          );
+        })}
+      </div>
+    )}
+    {r.sinRitmo.length>0 && (
+      <div style={{marginTop:10,background:C.redBg,border:`1.5px solid ${C.red}`,borderRadius:10,padding:"10px 12px"}}>
+        <div style={{fontFamily:F.h,fontWeight:800,fontSize:13,color:C.red,marginBottom:3}}>⚠️ Sin ritmo definido</div>
+        <div style={{fontSize:12.5,color:C.red,lineHeight:1.6}}>{r.sinRitmo.join(" · ")}</div>
+        <div style={{fontSize:11.5,color:C.mutedD,marginTop:5}}>No cuentan para los recursos. Ponles "uds por turno-línea" en su ficha de producto.</div>
+      </div>
+    )}
+  </Card>
+);
+
+// ── Editor de líneas del plan ──────────────────────────────────────────────────
+const ItemsEditor = ({ items, setItems, productos, bloqueado }) => {
+  const [pid, setPid] = useState("");
+  const [qty, setQty] = useState("");
+  const add = () => {
+    if (!pid || !(parseFloat(qty)>0)) { window.alert("Elige producto y cantidad"); return; }
+    if (items.some(i=>i.producto_id===pid)) { window.alert("Ese producto ya está en el plan. Edita su cantidad."); return; }
+    setItems([...items, { id: uid(), producto_id: pid, cantidad: parseFloat(qty) }]);
+    setPid(""); setQty("");
+  };
+  return (
+    <Card style={{marginBottom:12}}>
+      <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text,marginBottom:10}}>📋 Qué fabricar</div>
+      {items.length===0 && <div style={{fontSize:13,color:C.muted,padding:"6px 0 12px"}}>Todavía no hay nada planificado.</div>}
+      {items.map(it=>{
+        const p = productos.find(x=>x.id===it.producto_id);
+        const ritmo = parseFloat(p?.uds_turno_linea)||0;
+        const pers = parseInt(p?.personas_linea)||3;
+        const turnos = ritmo>0 ? (it.cantidad/ritmo)*(pers/3) : 0;
+        return (
+          <div key={it.id} style={{display:"flex",alignItems:"center",gap:8,padding:"9px 0",borderBottom:`1px solid ${C.card2}`}}>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontFamily:F.h,fontWeight:700,fontSize:14.5,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p?.nombre||"(producto borrado)"}</div>
+              <div style={{fontSize:11.5,color:C.mutedD,marginTop:1}}>
+                {ritmo>0 ? `${turnos.toFixed(1)} turnos-línea · ${pers}p` : "⚠️ sin ritmo"}
+              </div>
+            </div>
+            <input type="number" value={it.cantidad} disabled={bloqueado}
+              onChange={e=>setItems(items.map(x=>x.id===it.id?{...x,cantidad:parseFloat(e.target.value)||0}:x))}
+              style={{width:82,padding:"9px 8px",borderRadius:10,border:`1.5px solid ${C.border}`,fontSize:15,fontFamily:F.h,fontWeight:700,textAlign:"right",background:"#fff",color:C.text}}/>
+            {!bloqueado && <IconBtn danger onClick={()=>setItems(items.filter(x=>x.id!==it.id))}>🗑️</IconBtn>}
+          </div>
+        );
+      })}
+      {!bloqueado && (
+        <div style={{marginTop:12,paddingTop:12,borderTop:`1px solid ${C.border}`}}>
+          <ProductoBuscador label="Añadir producto" value={pid} onChange={setPid} productos={productos}/>
+          <div style={{display:"flex",gap:8}}>
+            <input type="number" value={qty} onChange={e=>setQty(e.target.value)} placeholder="Unidades"
+              style={{flex:1,padding:"13px 14px",borderRadius:12,border:`1.5px solid ${C.border}`,fontSize:15,fontFamily:F.b,background:"#fff",color:C.text}}/>
+            <button onClick={add} style={{background:C.accent,color:"#fff",border:"none",borderRadius:12,padding:"13px 22px",fontFamily:F.h,fontWeight:800,fontSize:15,cursor:"pointer"}}>+ Añadir</button>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+};
+
+// ── TAB 1: PLAN MENSUAL ────────────────────────────────────────────────────────
+function PlanMesTab({ periodo, setPeriodo, plan, guardar, productos, mps, semanas, planesSem }) {
+  const items = plan.items || [];
+  const setItems = (v) => guardar({ items: v });
+  const dias = diasLaborablesMes(periodo).length;
+  const capacidad = dias * SLOTS_DIA;
+  const r = calcRecursos(items, productos);
+  const ocupacion = capacidad>0 ? r.slots/capacidad : 0;
+  const estado = ocupacion > 1.001 ? "falta" : ocupacion < 0.95 ? "sobra" : "ok";
+  const col = estado==="ok"?C.green:estado==="falta"?C.red:C.amber;
+  const bg  = estado==="ok"?C.greenBg:estado==="falta"?C.redBg:C.amberBg;
+
+  const repartir = async () => {
+    if (items.length===0) { window.alert("No hay nada que repartir"); return; }
+    const yaCerradas = semanas.filter(s => planesSem.find(p=>p.id===s)?.cerrado_plan);
+    const libres = semanas.filter(s => !yaCerradas.includes(s));
+    if (libres.length===0) { window.alert("Todas las semanas del mes están cerradas"); return; }
+    if (!window.confirm(`Repartir el plan entre ${libres.length} semana(s) a partes iguales.\n\nSe sobrescribe lo que haya en esas semanas. ¿Seguir?`)) return;
+    for (const s of libres) {
+      const its = items.map(it => ({ id: uid(), producto_id: it.producto_id, cantidad: Math.round((it.cantidad/libres.length)*10)/10 }));
+      await save("planes_semana", s, { semana: s, periodo, items: its, slots_disponibles: SLOTS_DIA*5, cerrado_plan: false, desde_plan_mes: true });
+    }
+    window.alert("Repartido. Revísalo y cuádralo en la pestaña Semana.");
+  };
+
+  return (
+    <>
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
+        <button onClick={()=>setPeriodo(sumaPeriodo(periodo,-1))} style={{background:"#fff",border:`1.5px solid ${C.border}`,borderRadius:12,padding:"12px 16px",fontSize:17,fontWeight:800,color:C.text,cursor:"pointer"}}>‹</button>
+        <div style={{flex:1,textAlign:"center",fontFamily:F.h,fontWeight:800,fontSize:17,color:C.text,textTransform:"capitalize"}}>{nombreMes(periodo)}</div>
+        <button onClick={()=>setPeriodo(sumaPeriodo(periodo,1))} style={{background:"#fff",border:`1.5px solid ${C.border}`,borderRadius:12,padding:"12px 16px",fontSize:17,fontWeight:800,color:C.text,cursor:"pointer"}}>›</button>
+      </div>
+
+      <ItemsEditor items={items} setItems={setItems} productos={productos}/>
+      <RecursosCard r={r} mps={mps} dias={dias} titulo="Recursos del mes"/>
+
+      <Card style={{marginBottom:12}} color={col+"66"}>
+        <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text,marginBottom:10}}>⚖️ Capacidad del mes</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
+          <div style={{background:C.card2,borderRadius:12,padding:"11px 8px",textAlign:"center"}}>
+            <div style={{fontFamily:F.h,fontWeight:900,fontSize:22,color:C.text}}>{r.slots.toFixed(0)}</div>
+            <div style={{fontSize:10.5,color:C.mutedD}}>Necesito</div>
+          </div>
+          <div style={{background:C.card2,borderRadius:12,padding:"11px 8px",textAlign:"center"}}>
+            <div style={{fontFamily:F.h,fontWeight:900,fontSize:22,color:C.text}}>{capacidad}</div>
+            <div style={{fontSize:10.5,color:C.mutedD}}>Tengo ({dias} días × {SLOTS_DIA})</div>
+          </div>
+        </div>
+        <div style={{height:10,background:C.card2,borderRadius:5,overflow:"hidden",marginBottom:10}}>
+          <div style={{width:Math.min(100,ocupacion*100)+"%",height:"100%",background:col,borderRadius:5}}/>
+        </div>
+        <div style={{background:bg,border:`1.5px solid ${col}`,borderRadius:10,padding:"11px 13px",fontSize:13.5,color:col,fontFamily:F.h,fontWeight:700,lineHeight:1.5}}>
+          {estado==="ok" && `✔ Cuadrado — ${Math.round(ocupacion*100)}% de ocupación`}
+          {estado==="falta" && `⛔ Falta capacidad — te sobran ${(r.slots-capacidad).toFixed(1)} turnos-línea de trabajo`}
+          {estado==="sobra" && `⚠️ Sobra capacidad — quedan ${(capacidad-r.slots).toFixed(1)} turnos-línea libres. Mete más producción.`}
+        </div>
+      </Card>
+
+      <Btn onClick={repartir} v="ghost">📤 Repartir en las {semanas.length} semanas del mes</Btn>
+    </>
+  );
+}
+
+// ── TAB 2: PLAN SEMANAL + CUADRE ───────────────────────────────────────────────
+function PlanSemanaTab({ semana, setSemana, semanas, plan, guardar, productos, mps, perfil }) {
+  const items = plan.items || [];
+  const bloqueado = !!plan.cerrado_plan;
+  const setItems = (v) => guardar({ items: v });
+  const dispo = plan.slots_disponibles ?? SLOTS_DIA*5;
+  const r = calcRecursos(items, productos);
+  const dif = r.slots - dispo;
+  const estado = dif > 0.2 ? "falta" : dif < -0.5 ? "sobra" : "ok";
+  const col = estado==="ok"?C.green:estado==="falta"?C.red:C.amber;
+  const bg  = estado==="ok"?C.greenBg:estado==="falta"?C.redBg:C.amberBg;
+
+  const cerrarPlan = async () => {
+    if (items.length===0) { window.alert("No hay nada planificado"); return; }
+    if (estado!=="ok") {
+      const msg = estado==="falta"
+        ? `El plan NO cuadra: necesitas ${r.slots.toFixed(1)} turnos-línea y tienes ${dispo}.`
+        : `El plan NO cuadra: te sobran ${(-dif).toFixed(1)} turnos-línea sin producción asignada.`;
+      const motivo = window.prompt(msg + "\n\nPuedes cerrarlo igualmente, pero el desfase saldrá en el informe al CEO.\nEscribe el motivo para forzar el cierre (o Cancelar):");
+      if (!motivo || !motivo.trim()) return;
+      await guardar({ cerrado_plan:true, forzado:true, motivo_forzado:motivo.trim(), slots_plan:r.slots, slots_dispo:dispo,
+        coste_objetivo:r.coste, uds_objetivo:r.uds, cerrado_por:perfil?.nombre||"", cerrado_at:new Date().toISOString() });
+      return;
+    }
+    await guardar({ cerrado_plan:true, forzado:false, motivo_forzado:"", slots_plan:r.slots, slots_dispo:dispo,
+      coste_objetivo:r.coste, uds_objetivo:r.uds, cerrado_por:perfil?.nombre||"", cerrado_at:new Date().toISOString() });
+  };
+
+  return (
+    <>
+      <SelectorSemana semana={semana} setSemana={setSemana} semanas={semanas}/>
+
+      {bloqueado && (
+        <div style={{background:plan.forzado?C.amberBg:C.greenBg,border:`1.5px solid ${plan.forzado?C.amber:C.green}`,borderRadius:12,padding:"12px 14px",marginBottom:12}}>
+          <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:plan.forzado?C.amber:C.green}}>
+            {plan.forzado?"⚠️ Plan cerrado forzando el cuadre":"🔒 Plan cerrado y cuadrado"}
+          </div>
+          {plan.forzado && <div style={{fontSize:12.5,color:C.mutedD,marginTop:4,lineHeight:1.5}}>Motivo: {plan.motivo_forzado}</div>}
+          <button onClick={()=>{ if(window.confirm("¿Reabrir el plan de esta semana?")) guardar({cerrado_plan:false}); }}
+            style={{background:"#fff",border:`1px solid ${C.border}`,color:C.mutedD,borderRadius:10,padding:"7px 14px",fontSize:12.5,fontWeight:700,cursor:"pointer",marginTop:8}}>↺ Reabrir</button>
+        </div>
+      )}
+
+      <ItemsEditor items={items} setItems={setItems} productos={productos} bloqueado={bloqueado}/>
+      <RecursosCard r={r} mps={mps} dias={5} titulo="Recursos de la semana"/>
+
+      <Card style={{marginBottom:12}} color={col+"66"}>
+        <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text,marginBottom:10}}>⚖️ Cuadre</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
+          <div style={{background:C.card2,borderRadius:12,padding:"11px 8px",textAlign:"center"}}>
+            <div style={{fontFamily:F.h,fontWeight:900,fontSize:24,color:C.text}}>{r.slots.toFixed(1)}</div>
+            <div style={{fontSize:10.5,color:C.mutedD}}>Necesito</div>
+          </div>
+          <div style={{background:C.card2,borderRadius:12,padding:"11px 8px",textAlign:"center"}}>
+            <div style={{fontFamily:F.h,fontWeight:900,fontSize:24,color:C.text}}>{dispo}</div>
+            <div style={{fontSize:10.5,color:C.mutedD}}>Tengo</div>
+          </div>
+        </div>
+        {!bloqueado && (
+          <div style={{marginBottom:12}}>
+            <div style={{fontFamily:F.h,fontWeight:700,fontSize:12,color:C.mutedD,marginBottom:6}}>TURNOS-LÍNEA DISPONIBLES ESTA SEMANA</div>
+            <div style={{display:"flex",alignItems:"center",gap:10}}>
+              <button onClick={()=>guardar({slots_disponibles:Math.max(0,dispo-1)})} style={{width:52,height:52,borderRadius:12,border:`1.5px solid ${C.border}`,background:"#fff",fontSize:24,color:C.text,cursor:"pointer"}}>−</button>
+              <div style={{flex:1,height:52,display:"flex",alignItems:"center",justifyContent:"center",borderRadius:12,background:C.card2,fontFamily:F.h,fontWeight:900,fontSize:26,color:C.text}}>{dispo}</div>
+              <button onClick={()=>guardar({slots_disponibles:dispo+1})} style={{width:52,height:52,borderRadius:12,border:`1.5px solid ${C.border}`,background:"#fff",fontSize:24,color:C.text,cursor:"pointer"}}>+</button>
+            </div>
+            <div style={{fontSize:11.5,color:C.mutedD,marginTop:6,lineHeight:1.5}}>Semana completa = {SLOTS_DIA*5} ({LINEAS_FISICAS} líneas × {TURNOS_ABIERTOS} turnos × 5 días). Baja el número por bajas, vacaciones o festivos.</div>
+          </div>
+        )}
+        <div style={{background:bg,border:`1.5px solid ${col}`,borderRadius:10,padding:"11px 13px",fontSize:13.5,color:col,fontFamily:F.h,fontWeight:700,lineHeight:1.5}}>
+          {estado==="ok" && "✔ Cuadra. Puedes cerrar el plan."}
+          {estado==="falta" && `⛔ Faltan ${dif.toFixed(1)} turnos-línea. Quita producción o suma gente.`}
+          {estado==="sobra" && `⚠️ Sobran ${(-dif).toFixed(1)} turnos-línea. Mete más producción.`}
+        </div>
+      </Card>
+
+      {!bloqueado && <Btn onClick={cerrarPlan} v={estado==="ok"?"primary":"secondary"}>
+        {estado==="ok" ? "🔒 Cerrar plan de la semana" : "🔒 Cerrar forzando (pedirá motivo)"}
+      </Btn>}
+    </>
+  );
+}
+
+const SelectorSemana = ({ semana, setSemana, semanas }) => (
+  <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:10,marginBottom:12}}>
+    {semanas.map(s=>(
+      <button key={s} onClick={()=>setSemana(s)}
+        style={{flexShrink:0,background:semana===s?C.accent:"#fff",color:semana===s?"#fff":C.mutedD,
+          border:`1.5px solid ${semana===s?C.accent:C.border}`,borderRadius:12,padding:"10px 14px",
+          fontFamily:F.h,fontWeight:700,fontSize:13,cursor:"pointer"}}>
+        <div>{s.split("-W")[1]}</div>
+        <div style={{fontSize:10.5,opacity:0.75,fontWeight:600}}>{rotuloSemana(s)}</div>
+      </button>
+    ))}
+  </div>
+);
+
+// ── TAB 3: CIERRE SEMANAL ──────────────────────────────────────────────────────
+function CierreSemanaTab({ semana, setSemana, semanas, plan, guardar, productos, mps, producciones, perfil }) {
+  const items = plan.items || [];
+  const dias = diasDeSemana(semana);
+  const partes = producciones.filter(p => dias.includes(p.fecha));
+
+  const mpPrecio = (id) => parseFloat(mps.find(m=>m.id===id)?.precio_ud)||0;
+  const costeRealParte = (p) => {
+    const mat = (p.consumos||[]).reduce((s,cs)=>s+(parseFloat(cs.metros_consumidos)||0)*mpPrecio(cs.materia_id),0);
+    const mo  = (parseInt(p.n_personas)||3)*(parseFloat(p.horas_equipo)||8)*TARIFA_MO;
+    return { mat, mo };
+  };
+
+  const ids = [...new Set([...items.map(i=>i.producto_id), ...partes.map(p=>p.producto_id)])];
+  const filas = ids.map(pid => {
+    const prod = productos.find(x=>x.id===pid);
+    const it = items.find(i=>i.producto_id===pid);
+    const ps = partes.filter(p=>p.producto_id===pid);
+    const udsObj = it ? (parseFloat(it.cantidad)||0) : 0;
+    const udsReal = ps.reduce((s,p)=>s+(parseFloat(p.cantidad)||0),0);
+    const ritmo = parseFloat(prod?.uds_turno_linea)||0;
+    const pers = parseInt(prod?.personas_linea)||3;
+    const turnosObj = ritmo>0 ? udsObj/ritmo : 0;
+    const cObjMP = (parseFloat(prod?.coste_mp_objetivo)||0)*udsObj;
+    const cObjMO = turnosObj*pers*8*TARIFA_MO;
+    let cRealMP=0, cRealMO=0;
+    ps.forEach(p=>{ const c=costeRealParte(p); cRealMP+=c.mat; cRealMO+=c.mo; });
+    const ritmoReal = ps.length>0 ? udsReal/ps.length : 0;
+    return { pid, nombre:prod?.nombre||"?", udsObj, udsReal, cObjMP, cObjMO, cRealMP, cRealMO,
+      cObj:cObjMP+cObjMO, cReal:cRealMP+cRealMO, ritmo, ritmoReal, partes:ps.length };
+  }).sort((a,b)=>b.cReal-a.cReal);
+
+  const T = filas.reduce((a,f)=>({udsObj:a.udsObj+f.udsObj,udsReal:a.udsReal+f.udsReal,
+    cObj:a.cObj+f.cObj,cReal:a.cReal+f.cReal,
+    dMP:a.dMP+(f.cRealMP-f.cObjMP),dMO:a.dMO+(f.cRealMO-f.cObjMO)}),
+    {udsObj:0,udsReal:0,cObj:0,cReal:0,dMP:0,dMO:0});
+  const cumpl = T.udsObj>0 ? T.udsReal/T.udsObj : 0;
+  const desvio = T.cReal - T.cObj;
+
+  const pendientes = filas.filter(f=>f.udsObj-f.udsReal > 0.5);
+  const cerrado = !!plan.cerrado_cierre;
+
+  const arrastrar = async () => {
+    if (pendientes.length===0) { window.alert("No queda nada pendiente"); return; }
+    const idx = semanas.indexOf(semana);
+    const sig = semanas[idx+1];
+    if (!sig) { window.alert("No hay semana siguiente dentro de este mes. Cambia de mes y añádelo a mano."); return; }
+    const lista = pendientes.map(f=>`· ${f.nombre}: ${num(f.udsObj-f.udsReal)} uds`).join("\n");
+    if (!window.confirm(`Arrastrar a la semana ${sig.split("-W")[1]}:\n\n${lista}\n\n¿Seguir?`)) return;
+    const ref = await getDocs(collection(db,"planes_semana"));
+    const doc0 = ref.docs.find(d=>d.id===sig);
+    const prev = doc0?.data()?.items || [];
+    const merged = [...prev];
+    pendientes.forEach(f=>{
+      const ex = merged.find(x=>x.producto_id===f.pid);
+      if (ex) ex.cantidad = (parseFloat(ex.cantidad)||0) + (f.udsObj-f.udsReal);
+      else merged.push({ id:uid(), producto_id:f.pid, cantidad: f.udsObj-f.udsReal });
+    });
+    await save("planes_semana", sig, { semana:sig, items:merged, cerrado_plan:false, con_arrastre:true });
+    window.alert("Arrastrado. Revisa el cuadre de esa semana.");
+  };
+
+  const actualizarRitmo = async (f) => {
+    if (!(f.ritmoReal>0)) return;
+    if (!window.confirm(`Poner el ritmo estándar de ${f.nombre} en ${f.ritmoReal.toFixed(0)} uds por turno-línea?\n\nAhora está en ${f.ritmo||"—"}.`)) return;
+    await save("productos", f.pid, { uds_turno_linea: Math.round(f.ritmoReal) });
+  };
+
+  const correo = () => {
+    const L = [];
+    L.push(`CIERRE SEMANA ${semana.split("-W")[1]} (${rotuloSemana(semana)})`);
+    L.push("");
+    L.push(`Unidades: ${num(T.udsReal)} de ${num(T.udsObj)} objetivo (${Math.round(cumpl*100)}%)`);
+    L.push(`Coste: ${eur(T.cReal)} real frente a ${eur(T.cObj)} objetivo`);
+    L.push(`Desvio: ${desvio>=0?"+":""}${eur(desvio)} (materia ${T.dMP>=0?"+":""}${eur(T.dMP)} / mano de obra ${T.dMO>=0?"+":""}${eur(T.dMO)})`);
+    if (plan.forzado) L.push(`AVISO: el plan se cerro forzando el cuadre. Motivo: ${plan.motivo_forzado}`);
+    L.push("");
+    L.push("POR PRODUCTO");
+    filas.forEach(f=>L.push(`${f.nombre}: ${num(f.udsReal)}/${num(f.udsObj)} uds · ${eur(f.cReal)} vs ${eur(f.cObj)} obj`));
+    if (pendientes.length>0) {
+      L.push("");
+      L.push("PENDIENTE DE FABRICAR");
+      pendientes.forEach(f=>L.push(`${f.nombre}: ${num(f.udsObj-f.udsReal)} uds`));
+    }
+    L.push("");
+    L.push(`Cerrado por ${perfil?.nombre||""} · wikuk ${APP_VERSION}`);
+    const body = encodeURIComponent(L.join("\n"));
+    window.location.href = `mailto:?subject=${encodeURIComponent("Cierre semana "+semana.split("-W")[1]+" · Wikuk producción")}&body=${body}`;
+  };
+
+  return (
+    <>
+      <SelectorSemana semana={semana} setSemana={setSemana} semanas={semanas}/>
+
+      {!plan.cerrado_plan && (
+        <div style={{background:C.amberBg,border:`1.5px solid ${C.amber}`,borderRadius:12,padding:"12px 14px",marginBottom:12,fontSize:13,color:C.amber,fontFamily:F.h,fontWeight:700,lineHeight:1.5}}>
+          ⚠️ Esta semana no tiene el plan cerrado. El comparativo es solo orientativo.
+        </div>
+      )}
+
+      <Card style={{marginBottom:12}}>
+        <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text,marginBottom:10}}>🎯 Objetivo frente a real</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
+          <div style={{background:C.card2,borderRadius:12,padding:"12px 8px",textAlign:"center"}}>
+            <div style={{fontFamily:F.h,fontWeight:900,fontSize:22,color:cumpl>=1?C.green:C.amber}}>{num(T.udsReal)}<span style={{fontSize:14,color:C.muted}}>/{num(T.udsObj)}</span></div>
+            <div style={{fontSize:10.5,color:C.mutedD,marginTop:2}}>Unidades ({Math.round(cumpl*100)}%)</div>
+          </div>
+          <div style={{background:C.card2,borderRadius:12,padding:"12px 8px",textAlign:"center"}}>
+            <div style={{fontFamily:F.h,fontWeight:900,fontSize:22,color:desvio<=0?C.green:C.red}}>{desvio>=0?"+":""}{eur(desvio)}</div>
+            <div style={{fontSize:10.5,color:C.mutedD,marginTop:2}}>Desvío de coste</div>
+          </div>
+        </div>
+        <div style={{borderTop:`1px solid ${C.border}`,paddingTop:10,fontSize:13,lineHeight:1.9,color:C.mutedD}}>
+          <div style={{display:"flex",justifyContent:"space-between"}}><span>Coste objetivo</span><b style={{color:C.text}}>{eur(T.cObj)}</b></div>
+          <div style={{display:"flex",justifyContent:"space-between"}}><span>Coste real</span><b style={{color:C.text}}>{eur(T.cReal)}</b></div>
+          <div style={{display:"flex",justifyContent:"space-between"}}><span>· por rendimiento (materia)</span><b style={{color:T.dMP<=0?C.green:C.red}}>{T.dMP>=0?"+":""}{eur(T.dMP)}</b></div>
+          <div style={{display:"flex",justifyContent:"space-between"}}><span>· por productividad (horas)</span><b style={{color:T.dMO<=0?C.green:C.red}}>{T.dMO>=0?"+":""}{eur(T.dMO)}</b></div>
+        </div>
+      </Card>
+
+      {filas.length===0 && <Empty icon="📭" text="Sin plan ni partes en esta semana"/>}
+
+      {filas.map(f=>{
+        const pct = f.udsObj>0 ? f.udsReal/f.udsObj : (f.udsReal>0?1:0);
+        const dv = f.cReal - f.cObj;
+        return (
+          <Card key={f.pid} style={{marginBottom:10}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8,marginBottom:7}}>
+              <b style={{fontFamily:F.h,fontSize:15,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{f.nombre}</b>
+              <span style={{fontFamily:F.h,fontWeight:900,fontSize:15,color:pct>=1?C.green:C.amber,flexShrink:0}}>{num(f.udsReal)}/{num(f.udsObj)}</span>
+            </div>
+            <div style={{height:7,background:C.card2,borderRadius:4,overflow:"hidden",marginBottom:9}}>
+              <div style={{width:Math.min(100,pct*100)+"%",height:"100%",background:pct>=1?C.green:C.accent,borderRadius:4}}/>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:12.5,color:C.mutedD}}>
+              <span>Coste {eur(f.cReal)} <span style={{color:C.muted}}>vs {eur(f.cObj)}</span></span>
+              <b style={{color:dv<=0?C.green:C.red}}>{dv>=0?"+":""}{eur(dv)}</b>
+            </div>
+            {f.partes>0 && (
+              <div style={{marginTop:9,paddingTop:9,borderTop:`1px solid ${C.card2}`,display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
+                <div style={{fontSize:12.5,color:C.mutedD,lineHeight:1.5}}>
+                  Ritmo real <b style={{color:C.text}}>{f.ritmoReal.toFixed(0)}</b> uds/turno · estándar <b style={{color:C.text}}>{f.ritmo||"—"}</b>
+                </div>
+                {Math.abs(f.ritmoReal-f.ritmo)>=1 && (
+                  <button onClick={()=>actualizarRitmo(f)} style={{flexShrink:0,background:C.blueBg,border:`1px solid ${C.blue}44`,color:C.blue,borderRadius:10,padding:"7px 11px",fontSize:12,fontWeight:800,cursor:"pointer"}}>Actualizar</button>
+                )}
+              </div>
+            )}
+          </Card>
+        );
+      })}
+
+      {pendientes.length>0 && (
+        <Card style={{marginBottom:12}} color={C.amber+"66"}>
+          <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.amber,marginBottom:8}}>↪️ Pendiente de fabricar</div>
+          {pendientes.map(f=>(
+            <div key={f.pid} style={{display:"flex",justifyContent:"space-between",fontSize:13.5,padding:"5px 0"}}>
+              <span style={{color:C.text}}>{f.nombre}</span><b style={{color:C.amber}}>{num(f.udsObj-f.udsReal)} uds</b>
+            </div>
+          ))}
+          <div style={{marginTop:10}}><Btn v="secondary" onClick={arrastrar}>Arrastrar a la semana siguiente</Btn></div>
+        </Card>
+      )}
+
+      <div style={{display:"grid",gap:9}}>
+        <Btn v="ghost" onClick={correo}>✉️ Enviar informe por correo</Btn>
+        {!cerrado
+          ? <Btn onClick={()=>{ if(window.confirm("¿Cerrar la semana? Queda registrado el comparativo.")) guardar({cerrado_cierre:true, cierre_uds_real:T.udsReal, cierre_coste_real:T.cReal, cierre_desvio:desvio, cerrado_cierre_por:perfil?.nombre||"", cerrado_cierre_at:new Date().toISOString()}); }}>🔒 Cerrar la semana</Btn>
+          : <div style={{background:C.greenBg,border:`1.5px solid ${C.green}`,borderRadius:12,padding:"12px 14px",fontFamily:F.h,fontWeight:800,fontSize:14,color:C.green,textAlign:"center"}}>
+              ✔ Semana cerrada por {plan.cerrado_cierre_por||"—"}
+            </div>}
+      </div>
+    </>
+  );
+}
+
 function Home({ perfil, onGo, onLogout, counts, ordenes=[], producciones=[], productos=[] }) {
   const hoy = new Date().toISOString().slice(0,10);
   const partesHoy = producciones.filter(p=>p.fecha===hoy);
@@ -2637,6 +3246,7 @@ function Home({ perfil, onGo, onLogout, counts, ordenes=[], producciones=[], pro
   const fmtFecha = (f)=>{ try { return new Date(f+"T12:00:00").toLocaleDateString("es-ES",{weekday:"long",day:"numeric",month:"2-digit"}); } catch(e){ return f; } };
   const esGerencia = perfil.rol === "gerencia";
   const tiles = [
+    { id:"planificacion", icon:"📅", bg:"#EEF2FF", label:"Planificación", sub:"Mes · semana · cuadre · cierre",     roles:["gerencia","sup_fabrica"] },
     { id:"ordenes",   icon:"📋", bg:"#ECFDF5", label:"Órdenes de Producción", sub:"Planificar y registrar",           roles:["gerencia","sup_fabrica","sup_oficina"] },
     { id:"diario",    icon:"📖", bg:"#EFF6FF", label:"Diario de Fabricación", sub:"El parte oficial del día",          roles:["gerencia","sup_fabrica","sup_oficina"] },
     { id:"analitica", icon:"📊", bg:"#FDF2F8", label:"Analítica",         sub:"Evolución · costes · lotes · equipos", roles:["gerencia","sup_fabrica"] },
@@ -2851,6 +3461,7 @@ export default function App() {
     <div style={{fontFamily:F.b}}>
       <style>{STYLES}</style>
       {view==="home"      && <Home perfil={perfil} onGo={setView} onLogout={()=>signOut(auth)} counts={counts} ordenes={ordenesRoot} producciones={produccionesRoot} productos={productos}/>}
+      {view==="planificacion" && <PlanificacionScreen onBack={back} perfil={perfil} productos={productos} mps={mps} producciones={produccionesRoot}/>}
       {view==="ordenes"   && <OrdenesScreen onBack={back} perfil={perfil} productos={productos} lineas={lineas} turnos={turnos} centros={centros} mps={mps} motivos={motivos} usuarios={usuarios}/>}
       {view==="diario"    && <DiarioScreen onBack={back} productos={productos} lineas={lineas} turnos={turnos} mps={mps} motivos={motivos} usuarios={usuarios} centros={centros}/>}
       {view==="analitica" && <AnaliticaScreen onBack={back} productos={productos} mps={mps} lineas={lineas} turnos={turnos} usuarios={usuarios} centros={centros}/>}
