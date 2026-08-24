@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v2.17.2";
+const APP_VERSION = "v2.18.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -144,6 +144,67 @@ const calcRecursos = (items, productos, persLinea = 3) => {
   });
   return { uds, slots, personaTurnos, costeMP, costeMO, coste: costeMP+costeMO, materias, sinRitmo };
 };
+
+// ── IMPRESIÓN ──────────────────────────────────────────────────────────────────
+const esc = (t) => String(t??"").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+const imprimirHTML = (html) => {
+  const prev = document.getElementById("wk-print");
+  if (prev) prev.remove();
+  const d = document.createElement("div");
+  d.id = "wk-print";
+  d.innerHTML = html;
+  document.body.appendChild(d);
+  setTimeout(() => { window.print(); }, 150);
+};
+const PRINT_CSS = `
+  #wk-print{display:none;}
+  @media print{
+    #root{display:none!important;}
+    #wk-print{display:block!important;font-family:-apple-system,"Segoe UI",Roboto,sans-serif;color:#111;}
+    #wk-print h1{font-size:19px;margin:0 0 2px;}
+    #wk-print h2{font-size:13px;margin:16px 0 6px;text-transform:uppercase;letter-spacing:.6px;border-bottom:1.5px solid #111;padding-bottom:3px;}
+    #wk-print .sub{font-size:12px;color:#555;margin-bottom:10px;}
+    #wk-print table{width:100%;border-collapse:collapse;font-size:11px;margin-bottom:6px;}
+    #wk-print th{text-align:left;background:#eee;padding:5px 6px;border:0.5px solid #bbb;font-size:10px;text-transform:uppercase;}
+    #wk-print td{padding:5px 6px;border:0.5px solid #ccc;}
+    #wk-print td.n,#wk-print th.n{text-align:right;}
+    #wk-print .kpis{display:flex;gap:10px;margin-bottom:6px;}
+    #wk-print .kpi{flex:1;border:1px solid #999;border-radius:6px;padding:7px 9px;}
+    #wk-print .kpi b{display:block;font-size:17px;}
+    #wk-print .kpi span{font-size:9.5px;color:#555;text-transform:uppercase;}
+    #wk-print .pie{margin-top:18px;font-size:9.5px;color:#666;border-top:0.5px solid #bbb;padding-top:5px;}
+    #wk-print .aviso{border:1px solid #b45309;background:#fffbeb;padding:7px 9px;font-size:11px;margin-bottom:8px;border-radius:5px;}
+    #wk-print .firma{margin-top:22px;display:flex;gap:30px;font-size:10px;color:#555;}
+    #wk-print .firma div{flex:1;border-top:0.5px solid #999;padding-top:4px;}
+    @page{margin:14mm;}
+  }
+`;
+// Bloques comunes de un informe de planificación
+const bloqueRecursos = (r, mps, dias, persDia) => {
+  const filas = Object.entries(r.materias).sort((a,b)=>b[1]-a[1]).map(([id,m])=>{
+    const mp = mps.find(x=>x.id===id);
+    return `<tr><td>${esc(mp?.nombre||"?")}</td><td class="n">${num(m)}</td><td class="n">${num(m/((mp?.metros_madeja)||90))}</td></tr>`;
+  }).join("");
+  return `
+    <h2>Recursos necesarios</h2>
+    <div class="kpis">
+      <div class="kpi"><b>${num(r.uds)}</b><span>Unidades</span></div>
+      <div class="kpi"><b>${Math.ceil(r.personaTurnos/(dias||1))} / ${persDia}</b><span>Personas al día</span></div>
+      <div class="kpi"><b>${r.slots.toFixed(1)}</b><span>Huecos de línea</span></div>
+      <div class="kpi"><b>${eur(r.coste)}</b><span>Coste objetivo</span></div>
+    </div>
+    <table><tr><th>Concepto</th><th class="n">Importe</th></tr>
+      <tr><td>Materia prima</td><td class="n">${eur(r.costeMP)}</td></tr>
+      <tr><td>Mano de obra (${TARIFA_MO} €/h)</td><td class="n">${eur(r.costeMO)}</td></tr>
+      <tr><td><b>Total objetivo</b></td><td class="n"><b>${eur(r.coste)}</b></td></tr>
+    </table>
+    ${filas ? `<h2>Materias primas a preparar</h2>
+    <table><tr><th>Materia</th><th class="n">Metros</th><th class="n">Madejas</th></tr>${filas}</table>` : ""}
+    ${r.sinRitmo.length ? `<div class="aviso"><b>Sin ritmo definido:</b> ${esc(r.sinRitmo.join(" · "))}. No cuentan en los recursos.</div>` : ""}
+  `;
+};
+const pieInforme = (perfil) => `<div class="pie">Wikuk Producción ${APP_VERSION} · generado el ${new Date().toLocaleDateString("es-ES",{day:"numeric",month:"long",year:"numeric"})}${perfil?.nombre?` por ${esc(perfil.nombre)}`:""}</div>
+  <div class="firma"><div>Preparado por</div><div>Revisado por</div><div>Aprobado por</div></div>`;
 
 
 const ROLES = {
@@ -2946,11 +3007,11 @@ function PlanificacionScreen({ onBack, perfil, productos, mps, producciones, cen
           </div>
         )}
         {tab==="mes" && <PlanMesTab periodo={periodo} setPeriodo={setPeriodo} plan={planMes} guardar={guardarMes}
-          productos={prodCentro} mps={mps} semanas={semanas} planesSem={planesSem} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} turnosCentro={turnosCentro} irReparto={()=>setTab("reparto")}/>}
+          productos={prodCentro} mps={mps} semanas={semanas} planesSem={planesSem} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} turnosCentro={turnosCentro} centroNombre={centro?.nombre||""} perfil={perfil} irReparto={()=>setTab("reparto")}/>}
         {tab==="reparto" && <RepartoTab periodo={periodo} semanas={semanas} planMes={planMes} planesSem={planesSem}
           productos={prodCentro} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} irASemana={(s)=>{ setSemana(s); setTab("semana"); }}/>}
         {tab==="semana" && <PlanSemanaTab semana={semana} setSemana={setSemana} semanas={semanas} plan={planSem}
-          guardar={guardarSem} productos={prodCentro} mps={mps} perfil={perfil} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} turnosCentro={turnosCentro} cfgLineas={cfgLineas}/>}
+          guardar={guardarSem} productos={prodCentro} mps={mps} perfil={perfil} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} turnosCentro={turnosCentro} cfgLineas={cfgLineas} centroNombre={centro?.nombre||""}/>}
         {tab==="cierre" && <CierreSemanaTab semana={semana} setSemana={setSemana} semanas={semanas} plan={planSem}
           guardar={guardarSem} productos={prodCentro} mps={mps} producciones={producciones} perfil={perfil}/>}
       </div>
@@ -3054,16 +3115,48 @@ const ItemsEditor = ({ items, setItems, productos, bloqueado, persLinea=3 }) => 
 };
 
 // ── TAB 1: PLAN MENSUAL ────────────────────────────────────────────────────────
-function PlanMesTab({ periodo, setPeriodo, plan, guardar, productos, mps, semanas, planesSem, slotsDia=SLOTS_DIA, persLinea=3, persDia=12, turnosCentro=TURNOS_ABIERTOS, irReparto }) {
+function PlanMesTab({ periodo, setPeriodo, plan, guardar, productos, mps, semanas, planesSem, slotsDia=SLOTS_DIA, persLinea=3, persDia=12, turnosCentro=TURNOS_ABIERTOS, centroNombre="", perfil, irReparto }) {
   const items = plan.items || [];
   const setItems = (v) => guardar({ items: v });
   const dias = diasLaborablesMes(periodo).length;
   const capacidad = dias * slotsDia;
   const r = calcRecursos(items, productos, persLinea);
   const ocupacion = capacidad>0 ? r.slots/capacidad : 0;
+  const nLineasTxt = `${slotsDia/turnosCentro} línea${slotsDia/turnosCentro!==1?"s":""}`;
   const estado = ocupacion > 1.001 ? "falta" : ocupacion < 0.95 ? "sobra" : "ok";
   const col = estado==="ok"?C.green:estado==="falta"?C.red:C.amber;
   const bg  = estado==="ok"?C.greenBg:estado==="falta"?C.redBg:C.amberBg;
+
+  const imprimir = () => {
+    if (items.length===0) { window.alert("No hay nada planificado este mes"); return; }
+    const filas = items.map(it=>{
+      const p = productos.find(x=>x.id===it.producto_id);
+      const ritmo = toNum(p?.uds_turno_linea), pers = parseInt(p?.personas_linea)||3;
+      const huecos = ritmo>0 ? (toNum(it.cantidad)/ritmo)*(pers/persLinea) : 0;
+      return `<tr><td>${esc(p?.nombre||"?")}</td><td class="n">${num(it.cantidad)}</td><td class="n">${ritmo||"—"}</td><td class="n">${pers}</td><td class="n">${huecos.toFixed(1)}</td><td class="n">${eur(toNum(p?.coste_objetivo)*toNum(it.cantidad))}</td></tr>`;
+    }).join("");
+    const porSemana = semanas.map(sm=>{
+      const ps = planesSem.find(x=>x.semana===sm);
+      const rs = calcRecursos(ps?.items||[], productos, persLinea);
+      return `<tr><td>Semana ${sm.split("-W")[1]}</td><td>${esc(rotuloSemana(sm))}</td><td class="n">${num(rs.uds)}</td><td class="n">${Math.ceil(rs.personaTurnos/5)}</td><td class="n">${eur(rs.coste)}</td><td>${ps?.cerrado_plan?"Cerrada":"Abierta"}</td></tr>`;
+    }).join("");
+    imprimirHTML(`
+      <h1>Planificación mensual — ${esc(nombreMes(periodo))}</h1>
+      <div class="sub">${esc(centroNombre)} · ${nLineasTxt} · ${turnosCentro} turno${turnosCentro!==1?"s":""} · ${dias} días laborables · plantilla ${persDia} personas/día</div>
+      <h2>Qué se va a fabricar</h2>
+      <table><tr><th>Producto</th><th class="n">Uds</th><th class="n">Ritmo</th><th class="n">Pers.</th><th class="n">Huecos</th><th class="n">Coste obj.</th></tr>${filas}</table>
+      ${bloqueRecursos(r, mps, dias, persDia)}
+      <h2>Reparto por semanas</h2>
+      <table><tr><th>Semana</th><th>Fechas</th><th class="n">Uds</th><th class="n">Pers./día</th><th class="n">Coste obj.</th><th>Estado</th></tr>${porSemana}</table>
+      <h2>Capacidad</h2>
+      <table>
+        <tr><td>Personas necesarias al día</td><td class="n">${Math.ceil(r.personaTurnos/(dias||1))}</td></tr>
+        <tr><td>Personas disponibles al día</td><td class="n">${persDia}</td></tr>
+        <tr><td>Ocupación de la fábrica</td><td class="n">${Math.round(ocupacion*100)}%</td></tr>
+      </table>
+      ${pieInforme(perfil)}
+    `);
+  };
 
   return (
     <>
@@ -3098,7 +3191,10 @@ function PlanMesTab({ periodo, setPeriodo, plan, guardar, productos, mps, semana
         </div>
       </Card>
 
-      <Btn onClick={irReparto} v="ghost">✂️ Repartir en las {semanas.length} semanas del mes →</Btn>
+      <div style={{display:"grid",gap:9}}>
+        <Btn onClick={irReparto} v="ghost">✂️ Repartir en las {semanas.length} semanas del mes →</Btn>
+        <Btn onClick={imprimir} v="secondary">🖨️ Imprimir la planificación del mes</Btn>
+      </div>
     </>
   );
 }
@@ -3510,7 +3606,7 @@ function SlotEditor({ slot, entrada, productos, items, colocado, objetivo, persL
 }
 
 // ── TAB 2: PLAN SEMANAL + CUADRE ───────────────────────────────────────────────
-function PlanSemanaTab({ semana, setSemana, semanas, plan, guardar, productos, mps, perfil, slotsDia=SLOTS_DIA, persLinea=3, persDia=12, turnosCentro=TURNOS_ABIERTOS, cfgLineas }) {
+function PlanSemanaTab({ semana, setSemana, semanas, plan, guardar, productos, mps, perfil, slotsDia=SLOTS_DIA, persLinea=3, persDia=12, turnosCentro=TURNOS_ABIERTOS, cfgLineas, centroNombre="" }) {
   const items = plan.items || [];
   const bloqueado = !!plan.cerrado_plan;
   const setItems = (v) => guardar({ items: v });
@@ -3526,6 +3622,44 @@ function PlanSemanaTab({ semana, setSemana, semanas, plan, guardar, productos, m
   const estado = dif > 0.2 ? "falta" : dif < -0.5 ? "sobra" : "ok";
   const col = estado==="ok"?C.green:estado==="falta"?C.red:C.amber;
   const bg  = estado==="ok"?C.greenBg:estado==="falta"?C.redBg:C.amberBg;
+
+  const imprimir = () => {
+    const CFG = (cfgLineas && cfgLineas.length) ? cfgLineas : [{nombre:"Línea 1",personas:3},{nombre:"Línea 2",personas:3}];
+    const TT = Array.from({length: turnosCentro}, (_,i)=>`T${i+1}`);
+    const ds = diasDeSemana(semana);
+    const cabecera = ds.map(f=>`<th class="n">${esc(DIA_CORTO(f))}</th>`).join("");
+    const cuerpo = TT.map(t => CFG.map(l => {
+      const celdas = ds.map(f=>{
+        const e = cal.find(x=>x.fecha===f && x.turno===t && x.linea===l.nombre);
+        if (!e) return `<td class="n" style="color:#aaa">—</td>`;
+        const p = productos.find(z=>z.id===e.producto_id);
+        return `<td class="n"><b>${esc(codigoCorto(p?.nombre||"?"))}</b><br/>${num(e.cantidad)} uds</td>`;
+      }).join("");
+      return `<tr><td><b>${esc(t)}</b> · ${esc(l.nombre)}<br/><span style="font-size:9px;color:#666">${l.personas}p</span></td>${celdas}</tr>`;
+    }).join("")).join("");
+    const porProducto = Object.entries(cal.reduce((a,x)=>{ a[x.producto_id]=(a[x.producto_id]||0)+toNum(x.cantidad); return a; },{}))
+      .map(([pid,q])=>{
+        const p = productos.find(z=>z.id===pid);
+        return `<tr><td>${esc(p?.nombre||"?")}</td><td class="n">${num(q)}</td><td class="n">${eur(toNum(p?.coste_objetivo)*q)}</td></tr>`;
+      }).join("");
+    const porDia = diasDeSemana(semana).map(f=>{
+      const dd = cal.filter(x=>x.fecha===f);
+      const pd = dd.reduce((a,x)=>a+(CFG.find(l=>l.nombre===x.linea)?.personas||3),0);
+      return `<tr><td>${esc(DIA_CORTO(f))}</td><td class="n">${dd.length}/${CFG.length*TT.length}</td><td class="n">${num(dd.reduce((a,x)=>a+toNum(x.cantidad),0))}</td><td class="n">${pd}</td></tr>`;
+    }).join("");
+    imprimirHTML(`
+      <h1>Planificación semanal — Semana ${semana.split("-W")[1]}</h1>
+      <div class="sub">${esc(centroNombre)} · ${esc(rotuloSemana(semana))} · plantilla ${persDia} personas/día${plan.cerrado_plan?" · PLAN CERRADO":""}</div>
+      ${plan.forzado ? `<div class="aviso"><b>Cierre forzado.</b> Motivo: ${esc(plan.motivo_forzado||"")}</div>` : ""}
+      <h2>Calendario de producción</h2>
+      <table><tr><th>Turno · Línea</th>${cabecera}</tr>${cuerpo || `<tr><td colspan="${ds.length+1}">Sin calendario</td></tr>`}</table>
+      <h2>Carga por día</h2>
+      <table><tr><th>Día</th><th class="n">Huecos</th><th class="n">Uds</th><th class="n">Personas</th></tr>${porDia}</table>
+      ${porProducto ? `<h2>Total por producto</h2><table><tr><th>Producto</th><th class="n">Uds</th><th class="n">Coste obj.</th></tr>${porProducto}</table>` : ""}
+      ${bloqueRecursos(r, mps, 5, persDia)}
+      ${pieInforme(perfil)}
+    `);
+  };
 
   const cerrarPlan = async () => {
     if (items.length===0) { window.alert("No hay nada planificado"); return; }
@@ -3600,9 +3734,12 @@ function PlanSemanaTab({ semana, setSemana, semanas, plan, guardar, productos, m
         </div>
       </Card>
 
-      {!bloqueado && <Btn onClick={cerrarPlan} v={estado==="ok"?"primary":"secondary"}>
-        {estado==="ok" ? "🔒 Cerrar plan de la semana" : "🔒 Cerrar forzando (pedirá motivo)"}
-      </Btn>}
+      <div style={{display:"grid",gap:9}}>
+        <Btn onClick={imprimir} v="secondary">🖨️ Imprimir la planificación de la semana</Btn>
+        {!bloqueado && <Btn onClick={cerrarPlan} v={estado==="ok"?"primary":"secondary"}>
+          {estado==="ok" ? "🔒 Cerrar plan de la semana" : "🔒 Cerrar forzando (pedirá motivo)"}
+        </Btn>}
+      </div>
     </>
   );
 }
@@ -3984,7 +4121,7 @@ export default function App() {
     ::-webkit-scrollbar{width:4px;height:4px;}
     ::-webkit-scrollbar-thumb{background:#CBD5E1;border-radius:99px;}
     @keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
-  `;
+  ` + PRINT_CSS;
 
   if (authUser === undefined) return (
     <div style={{fontFamily:F.b}}><style>{STYLES}</style>
