@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v2.16.0";
+const APP_VERSION = "v2.17.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -1891,18 +1891,17 @@ function CentrosScreen({ onBack }) {
   const [nombre, setNombre] = useState("");
   const [ubicacion, setUbicacion] = useState("");
   const [tarifa, setTarifa] = useState("");
-  const [persLin, setPersLin] = useState("3");
   const [turnosAb, setTurnosAb] = useState("2");
   const [editId, setEditId] = useState(null);
 
   const add = async () => {
     if (!nombre.trim()) return;
     await save("centros", editId||uid(), { nombre: nombre.trim(), ubicacion: ubicacion.trim(),
-      tarifa_mo: toNum(tarifa)||0, personas_linea: parseInt(persLin)||3, turnos_abiertos: parseInt(turnosAb)||2, activo: true });
-    setNombre(""); setUbicacion(""); setTarifa(""); setPersLin("3"); setTurnosAb("2"); setEditId(null);
+      tarifa_mo: toNum(tarifa)||0, turnos_abiertos: parseInt(turnosAb)||2, activo: true });
+    setNombre(""); setUbicacion(""); setTarifa(""); setTurnosAb("2"); setEditId(null);
   };
   const startEdit = (x) => { setEditId(x.id); setNombre(x.nombre||""); setUbicacion(x.ubicacion||"");
-    setTarifa(x.tarifa_mo?.toString()||""); setPersLin((x.personas_linea||3).toString()); setTurnosAb((x.turnos_abiertos||2).toString()); window.scrollTo(0,0); };
+    setTarifa(x.tarifa_mo?.toString()||""); setTurnosAb((x.turnos_abiertos||2).toString()); window.scrollTo(0,0); };
   return (
     <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
       <Header title="CENTROS DE TRABAJO" onBack={onBack} sub="Cada centro produce de forma independiente"/>
@@ -1913,14 +1912,12 @@ function CentrosScreen({ onBack }) {
           <Field dec label="Tarifa MO de referencia (€/hora)" value={tarifa} onChange={setTarifa} placeholder="15.25" min="0" step="0.01"/>
           <div style={{background:C.blueBg,borderRadius:11,padding:"12px 13px",marginBottom:14}}>
             <div style={{fontFamily:F.h,fontWeight:800,fontSize:13,color:C.blue,marginBottom:3}}>👥 Capacidad del centro</div>
-            <div style={{fontSize:12,color:C.mutedD,marginBottom:11,lineHeight:1.5}}>Con esto la planificación calcula cuánta gente hace falta y cuánta hay.</div>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-              <Field dec label="Personas por línea" value={persLin} onChange={setPersLin} placeholder="3" min="1" step="1"/>
-              <Field dec label="Turnos abiertos" value={turnosAb} onChange={setTurnosAb} placeholder="2" min="1" step="1"/>
-            </div>
+            <div style={{fontSize:12,color:C.mutedD,marginBottom:11,lineHeight:1.5}}>Cuántos turnos tiene abiertos este centro.</div>
+            <Field dec label="Turnos abiertos" value={turnosAb} onChange={setTurnosAb} placeholder="2" min="1" step="1"/>
+            <div style={{fontSize:12,color:C.mutedD,marginTop:-8,lineHeight:1.5}}>Las personas de cada línea se ponen en <b>Líneas de Producción</b>, una por una.</div>
           </div>
           <Btn v="ghost" onClick={add}>{editId?"💾 Guardar cambios":"＋ Añadir Centro"}</Btn>
-          {editId && <button onClick={()=>{setEditId(null);setNombre("");setUbicacion("");setTarifa("");setPersLin("3");setTurnosAb("2");}} style={{marginLeft:8,background:"none",border:"none",color:C.muted,fontSize:14,cursor:"pointer",textDecoration:"underline"}}>Cancelar</button>}
+          {editId && <button onClick={()=>{setEditId(null);setNombre("");setUbicacion("");setTarifa("");setTurnosAb("2");}} style={{marginLeft:8,background:"none",border:"none",color:C.muted,fontSize:14,cursor:"pointer",textDecoration:"underline"}}>Cancelar</button>}
         </Card>
         {centros.length===0 && <Empty icon="🏭" text="Sin centros. Crea al menos uno para poder asignar operarios y productos."/>}
         <div style={{display:"flex",flexDirection:"column",gap:8}}>
@@ -1930,7 +1927,7 @@ function CentrosScreen({ onBack }) {
                 <div style={{flex:1}}>
                   <div style={{fontFamily:F.h,fontWeight:700,fontSize:18,color:C.text}}>🏭 {c.nombre} {c.activo===false&&<Pill>INACTIVO</Pill>}</div>
                   <div style={{fontSize:13,color:C.muted,marginTop:2}}>{c.ubicacion||""}{c.tarifa_mo?` · MO ref: ${c.tarifa_mo} €/h`:""}</div>
-                  <div style={{fontSize:12.5,color:C.mutedD,marginTop:3}}>👥 {c.personas_linea||3} persona{(c.personas_linea||3)!==1?"s":""}/línea · {c.turnos_abiertos||2} turno{(c.turnos_abiertos||2)!==1?"s":""}</div>
+                  <div style={{fontSize:12.5,color:C.mutedD,marginTop:3}}>🕐 {c.turnos_abiertos||2} turno{(c.turnos_abiertos||2)!==1?"s":""} abierto{(c.turnos_abiertos||2)!==1?"s":""}</div>
                 </div>
                 <div style={{display:"flex",gap:6}}>
                   <IconBtn onClick={()=>startEdit(c)}>✏️</IconBtn>
@@ -1960,14 +1957,15 @@ function LineasScreen({ onBack, centros }) {
   const [lineas] = useCol("lineas", "nombre");
   const [centro, setCentro] = useState("");
   const [nombre, setNombre] = useState("");
+  const [pers, setPers] = useState("3");
   const [editId, setEditId] = useState(null);
-  const startEdit = (x)=>{ setEditId(x.id); setNombre(x.nombre||""); setCentro(x.centro||""); window.scrollTo(0,0); };
+  const startEdit = (x)=>{ setEditId(x.id); setNombre(x.nombre||""); setCentro(x.centro||""); setPers((x.personas||3).toString()); window.scrollTo(0,0); };
   useEffect(()=>{ if(!centro && centros.length) setCentro(centros[0].id); },[centros.length]);
 
   const add = async () => {
     if (!nombre.trim() || !centro) return;
-    await save("lineas", editId||uid(), { centro, nombre: nombre.trim(), activo: true });
-    setNombre(""); setEditId(null);
+    await save("lineas", editId||uid(), { centro, nombre: nombre.trim(), personas: parseInt(pers)||3, activo: true });
+    setNombre(""); setPers("3"); setEditId(null);
   };
   return (
     <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
@@ -1977,20 +1975,25 @@ function LineasScreen({ onBack, centros }) {
           <Sel label="Centro" value={centro} onChange={setCentro} placeholder="Centro…"
             options={centros.map(x=>({value:x.id,label:`🏭 ${x.nombre}`}))}/>
           <Field label="Nombre de la línea" value={nombre} onChange={setNombre} placeholder="Ej: Maextra / Especta / MX368"/>
+          <Field dec label="Personas en la línea" value={pers} onChange={setPers} placeholder="3" min="1" step="1"/>
+          <div style={{fontSize:12,color:C.mutedD,marginTop:-8,marginBottom:12,lineHeight:1.5}}>Cuánta gente trabaja en esta línea en un turno. Es lo que la planificación usa para saber si cuadra la plantilla.</div>
           <Btn v="ghost" onClick={add}>{editId?"💾 Guardar cambios":"＋ Añadir Línea"}</Btn>
-          {editId && <button onClick={()=>{setEditId(null);setNombre("");}} style={{marginLeft:8,background:"none",border:"none",color:C.muted,fontSize:14,cursor:"pointer",textDecoration:"underline"}}>Cancelar</button>}
+          {editId && <button onClick={()=>{setEditId(null);setNombre("");setPers("3");}} style={{marginLeft:8,background:"none",border:"none",color:C.muted,fontSize:14,cursor:"pointer",textDecoration:"underline"}}>Cancelar</button>}
         </Card>
         {centros.map(ct=>{
           const rows = lineas.filter(l=>l.centro===ct.id);
           if(!rows.length) return null;
           return (
             <div key={ct.id} style={{marginBottom:14}}>
-              <div style={{fontFamily:F.h,fontWeight:700,fontSize:13,color:C.mutedD,textTransform:"uppercase",letterSpacing:0.5,marginBottom:8}}>🏭 {ct.nombre} · {rows.length} líneas</div>
+              <div style={{fontFamily:F.h,fontWeight:700,fontSize:13,color:C.mutedD,textTransform:"uppercase",letterSpacing:0.5,marginBottom:8}}>🏭 {ct.nombre} · {rows.length} línea{rows.length!==1?"s":""} · {rows.reduce((a,x)=>a+(parseInt(x.personas)||3),0)} personas/turno</div>
               <div style={{display:"flex",flexDirection:"column",gap:8}}>
                 {rows.map(l=>(
                   <Card key={l.id} style={{opacity:l.activo!==false?1:0.5}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                      <div style={{fontFamily:F.h,fontWeight:700,fontSize:16,color:C.text}}>⚙️ {l.nombre}</div>
+                      <div>
+                        <div style={{fontFamily:F.h,fontWeight:700,fontSize:16,color:C.text}}>⚙️ {l.nombre}</div>
+                        <div style={{fontSize:12.5,color:C.mutedD,marginTop:2}}>👥 {parseInt(l.personas)||3} persona{(parseInt(l.personas)||3)!==1?"s":""} por turno</div>
+                      </div>
                       <div style={{display:"flex",gap:6}}>
                         <IconBtn onClick={()=>startEdit(l)}>✏️</IconBtn>
                         <button onClick={()=>save("lineas",l.id,{activo:l.activo===false})}
@@ -2578,7 +2581,7 @@ function ProductoForm({ onBack, ep, procesos, mps, centros }) {
           <div style={{fontSize:12,color:C.mutedD,marginBottom:12,lineHeight:1.5}}>Cuántas unidades salen de <b>una línea en un turno</b>. Es la base de toda la planificación: sin este dato el plan no puede calcular recursos.</div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
             <Field dec label="Uds por turno-línea" value={udsTurno} onChange={setUdsTurno} type="number" placeholder="150" min="0" step="1"/>
-            <Field dec label="Personas por línea" value={persLinea} onChange={setPersLinea} type="number" placeholder="3" min="1" step="1"/>
+            <Field dec label="Personas que necesita" value={persLinea} onChange={setPersLinea} placeholder="3" min="1" step="1"/>
           </div>
           {toNum(udsTurno)>0 && (
             <div style={{background:C.blueBg,borderRadius:10,padding:"10px 12px",fontSize:13,color:C.text,lineHeight:1.6}}>
@@ -2906,11 +2909,11 @@ function PlanificacionScreen({ onBack, perfil, productos, mps, producciones, cen
           </div>
         )}
         {tab==="mes" && <PlanMesTab periodo={periodo} setPeriodo={setPeriodo} plan={planMes} guardar={guardarMes}
-          productos={prodCentro} mps={mps} semanas={semanas} planesSem={planesSem} slotsDia={slotsDia} persLinea={persLinea} turnosCentro={turnosCentro} irReparto={()=>setTab("reparto")}/>}
+          productos={prodCentro} mps={mps} semanas={semanas} planesSem={planesSem} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} turnosCentro={turnosCentro} irReparto={()=>setTab("reparto")}/>}
         {tab==="reparto" && <RepartoTab periodo={periodo} semanas={semanas} planMes={planMes} planesSem={planesSem}
-          productos={prodCentro} slotsDia={slotsDia} persLinea={persLinea} irASemana={(s)=>{ setSemana(s); setTab("semana"); }}/>}
+          productos={prodCentro} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} irASemana={(s)=>{ setSemana(s); setTab("semana"); }}/>}
         {tab==="semana" && <PlanSemanaTab semana={semana} setSemana={setSemana} semanas={semanas} plan={planSem}
-          guardar={guardarSem} productos={prodCentro} mps={mps} perfil={perfil} slotsDia={slotsDia} persLinea={persLinea} turnosCentro={turnosCentro} nombresLinea={nombresLinea}/>}
+          guardar={guardarSem} productos={prodCentro} mps={mps} perfil={perfil} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} turnosCentro={turnosCentro} cfgLineas={cfgLineas}/>}
         {tab==="cierre" && <CierreSemanaTab semana={semana} setSemana={setSemana} semanas={semanas} plan={planSem}
           guardar={guardarSem} productos={prodCentro} mps={mps} producciones={producciones} perfil={perfil}/>}
       </div>
@@ -2919,7 +2922,7 @@ function PlanificacionScreen({ onBack, perfil, productos, mps, producciones, cen
 }
 
 // ── Tarjeta reutilizable de recursos ───────────────────────────────────────────
-const RecursosCard = ({ r, mps, dias, slotsDia=SLOTS_DIA, persLinea=3, turnosCentro=TURNOS_ABIERTOS, titulo="Recursos necesarios" }) => (
+const RecursosCard = ({ r, mps, dias, slotsDia=SLOTS_DIA, persDia=12, turnosCentro=TURNOS_ABIERTOS, titulo="Recursos necesarios" }) => (
   <Card style={{marginBottom:12}}>
     <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text,marginBottom:10}}>🧮 {titulo}</div>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
@@ -2935,7 +2938,7 @@ const RecursosCard = ({ r, mps, dias, slotsDia=SLOTS_DIA, persLinea=3, turnosCen
     </div>
     <div style={{background:C.blueBg,borderRadius:10,padding:"10px 12px",marginBottom:10,fontSize:12.5,color:C.text,lineHeight:1.6}}>
       Repartido en <b>{dias} día{dias!==1?"s":""}</b>: necesitas <b>{Math.ceil(r.personaTurnos/(dias||1))} personas cada día</b> y tener funcionando <b>{(r.slots/(dias||1)).toFixed(1)}</b> de los {slotsDia} huecos línea-turno del centro.
-      <div style={{fontSize:11.5,color:C.mutedD,marginTop:3}}>Centro completo = {slotsDia/turnosCentro} línea{slotsDia/turnosCentro!==1?"s":""} × {turnosCentro} turno{turnosCentro!==1?"s":""} × {persLinea} persona{persLinea!==1?"s":""} = {slotsDia*persLinea} personas al día.</div>
+      <div style={{fontSize:11.5,color:C.mutedD,marginTop:3}}>Centro completo = {slotsDia/turnosCentro} línea{slotsDia/turnosCentro!==1?"s":""} × {turnosCentro} turno{turnosCentro!==1?"s":""} = <b>{persDia} personas</b> al día.</div>
     </div>
     <div style={{fontSize:12.5,color:C.mutedD,lineHeight:1.7,borderTop:`1px solid ${C.border}`,paddingTop:9}}>
       Materia prima <b style={{color:C.text}}>{eur(r.costeMP)}</b> · Mano de obra <b style={{color:C.text}}>{eur(r.costeMO)}</b>
@@ -3014,7 +3017,7 @@ const ItemsEditor = ({ items, setItems, productos, bloqueado, persLinea=3 }) => 
 };
 
 // ── TAB 1: PLAN MENSUAL ────────────────────────────────────────────────────────
-function PlanMesTab({ periodo, setPeriodo, plan, guardar, productos, mps, semanas, planesSem, slotsDia=SLOTS_DIA, persLinea=3, turnosCentro=TURNOS_ABIERTOS, irReparto }) {
+function PlanMesTab({ periodo, setPeriodo, plan, guardar, productos, mps, semanas, planesSem, slotsDia=SLOTS_DIA, persLinea=3, persDia=12, turnosCentro=TURNOS_ABIERTOS, irReparto }) {
   const items = plan.items || [];
   const setItems = (v) => guardar({ items: v });
   const dias = diasLaborablesMes(periodo).length;
@@ -3034,7 +3037,7 @@ function PlanMesTab({ periodo, setPeriodo, plan, guardar, productos, mps, semana
       </div>
 
       <ItemsEditor items={items} setItems={setItems} productos={productos} persLinea={persLinea}/>
-      <RecursosCard r={r} mps={mps} dias={dias} slotsDia={slotsDia} persLinea={persLinea} turnosCentro={turnosCentro} titulo="Recursos del mes"/>
+      <RecursosCard r={r} mps={mps} dias={dias} slotsDia={slotsDia} persDia={persDia} turnosCentro={turnosCentro} titulo="Recursos del mes"/>
 
       <Card style={{marginBottom:12}} color={col+"66"}>
         <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text,marginBottom:10}}>⚖️ Capacidad del mes</div>
@@ -3044,7 +3047,7 @@ function PlanMesTab({ periodo, setPeriodo, plan, guardar, productos, mps, semana
             <div style={{fontSize:10.5,color:C.mutedD}}>Personas que necesito al día</div>
           </div>
           <div style={{background:C.card2,borderRadius:12,padding:"11px 8px",textAlign:"center"}}>
-            <div style={{fontFamily:F.h,fontWeight:900,fontSize:22,color:C.text}}>{slotsDia*persLinea}</div>
+            <div style={{fontFamily:F.h,fontWeight:900,fontSize:22,color:C.text}}>{persDia}</div>
             <div style={{fontSize:10.5,color:C.mutedD}}>Personas disponibles</div>
           </div>
         </div>
@@ -3053,7 +3056,7 @@ function PlanMesTab({ periodo, setPeriodo, plan, guardar, productos, mps, semana
         </div>
         <div style={{background:bg,border:`1.5px solid ${col}`,borderRadius:10,padding:"11px 13px",fontSize:13.5,color:col,fontFamily:F.h,fontWeight:700,lineHeight:1.5}}>
           {estado==="ok" && `✔ Cuadrado — la fábrica va al ${Math.round(ocupacion*100)}%`}
-          {estado==="falta" && `⛔ No cabe — harían falta ${Math.ceil(r.personaTurnos/(dias||1)) - slotsDia*persLinea} personas más al día, o ${Math.ceil((r.slots-capacidad)/slotsDia)} día(s) más de fábrica`}
+          {estado==="falta" && `⛔ No cabe — harían falta ${Math.ceil(r.personaTurnos/(dias||1)) - persDia} personas más al día, o ${Math.ceil((r.slots-capacidad)/slotsDia)} día(s) más de fábrica`}
           {estado==="sobra" && `⚠️ Sobra fábrica — quedan ${((capacidad-r.slots)/slotsDia).toFixed(1)} días libres. Mete más producción.`}
         </div>
       </Card>
@@ -3064,7 +3067,7 @@ function PlanMesTab({ periodo, setPeriodo, plan, guardar, productos, mps, semana
 }
 
 // ── TAB: REPARTO DEL PLAN MENSUAL EN SEMANAS ───────────────────────────────────
-function RepartoTab({ periodo, semanas, planMes, planesSem, productos, slotsDia=SLOTS_DIA, persLinea=3, irASemana }) {
+function RepartoTab({ periodo, semanas, planMes, planesSem, productos, slotsDia=SLOTS_DIA, persLinea=3, persDia=12, irASemana }) {
   const items = planMes.items || [];
   const [draft, setDraft] = useState({});
   const [guardado, setGuardado] = useState(false);
@@ -3186,7 +3189,7 @@ function RepartoTab({ periodo, semanas, planMes, planesSem, productos, slotsDia=
               const r = calcRecursos(semanaItems(s), productos, persLinea);
               const disp = planesSem.find(p=>p.id.startsWith(s))?.slots_disponibles ?? slotsDia*5;
               const necesita = Math.ceil(r.personaTurnos/5);
-              const tiene = Math.round(disp/5*persLinea);
+              const tiene = Math.round(disp/(slotsDia*5)*persDia);
               const est = necesita > tiene ? "falta" : necesita < tiene*0.9 ? "sobra" : "ok";
               const col = est==="ok"?C.green:est==="falta"?C.red:C.amber;
               return (
@@ -3225,8 +3228,10 @@ const DIA_CORTO = (f) => {
 };
 const codigoCorto = (n="") => n.split(" ")[0].slice(0,13);
 
-function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, nombresLinea, persLinea=3, turnosCentro=2 }) {
-  const LINEAS_CAL = (nombresLinea && nombresLinea.length) ? nombresLinea : ["Línea 1","Línea 2"];
+function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLineas, turnosCentro=2 }) {
+  const CFG = (cfgLineas && cfgLineas.length) ? cfgLineas : [{nombre:"Línea 1",personas:3},{nombre:"Línea 2",personas:3}];
+  const LINEAS_CAL = CFG.map(l=>l.nombre);
+  const persDeLinea = (n) => CFG.find(l=>l.nombre===n)?.personas || 3;
   const TURNOS_CAL = Array.from({length: turnosCentro}, (_,i)=>`T${i+1}`);
   const dias = diasDeSemana(semana);
   const cal = plan.calendario || [];
@@ -3254,8 +3259,10 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, nombres
           if (!pid) break;
           const prod = productos.find(p=>p.id===pid);
           const ritmo = ritmoDe(prod), pers = persDe(prod);
-          const nSlots = Math.max(1, Math.ceil(pers/persLinea));
-          if (libres.length < nSlots) break;
+          // cuántas líneas hacen falta para juntar las personas que pide el producto
+          let acum = 0, nSlots = 0;
+          for (const l of libres) { acum += persDeLinea(l); nSlots++; if (acum >= pers) break; }
+          if (acum < pers) break;
           const q = Math.min(ritmo, pend[pid]);
           const g = uid();
           const usadas = libres.splice(0, nSlots);
@@ -3275,10 +3282,12 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, nombres
 
   const asignar = (slot, pid, cantidad) => {
     const prod = productos.find(p=>p.id===pid);
-    const nSlots = Math.max(1, Math.ceil(persDe(prod)/persLinea));
+    const need = persDe(prod);
     const i0 = LINEAS_CAL.indexOf(slot.linea);
-    const usadas = LINEAS_CAL.slice(i0, i0+nSlots);
-    while (usadas.length < nSlots && usadas.length < LINEAS_CAL.length) usadas.unshift(LINEAS_CAL[LINEAS_CAL.indexOf(usadas[0])-1]);
+    const usadas = [];
+    let acum = 0;
+    for (let i=i0; i<LINEAS_CAL.length && acum<need; i++) { usadas.push(LINEAS_CAL[i]); acum += persDeLinea(LINEAS_CAL[i]); }
+    for (let i=i0-1; i>=0 && acum<need; i--) { usadas.unshift(LINEAS_CAL[i]); acum += persDeLinea(LINEAS_CAL[i]); }
     let base = cal.filter(x => !(x.fecha===slot.fecha && x.turno===slot.turno && usadas.includes(x.linea)));
     // si alguna de las líneas ocupadas formaba pareja, se retira la pareja entera
     const rotos = cal.filter(x => x.fecha===slot.fecha && x.turno===slot.turno && usadas.includes(x.linea) && x.grupo);
@@ -3325,7 +3334,7 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, nombres
       {dias.map(f=>{
         const delDia = cal.filter(x=>x.fecha===f);
         const udsDia = delDia.reduce((s,x)=>s+(parseFloat(x.cantidad)||0),0);
-        const persDia = delDia.reduce((s,x)=>s+persLinea,0);
+        const persDia = delDia.reduce((s,x)=>s+persDeLinea(x.linea),0);
         return (
           <Card key={f} style={{marginBottom:10,padding:12}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:9}}>
@@ -3350,10 +3359,10 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, nombres
                         <>
                           <div style={{fontFamily:F.h,fontWeight:800,fontSize:12.5,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{codigoCorto(prod?.nombre||"?")}</div>
                           <div style={{fontFamily:F.h,fontWeight:900,fontSize:17,color:c.bd,marginTop:1}}>{num(e.cantidad)}</div>
-                          <div style={{fontSize:10,color:C.mutedD,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{l} · {(cal.filter(x=>x.grupo===e.grupo).length||1)*persLinea}p</div>
+                          <div style={{fontSize:10,color:C.mutedD,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{l} · {cal.filter(x=>x.grupo===e.grupo).reduce((a,z)=>a+persDeLinea(z.linea),0)||persDeLinea(l)}p</div>
                         </>
                       ) : (
-                        <div style={{color:C.muted,fontSize:11.5,textAlign:"center",paddingTop:16,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{bloqueado?"—":`+ ${l}`}</div>
+                        <div style={{color:C.muted,fontSize:11.5,textAlign:"center",paddingTop:16,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{bloqueado?"—":`+ ${l} · ${persDeLinea(l)}p`}</div>
                       )}
                     </button>
                   );
@@ -3384,7 +3393,7 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, nombres
       </Card>
 
       {edit && <SlotEditor slot={edit} entrada={enSlot(edit.fecha,edit.turno,edit.linea)} productos={productos}
-        items={items} colocado={colocado} objetivo={objetivo} persLinea={persLinea}
+        items={items} colocado={colocado} objetivo={objetivo} persLinea={persDeLinea(edit.linea)}
         onAsignar={asignar} onQuitar={()=>quitar(edit)} onCerrar={()=>setEdit(null)}/>}
     </>
   );
@@ -3464,7 +3473,7 @@ function SlotEditor({ slot, entrada, productos, items, colocado, objetivo, persL
 }
 
 // ── TAB 2: PLAN SEMANAL + CUADRE ───────────────────────────────────────────────
-function PlanSemanaTab({ semana, setSemana, semanas, plan, guardar, productos, mps, perfil, slotsDia=SLOTS_DIA, persLinea=3, turnosCentro=TURNOS_ABIERTOS, nombresLinea }) {
+function PlanSemanaTab({ semana, setSemana, semanas, plan, guardar, productos, mps, perfil, slotsDia=SLOTS_DIA, persLinea=3, persDia=12, turnosCentro=TURNOS_ABIERTOS, cfgLineas }) {
   const items = plan.items || [];
   const bloqueado = !!plan.cerrado_plan;
   const setItems = (v) => guardar({ items: v });
@@ -3512,7 +3521,7 @@ function PlanSemanaTab({ semana, setSemana, semanas, plan, guardar, productos, m
         </div>
       )}
 
-      <CalendarioSemana semana={semana} plan={plan} guardar={guardar} productos={productos} bloqueado={bloqueado} nombresLinea={nombresLinea} persLinea={persLinea} turnosCentro={turnosCentro}/>
+      <CalendarioSemana semana={semana} plan={plan} guardar={guardar} productos={productos} bloqueado={bloqueado} cfgLineas={cfgLineas} turnosCentro={turnosCentro}/>
 
       <button onClick={()=>setVerObjetivo(v=>!v)}
         style={{width:"100%",background:"#fff",border:`1.5px solid ${C.border}`,color:C.mutedD,borderRadius:12,padding:"13px",fontFamily:F.h,fontWeight:800,fontSize:13.5,cursor:"pointer",marginBottom:12}}>
@@ -3520,7 +3529,7 @@ function PlanSemanaTab({ semana, setSemana, semanas, plan, guardar, productos, m
       </button>
       {verObjetivo && <ItemsEditor items={items} setItems={setItems} productos={productos} bloqueado={bloqueado} persLinea={persLinea}/>}
 
-      <RecursosCard r={r} mps={mps} dias={5} slotsDia={slotsDia} persLinea={persLinea} turnosCentro={turnosCentro} titulo={cal.length>0?"Recursos del calendario":"Recursos del objetivo"}/>
+      <RecursosCard r={r} mps={mps} dias={5} slotsDia={slotsDia} persDia={persDia} turnosCentro={turnosCentro} titulo={cal.length>0?"Recursos del calendario":"Recursos del objetivo"}/>
 
       <Card style={{marginBottom:12}} color={col+"66"}>
         <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text,marginBottom:10}}>⚖️ Cuadre</div>
@@ -3530,7 +3539,7 @@ function PlanSemanaTab({ semana, setSemana, semanas, plan, guardar, productos, m
             <div style={{fontSize:10.5,color:C.mutedD}}>Personas al día que necesito</div>
           </div>
           <div style={{background:C.card2,borderRadius:12,padding:"11px 8px",textAlign:"center"}}>
-            <div style={{fontFamily:F.h,fontWeight:900,fontSize:24,color:C.text}}>{Math.round(dispo/5*persLinea)}</div>
+            <div style={{fontFamily:F.h,fontWeight:900,fontSize:24,color:C.text}}>{Math.round(dispo/(slotsDia*5)*persDia)}</div>
             <div style={{fontSize:10.5,color:C.mutedD}}>Personas al día que tengo</div>
           </div>
         </div>
@@ -3543,14 +3552,14 @@ function PlanSemanaTab({ semana, setSemana, semanas, plan, guardar, productos, m
               <button onClick={()=>guardar({slots_disponibles:dispo+1})} style={{width:52,height:52,borderRadius:12,border:`1.5px solid ${C.border}`,background:"#fff",fontSize:24,color:C.text,cursor:"pointer"}}>+</button>
             </div>
             <div style={{fontSize:11.5,color:C.mutedD,marginTop:6,lineHeight:1.5}}>
-              Ahora mismo: <b style={{color:C.text}}>{Math.round(dispo/5*persLinea)} personas al día</b>. Semana completa = {slotsDia*5} ({slotsDia/turnosCentro} línea{slotsDia/turnosCentro!==1?"s":""} × {turnosCentro} turno{turnosCentro!==1?"s":""} × 5 días) = {slotsDia*persLinea} personas. Baja el número por bajas o festivos: cada punto son {persLinea} persona{persLinea!==1?"s":""} menos en un turno.
+              Ahora mismo: <b style={{color:C.text}}>{Math.round(dispo/(slotsDia*5)*persDia)} personas al día</b>. Semana completa = {slotsDia*5} huecos ({slotsDia/turnosCentro} línea{slotsDia/turnosCentro!==1?"s":""} × {turnosCentro} turno{turnosCentro!==1?"s":""} × 5 días) = {persDia} personas al día. Baja el número por bajas o festivos.
             </div>
           </div>
         )}
         <div style={{background:bg,border:`1.5px solid ${col}`,borderRadius:10,padding:"11px 13px",fontSize:13.5,color:col,fontFamily:F.h,fontWeight:700,lineHeight:1.5}}>
           {estado==="ok" && "✔ Cuadra. Puedes cerrar el plan."}
           {estado==="falta" && `⛔ Faltan ${Math.ceil(dif*persLinea/5)} personas al día. Quita producción o suma gente.`}
-          {estado==="sobra" && `⚠️ Sobran ${Math.floor(-dif*persLinea/5)} personas al día sin trabajo asignado. Mete más producción.`}
+          {estado==="sobra" && `⚠️ Sobran ${Math.max(1,Math.floor(-dif*persLinea/5))} personas al día sin trabajo asignado. Mete más producción.`}
         </div>
       </Card>
 
