@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v2.10.2";
+const APP_VERSION = "v2.10.5";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -612,8 +612,7 @@ function OrdenForm({ onBack, ep, productos, lineas, turnos, centros }) {
               options={[{value:"Plan",label:"Plan"},{value:"Pedido",label:"Pedido"},{value:"Encargo",label:"Encargo cliente"}]}/>
           </div>
           {tipo!=="Plan" && <Field label="Cliente (opcional)" value={cliente} onChange={setCliente} placeholder="Ej: Ismael / nº pedido"/>}
-          <Sel label="Producto" value={productoId} onChange={setProductoId} placeholder="Elegir producto…"
-            options={productos.map(p=>({value:p.id,label:`${p.nombre}${p.descripcion?` · ${p.descripcion}`:""}`}))}/>
+          <ProductoBuscador value={productoId} onChange={setProductoId} productos={productos}/>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
             <Sel label="Línea" value={lineaId} onChange={setLineaId} placeholder="Línea…"
               options={lineasDelCentro.map(l=>({value:l.id,label:l.nombre}))}/>
@@ -1624,6 +1623,26 @@ function SyncCatalogoScreen({ onBack, productos }) {
   const [nuevos, setNuevos] = useState([]);
   const [crearNuevos, setCrearNuevos] = useState(false);
   const [log, setLog] = useState("");
+  const [lote, setLote] = useState(null); // {ts, items}
+  const [deshaciendo, setDeshaciendo] = useState(false);
+
+  useEffect(() => {
+    const creados = productos.filter(p => p.desde_catalogo && p.sync_catalogo);
+    if (!creados.length) { setLote(null); return; }
+    const ultimoTs = creados.reduce((a,p)=> p.sync_catalogo>a?p.sync_catalogo:a, creados[0].sync_catalogo);
+    const items = creados.filter(p => p.sync_catalogo === ultimoTs);
+    setLote({ ts: ultimoTs, items });
+  }, [productos]);
+
+  const deshacerLote = async () => {
+    if (!lote) return;
+    if (!window.confirm(`Esto BORRARÁ los ${lote.items.length} productos creados automáticamente el ${new Date(lote.ts).toLocaleString()}.\n\nSolo se tocan productos marcados "desde_catalogo" de ese lote exacto — nada más.\n\n¿Confirmas?`)) return;
+    setDeshaciendo(true);
+    let n=0;
+    for (const p of lote.items) { await del("productos", p.id); n++; setLog(`Borrando… ${n}/${lote.items.length}`); }
+    setLog(`✅ Deshecho: ${n} productos eliminados.`);
+    setDeshaciendo(false);
+  };
 
   const FB = "https://firestore.googleapis.com/v1/projects/grupo-consolidado-crm/databases/(default)/documents";
   const sv = (f,k) => (f[k]&&(f[k].stringValue??f[k].doubleValue??f[k].integerValue))||"";
@@ -1670,6 +1689,8 @@ function SyncCatalogoScreen({ onBack, productos }) {
       setLog(`Actualizando… ${na}/${matches.length}`);
     }
     if (crearNuevos) {
+      const conf = window.prompt(`Vas a CREAR ${nuevos.length} productos nuevos sin centro ni escandallo.\n\nEscribe el número ${nuevos.length} para confirmar:`);
+      if (conf !== String(nuevos.length)) { setLog("❌ Creación de nuevos cancelada (no coincidía el número)."); setEstado("fin"); return; }
       for (const c of nuevos) {
         await save("productos", uid(), { nombre:c.codigo, descripcion:c.descripcion||"", calibre_catalogo:c.calibre||"",
           formato_catalogo:c.formato||"", medida_catalogo:c.metros||"", precio_venta:parseFloat(String(c.precio).replace(",","."))||null,
@@ -1686,6 +1707,17 @@ function SyncCatalogoScreen({ onBack, productos }) {
     <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
       <Header title="SINCRONIZAR CATÁLOGO" onBack={onBack} sub="Lee el catálogo del CRM (solo lectura) y enriquece tus productos por código"/>
       <div style={{padding:14}}>
+        {lote && lote.items.length>0 && (
+          <Card style={{marginBottom:14,border:`1.5px solid ${C.red||"#DC2626"}`}}>
+            <div style={{fontSize:14,fontWeight:700,color:C.red||"#DC2626",marginBottom:4}}>⚠️ Último lote creado automáticamente</div>
+            <div style={{fontSize:13,color:C.muted,marginBottom:10}}>
+              {lote.items.length} productos · {new Date(lote.ts).toLocaleString()}. Si fue sin querer, deshazlo aquí (borra solo este lote).
+            </div>
+            <Btn onClick={deshacerLote} disabled={deshaciendo} style={{background:C.red||"#DC2626"}}>
+              {deshaciendo?"⏳ Borrando…":`🗑️ Deshacer (borrar ${lote.items.length})`}
+            </Btn>
+          </Card>
+        )}
         <Card style={{marginBottom:14}}>
           <div style={{fontSize:14,color:C.muted,lineHeight:1.6,marginBottom:12}}>
             Fuente: <b>grupo-consolidado-crm</b> · colección <b>productos</b>. Casa por código y trae: descripción, calibre, formato, medida, precio de venta y categoría. Nunca escribe en el catálogo.
@@ -2168,9 +2200,66 @@ function prodInfo(nombre){
   return {desc:fam+" ("+capas+")", linea2:fam+" ("+capas+") · Ø"+cal+" · "+metros+" m"};
 }
 
+function ProductoBuscador({ label="Producto", value, onChange, productos, placeholder="Buscar por código, descripción o calibre…" }) {
+  const [q, setQ] = useState("");
+  const [abierto, setAbierto] = useState(false);
+  const sel = productos.find(p=>p.id===value) || null;
+  const info = p => {
+    const cat=[p.descripcion, p.calibre_catalogo?`Ø${p.calibre_catalogo}`:null, p.metros_finales?`${p.metros_finales} m`:(p.medida_catalogo?`${p.medida_catalogo} m`:null)].filter(Boolean).join(" · ");
+    return cat || prodInfo(p.nombre).linea2 || "";
+  };
+  const norm = s => String(s||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+  const términos = norm(q).split(/\s+/).filter(Boolean);
+  const results = q.trim()==="" ? productos : productos.filter(p=>{
+    const hay = norm(p.nombre+" "+(p.descripcion||"")+" "+(p.calibre_catalogo||""));
+    return términos.every(t=>hay.includes(t));
+  });
+  return (
+    <div style={{marginBottom:14}}>
+      {label && <label style={{display:"block",fontFamily:F.h,fontWeight:600,fontSize:12,color:C.mutedD,marginBottom:5,letterSpacing:0.2}}>{label}</label>}
+      {!abierto && sel && (
+        <div onClick={()=>{setAbierto(true);setQ("");}} style={{background:"#fff",border:`1.5px solid ${C.blue}`,borderRadius:12,padding:"12px 14px",cursor:"pointer"}}>
+          <div style={{fontFamily:F.h,fontWeight:800,fontSize:17,color:C.text}}>{sel.nombre}</div>
+          {info(sel) && <div style={{fontSize:13,color:C.blue,fontWeight:600,marginTop:2}}>{info(sel)}</div>}
+        </div>
+      )}
+      {(abierto || !sel) && (
+        <div style={{position:"relative"}}>
+          <div style={{position:"relative"}}>
+            <span style={{position:"absolute",left:13,top:12,fontSize:15,color:C.muted}}>🔍</span>
+            <input autoFocus={abierto} value={q} onChange={e=>setQ(e.target.value)} onFocus={()=>setAbierto(true)}
+              placeholder={placeholder}
+              style={{width:"100%",background:"#fff",border:`1px solid ${C.border}`,color:C.text,borderRadius:12,padding:"12px 14px 12px 36px",fontFamily:F.b,fontSize:15,outline:"none",boxSizing:"border-box"}}/>
+          </div>
+          {abierto && (
+            <div style={{marginTop:6,maxHeight:280,overflowY:"auto",background:"#fff",border:`1px solid ${C.border}`,borderRadius:12}}>
+              {results.length===0 && <div style={{padding:14,fontSize:13,color:C.muted}}>Sin resultados</div>}
+              {results.slice(0,60).map(p=>(
+                <div key={p.id} onClick={()=>{onChange(p.id);setAbierto(false);setQ("");}}
+                  style={{padding:"10px 14px",borderBottom:`1px solid ${C.border}`,cursor:"pointer"}}>
+                  <div style={{fontFamily:F.h,fontWeight:800,fontSize:16,color:C.text}}>{p.nombre}</div>
+                  {info(p) && <div style={{fontSize:12.5,color:C.blue,fontWeight:600,marginTop:1}}>{info(p)}</div>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ProductosScreen({ onBack, procesos, mps, centros }) {
   const [productos] = useCol("productos", "nombre");
   const [edit, setEdit] = useState(null);
+  const [busq, setBusq] = useState("");
+  const normB = s => String(s||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+  const infoLB = p => [p.descripcion, p.calibre_catalogo?`Ø${p.calibre_catalogo}`:null, p.metros_finales?`${p.metros_finales} m`:(p.medida_catalogo?`${p.medida_catalogo} m`:null)].filter(Boolean).join(" · ") || prodInfo(p.nombre).linea2 || "";
+  const términosB = normB(busq).split(/\s+/).filter(Boolean);
+  const productosFiltrados = términosB.length===0 ? productos : productos.filter(p=>{
+    const hay = normB(p.nombre+" "+(p.descripcion||"")+" "+(p.calibre_catalogo||""));
+    return términosB.every(t=>hay.includes(t));
+  });
   if (edit !== null) return <ProductoForm onBack={()=>setEdit(null)} ep={edit.id?edit:null} procesos={procesos} mps={mps} centros={centros}/>;
 
   const duplicar = async p => {
@@ -2182,9 +2271,15 @@ function ProductosScreen({ onBack, procesos, mps, centros }) {
       <Header title="PRODUCTOS" onBack={onBack}/>
       <div style={{padding:14}}>
         <Btn onClick={()=>setEdit({})} style={{marginBottom:14}}>＋ Nuevo Producto</Btn>
+        <div style={{position:"relative",marginBottom:14}}>
+          <span style={{position:"absolute",left:13,top:12,fontSize:15,color:C.muted}}>🔍</span>
+          <input value={busq} onChange={e=>setBusq(e.target.value)} placeholder="Buscar por código, descripción o calibre…"
+            style={{width:"100%",background:"#fff",border:`1px solid ${C.border}`,color:C.text,borderRadius:12,padding:"12px 14px 12px 36px",fontFamily:F.b,fontSize:15,outline:"none",boxSizing:"border-box"}}/>
+        </div>
         {productos.length===0 && <Empty icon="🏷️" text="Sin productos"/>}
+        {productos.length>0 && productosFiltrados.length===0 && <Empty icon="🔍" text="Sin resultados para tu búsqueda"/>}
         <div style={{display:"flex",flexDirection:"column",gap:8}}>
-          {productos.map(p=>(
+          {productosFiltrados.map(p=>(
             <Card key={p.id}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10}}>
                 <div style={{flex:1,minWidth:0}}>
@@ -2196,6 +2291,18 @@ function ProductosScreen({ onBack, procesos, mps, centros }) {
                     {" · "}Coste obj: <span style={{color:C.text,fontWeight:700}}>{p.coste_objetivo}€/{p.unidad}</span>
                     {" · "}{p.procesos_asignados?.length||0} procesos · {p.materias_asignadas?.length||0} materias
                   </div>
+                  {p.precio_venta>0 && (
+                    <div style={{marginTop:4,display:"flex",gap:8,alignItems:"center"}}>
+                      <span style={{background:C.greenBg,border:`1.5px solid ${C.green}`,borderRadius:8,padding:"2px 9px",fontSize:12.5,fontFamily:F.h,fontWeight:800,color:C.green}}>
+                        💶 Venta: {p.precio_venta.toFixed(2)} €
+                      </span>
+                      {p.coste_objetivo>0 && (
+                        <span style={{fontSize:12,color:C.muted,fontWeight:600}}>
+                          margen {(p.precio_venta-p.coste_objetivo).toFixed(2)} € · {((p.precio_venta-p.coste_objetivo)/p.precio_venta*100).toFixed(0)}%
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <div style={{display:"flex",gap:6,flexShrink:0}}>
                   <IconBtn onClick={()=>setEdit(p)}>✏️</IconBtn>
@@ -2226,14 +2333,41 @@ function ProductoForm({ onBack, ep, procesos, mps, centros }) {
   const [centro, setCentro] = useState(ep?.centro||"");
   const [unidad, setUnidad] = useState(ep?.unidad||"Stick");
   const [coste, setCoste]   = useState(ep?.coste_objetivo?.toString()||"");
+  const [precioVenta, setPrecioVenta] = useState(ep?.precio_venta?.toString()||"");
   const [mFinales, setMFinales] = useState(ep?.metros_finales?.toString()||"");
   const [objDiario, setObjDiario] = useState(ep?.objetivo_diario?.toString()||"");
   const [pa, setPa]         = useState(ep?.procesos_asignados||[]); // [{proceso_id,min_obj,define_cantidad}]
-  const [ma, setMa]         = useState(ep?.materias_asignadas||[]); // [{mp_id,capas}]
+  const [ma, setMa]         = useState(ep?.materias_asignadas||[]); // [{mp_id,capas,precio_ud,rendimiento}]
   const [selProc, setSelProc] = useState("");
   const [minObj, setMinObj]   = useState("");
   const [selMp, setSelMp]     = useState("");
   const [capas, setCapas]     = useState("");
+  const [precioMp, setPrecioMp] = useState("");
+  const [rendMp, setRendMp]     = useState("");
+
+  const tarifaMO = centros.find(c=>c.id===centro)?.tarifa_mo || 12.5;
+
+  const onSelMp = (id) => {
+    setSelMp(id);
+    const m = mps.find(x=>x.id===id);
+    setPrecioMp(m?.precio_ud?.toString()||"");
+    setRendMp(m?.rendimiento_objetivo?.toString()||"85");
+  };
+
+  // Coste de materia prima objetivo por línea del escandallo: metros teóricos ÷ rendimiento × precio
+  const costeMatLinea = (capasN, precioN, rendN) => {
+    const metros = (parseFloat(mFinales)||0) * capasN;
+    const rend = rendN>0 ? rendN/100 : 1;
+    return rend>0 ? (metros/rend)*precioN : 0;
+  };
+  const costeMPTotal = ma.reduce((s,x)=>s+costeMatLinea(x.capas, x.precio_ud||0, x.rendimiento||100), 0);
+  // Coste de mano de obra objetivo por proceso: minutos/ud ÷ 60 × tarifa del centro
+  const costeProcLinea = (minObjN) => (minObjN/60)*tarifaMO;
+  const costeMOTotal = pa.reduce((s,x)=>s+costeProcLinea(x.min_obj||0), 0);
+  const costeCalculado = costeMPTotal + costeMOTotal;
+  const costeFinal = parseFloat(coste)||0;
+  const pv = parseFloat(precioVenta)||0;
+  const margenPct = pv>0 ? ((pv-costeFinal)/pv*100) : null;
 
   const addProc = () => {
     if (!selProc || !minObj) return;
@@ -2244,8 +2378,8 @@ function ProductoForm({ onBack, ep, procesos, mps, centros }) {
   const addMp = () => {
     if (!selMp || !capas) return;
     if (ma.find(x=>x.mp_id===selMp)) return;
-    setMa(prev=>[...prev,{mp_id:selMp,capas:parseInt(capas)}]);
-    setSelMp(""); setCapas("");
+    setMa(prev=>[...prev,{mp_id:selMp,capas:parseInt(capas),precio_ud:parseFloat(precioMp)||0,rendimiento:parseFloat(rendMp)||100}]);
+    setSelMp(""); setCapas(""); setPrecioMp(""); setRendMp("");
   };
   const guardar = async () => {
     if (!nombre.trim()) return;
@@ -2253,6 +2387,8 @@ function ProductoForm({ onBack, ep, procesos, mps, centros }) {
     await save("productos", ep?.id||uid(), {
       nombre: nombre.trim(), centro, unidad: unidad.trim()||"ud",
       coste_objetivo: parseFloat(coste)||0,
+      coste_mp_objetivo: costeMPTotal, coste_mo_objetivo: costeMOTotal,
+      precio_venta: pv||null,
       metros_finales: parseFloat(mFinales)||0,
       objetivo_diario: parseFloat(objDiario)||0,
       procesos_asignados: pa, materias_asignadas: ma,
@@ -2273,7 +2409,7 @@ function ProductoForm({ onBack, ep, procesos, mps, centros }) {
           </div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
             <Field label="Objetivo diario (uds)" value={objDiario} onChange={setObjDiario} type="number" placeholder="100" min="0" step="1"/>
-            <Field label="Coste objetivo (€/ud)" value={coste} onChange={setCoste} type="number" placeholder="3.50" min="0" step="0.01"/>
+            <Field label="Precio medio de venta (€)" value={precioVenta} onChange={setPrecioVenta} type="number" placeholder="9.00" min="0" step="0.01"/>
           </div>
         </Card>
 
@@ -2281,57 +2417,116 @@ function ProductoForm({ onBack, ep, procesos, mps, centros }) {
         <Card style={{marginBottom:14}}>
           <div style={{fontFamily:F.h,fontWeight:700,fontSize:17,color:C.text,marginBottom:4}}>PROCESOS</div>
           <div style={{fontSize:13,color:C.muted,marginBottom:12}}>Del catálogo global, con tiempo objetivo por {unidad||"ud"}. ★ = define la cantidad producida</div>
+          <div style={{fontSize:12,color:C.blue,fontWeight:700,marginBottom:8}}>Tarifa del centro: {tarifaMO.toFixed(2)} €/h — el coste de mano de obra se calcula solo</div>
           {pa.map(x=>{
             const pr = procesos.find(z=>z.id===x.proceso_id);
+            const cst = costeProcLinea(x.min_obj||0);
             return (
-              <div key={x.proceso_id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:`1px solid ${C.border}`}}>
-                <div>
-                  <span style={{fontFamily:F.h,fontWeight:600,fontSize:16,color:C.text}}>{pr?.diferido?"⏭ ":""}{pr?.nombre||"?"}</span>
-                  <span style={{color:C.accent,fontSize:14,marginLeft:10,fontWeight:600}}>{x.min_obj} min/{unidad||"ud"}</span>
+              <div key={x.proceso_id} style={{padding:"9px 0",borderBottom:`1px solid ${C.border}`}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <div>
+                    <span style={{fontFamily:F.h,fontWeight:600,fontSize:16,color:C.text}}>{pr?.diferido?"⏭ ":""}{pr?.nombre||"?"}</span>
+                    <span style={{color:C.accent,fontSize:14,marginLeft:10,fontWeight:600}}>{x.min_obj} min/{unidad||"ud"}</span>
+                  </div>
+                  <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                    <button onClick={()=>setPa(prev=>prev.map(z=>({...z,define_cantidad:z.proceso_id===x.proceso_id})))}
+                      style={{background:"#fff",border:`1.5px solid ${x.define_cantidad?C.green:C.border}`,color:x.define_cantidad?C.green:C.muted,borderRadius:20,padding:"3px 12px",fontSize:12,fontFamily:F.h,fontWeight:600,cursor:"pointer"}}>
+                      {x.define_cantidad?"★ Define qty":"◯"}
+                    </button>
+                    <button onClick={()=>setPa(prev=>prev.filter(z=>z.proceso_id!==x.proceso_id))}
+                      style={{background:"none",border:"none",color:C.red,fontSize:18,cursor:"pointer"}}>✕</button>
+                  </div>
                 </div>
-                <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                  <button onClick={()=>setPa(prev=>prev.map(z=>({...z,define_cantidad:z.proceso_id===x.proceso_id})))}
-                    style={{background:"#fff",border:`1.5px solid ${x.define_cantidad?C.green:C.border}`,color:x.define_cantidad?C.green:C.muted,borderRadius:20,padding:"3px 12px",fontSize:12,fontFamily:F.h,fontWeight:600,cursor:"pointer"}}>
-                    {x.define_cantidad?"★ Define qty":"◯"}
-                  </button>
-                  <button onClick={()=>setPa(prev=>prev.filter(z=>z.proceso_id!==x.proceso_id))}
-                    style={{background:"none",border:"none",color:C.red,fontSize:18,cursor:"pointer"}}>✕</button>
-                </div>
+                <div style={{fontSize:12.5,color:C.green,fontWeight:700,marginTop:2}}>→ {cst.toFixed(3)} €/{unidad||"ud"} de mano de obra</div>
               </div>
             );
           })}
           <div style={{display:"grid",gridTemplateColumns:"2fr 1fr auto",gap:8,marginTop:12,alignItems:"end"}}>
             <Sel value={selProc} onChange={setSelProc} placeholder="Proceso…"
               options={procesos.filter(p=>!pa.find(x=>x.proceso_id===p.id)).map(p=>({value:p.id,label:p.nombre}))}/>
-            <Field value={minObj} onChange={setMinObj} type="number" placeholder="min/ud" min="0.01" step="0.01"/>
+            <Field label="Tiempo (min/ud)" value={minObj} onChange={setMinObj} type="number" placeholder="min/ud" min="0.01" step="0.01"/>
             <button onClick={addProc} style={{background:C.accent,border:"none",color:"#fff",borderRadius:11,padding:"13px 18px",fontFamily:F.h,fontWeight:700,fontSize:17,cursor:"pointer",marginBottom:14}}>＋</button>
           </div>
+          {pa.length>0 && (
+            <div style={{marginTop:10,paddingTop:10,borderTop:`1.5px solid ${C.border}`,display:"flex",justifyContent:"space-between"}}>
+              <span style={{fontFamily:F.h,fontWeight:700,fontSize:14,color:C.text}}>COSTE OBJETIVO MANO DE OBRA</span>
+              <span style={{fontFamily:F.h,fontWeight:800,fontSize:16,color:C.green}}>{costeMOTotal.toFixed(2)} €/{unidad||"ud"}</span>
+            </div>
+          )}
         </Card>
 
         {/* MATERIAS */}
         <Card style={{marginBottom:14}}>
           <div style={{fontFamily:F.h,fontWeight:700,fontSize:17,color:C.text,marginBottom:4}}>ESCANDALLO DE MATERIAS — por capas</div>
-          <div style={{fontSize:13,color:C.muted,marginBottom:12}}>Teórico = {mFinales||"?"} m finales × nº capas de cada materia</div>
+          <div style={{fontSize:13,color:C.muted,marginBottom:12}}>Teórico = {mFinales||"?"} m finales × nº capas ÷ rendimiento × precio</div>
           {ma.map(x=>{
             const m = mps.find(z=>z.id===x.mp_id);
+            const cst = costeMatLinea(x.capas, x.precio_ud||0, x.rendimiento||100);
             return (
-              <div key={x.mp_id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:`1px solid ${C.border}`}}>
-                <div>
-                  <span style={{fontFamily:F.h,fontWeight:600,fontSize:16,color:C.text}}>{m?.nombre||"?"}</span>
-                  <span style={{color:C.blue,fontSize:14,marginLeft:10,fontWeight:700}}>{x.capas} capa{x.capas>1?"s":""} → {((parseFloat(mFinales)||0)*x.capas).toFixed(1)} m/ud</span>
-                  <span style={{color:C.muted,fontSize:12,marginLeft:8}}>obj {m?.rendimiento_objetivo}%</span>
+              <div key={x.mp_id} style={{padding:"9px 0",borderBottom:`1px solid ${C.border}`}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <div>
+                    <span style={{fontFamily:F.h,fontWeight:600,fontSize:16,color:C.text}}>{m?.nombre||"?"}</span>
+                    <span style={{color:C.blue,fontSize:14,marginLeft:10,fontWeight:700}}>{x.capas} capa{x.capas>1?"s":""}</span>
+                  </div>
+                  <button onClick={()=>setMa(prev=>prev.filter(z=>z.mp_id!==x.mp_id))}
+                    style={{background:"none",border:"none",color:C.red,fontSize:18,cursor:"pointer"}}>✕</button>
                 </div>
-                <button onClick={()=>setMa(prev=>prev.filter(z=>z.mp_id!==x.mp_id))}
-                  style={{background:"none",border:"none",color:C.red,fontSize:18,cursor:"pointer"}}>✕</button>
+                <div style={{fontSize:12.5,color:C.muted,marginTop:2}}>
+                  {((parseFloat(mFinales)||0)*x.capas).toFixed(1)} m/ud · {x.precio_ud} €/m · rend. {x.rendimiento}%
+                  <span style={{color:C.green,fontWeight:700,marginLeft:8}}>→ {cst.toFixed(3)} €/{unidad||"ud"}</span>
+                </div>
               </div>
             );
           })}
-          <div style={{display:"grid",gridTemplateColumns:"2fr 1fr auto",gap:8,marginTop:12,alignItems:"end"}}>
-            <Sel value={selMp} onChange={setSelMp} placeholder="Materia prima…"
+          <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:8,marginTop:12}}>
+            <Sel value={selMp} onChange={onSelMp} placeholder="Materia prima…"
               options={mps.filter(m=>!ma.find(x=>x.mp_id===m.id)).map(m=>({value:m.id,label:m.nombre}))}/>
-            <Field value={capas} onChange={setCapas} type="number" placeholder="capas (1-4)" min="1" step="1"/>
-            <button onClick={addMp} style={{background:C.accent,border:"none",color:"#fff",borderRadius:11,padding:"13px 18px",fontFamily:F.h,fontWeight:700,fontSize:17,cursor:"pointer",marginBottom:14}}>＋</button>
+            <Field label="Capas" value={capas} onChange={setCapas} type="number" placeholder="1-4" min="1" step="1"/>
           </div>
+          {selMp && (
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr auto",gap:8,alignItems:"end"}}>
+              <Field label="Precio (€/m)" value={precioMp} onChange={setPrecioMp} type="number" placeholder="0.09" min="0" step="0.001"/>
+              <Field label="Rendimiento (%)" value={rendMp} onChange={setRendMp} type="number" placeholder="85" min="1" step="1"/>
+              <button onClick={addMp} style={{background:C.accent,border:"none",color:"#fff",borderRadius:11,padding:"13px 18px",fontFamily:F.h,fontWeight:700,fontSize:17,cursor:"pointer",marginBottom:14}}>＋</button>
+            </div>
+          )}
+          {ma.length>0 && (
+            <div style={{marginTop:10,paddingTop:10,borderTop:`1.5px solid ${C.border}`,display:"flex",justifyContent:"space-between"}}>
+              <span style={{fontFamily:F.h,fontWeight:700,fontSize:14,color:C.text}}>COSTE OBJETIVO MATERIA PRIMA</span>
+              <span style={{fontFamily:F.h,fontWeight:800,fontSize:16,color:C.green}}>{costeMPTotal.toFixed(2)} €/{unidad||"ud"}</span>
+            </div>
+          )}
+        </Card>
+
+        {/* RESUMEN DE COSTE OBJETIVO */}
+        <Card style={{marginBottom:14,background:C.blueBg,border:`1.5px solid ${C.blue}`}}>
+          <div style={{fontFamily:F.h,fontWeight:800,fontSize:16,color:C.blue,marginBottom:10}}>💶 COSTE OBJETIVO DE PRODUCTO FINAL</div>
+          <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0",fontSize:14}}>
+            <span style={{color:C.text}}>Materia prima</span><span style={{fontWeight:700,color:C.text}}>{costeMPTotal.toFixed(2)} €</span>
+          </div>
+          <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0",fontSize:14}}>
+            <span style={{color:C.text}}>Mano de obra</span><span style={{fontWeight:700,color:C.text}}>{costeMOTotal.toFixed(2)} €</span>
+          </div>
+          <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderTop:`1px solid ${C.blue}55`,marginTop:6}}>
+            <span style={{fontFamily:F.h,fontWeight:800,fontSize:15,color:C.blue}}>TOTAL CALCULADO</span>
+            <span style={{fontFamily:F.h,fontWeight:800,fontSize:18,color:C.blue}}>{costeCalculado.toFixed(2)} €/{unidad||"ud"}</span>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr auto",gap:8,alignItems:"end",marginTop:10}}>
+            <Field label="Coste objetivo a guardar (€/ud)" value={coste} onChange={setCoste} type="number" placeholder="3.50" min="0" step="0.01"/>
+            {costeCalculado>0 && <button onClick={()=>setCoste(costeCalculado.toFixed(2))}
+              style={{background:"#fff",border:`1.5px solid ${C.blue}`,color:C.blue,borderRadius:11,padding:"12px 14px",fontFamily:F.h,fontWeight:700,fontSize:13,cursor:"pointer",marginBottom:14,whiteSpace:"nowrap"}}>
+              ↧ Usar calculado
+            </button>}
+          </div>
+          {pv>0 && costeFinal>0 && (
+            <div style={{display:"flex",justifyContent:"space-between",padding:"8px 10px",background:"#fff",borderRadius:10,marginTop:4}}>
+              <span style={{fontSize:13,color:C.muted}}>Margen vs. venta ({pv.toFixed(2)} €)</span>
+              <span style={{fontFamily:F.h,fontWeight:800,fontSize:15,color:margenPct>=25?C.green:margenPct>=10?C.accent:C.red}}>
+                {(pv-costeFinal).toFixed(2)} € · {margenPct.toFixed(0)}%
+              </span>
+            </div>
+          )}
         </Card>
         <Btn onClick={guardar}>💾 Guardar Producto</Btn>
       </div>
