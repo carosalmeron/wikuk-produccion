@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v2.17.0";
+const APP_VERSION = "v2.17.2";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -2853,11 +2853,16 @@ function PlanificacionScreen({ onBack, perfil, productos, mps, producciones, cen
   useEffect(()=>{ if(!centroId && centros.length) setCentroId(centros[0].id); },[centros.length]);
   const centro = centros.find(c=>c.id===centroId);
   const lineasCentro = lineas.filter(l=>l.centro===centroId && l.activo!==false);
-  const nombresLinea = lineasCentro.length>0 ? lineasCentro.map(l=>l.nombre) : ["Línea 1","Línea 2"];
-  const nLineas = nombresLinea.length;
-  const persLinea = parseInt(centro?.personas_linea) || 3;
+  const cfgLineas = lineasCentro.length>0
+    ? lineasCentro.map(l=>({ nombre: l.nombre, personas: parseInt(l.personas)||3 }))
+    : [{nombre:"Línea 1",personas:3},{nombre:"Línea 2",personas:3}];
+  const nombresLinea = cfgLineas.map(l=>l.nombre);
+  const nLineas = cfgLineas.length;
   const turnosCentro = parseInt(centro?.turnos_abiertos) || 2;
   const slotsDia = nLineas * turnosCentro;
+  const persPorTurno = cfgLineas.reduce((a,l)=>a+l.personas, 0);
+  const persDia = persPorTurno * turnosCentro;
+  const persLinea = Math.round(persPorTurno/nLineas) || 3;
   const prodCentro = productos.filter(p => p.centro === centroId);
   const [periodo, setPeriodo] = useState(periodoActual());
   const semanas = semanasDeMes(periodo);
@@ -2875,6 +2880,28 @@ function PlanificacionScreen({ onBack, perfil, productos, mps, producciones, cen
 
   const guardarMes = (data) => save("planes_mes", idMes, { periodo, centro: centroId, ...data });
   const guardarSem = (data) => save("planes_semana", idSem, { semana, periodo, centro: centroId, ...data });
+
+  // ── Rescate de planes creados antes de separar por centro (no llevan centro dentro)
+  const huerfanosMes = planesMesAll.filter(p => !p.centro);
+  const huerfanosSem = planesSemAll.filter(p => !p.centro);
+  const nHuerfanos = huerfanosMes.length + huerfanosSem.length;
+  const adoptar = async () => {
+    if (!centroId) return;
+    if (!window.confirm(`Se van a asignar ${nHuerfanos} planificación(es) antigua(s) al centro "${centro?.nombre}".\n\nSi eran de otro centro, cámbiate a ese centro antes de hacerlo. ¿Seguir?`)) return;
+    for (const p of huerfanosMes) {
+      const per = p.periodo || p.id;
+      const { id: _im, ...datosMes } = p;
+      await save("planes_mes", `${per}__${centroId}`, { ...datosMes, periodo: per, centro: centroId });
+      await del("planes_mes", p.id);
+    }
+    for (const p of huerfanosSem) {
+      const sem = p.semana || p.id;
+      const { id: _is, ...datosSem } = p;
+      await save("planes_semana", `${sem}__${centroId}`, { ...datosSem, semana: sem, centro: centroId });
+      await del("planes_semana", p.id);
+    }
+    window.alert("Recuperadas. Revisa el mes y la semana que estabas usando.");
+  };
 
   const TABS = [["mes","📅 Mes"],["reparto","✂️ Reparto"],["semana","🗓️ Semana"],["cierre","🔒 Cierre"]];
 
@@ -2898,6 +2925,16 @@ function PlanificacionScreen({ onBack, perfil, productos, mps, producciones, cen
         ))}
       </div>
       <div style={{padding:12,maxWidth:900,margin:"0 auto"}}>
+        {nHuerfanos>0 && (
+          <Card style={{marginBottom:12}} color={C.amber+"88"}>
+            <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.amber,marginBottom:5}}>🛟 Planificaciones antiguas sin centro</div>
+            <div style={{fontSize:12.5,color:C.mutedD,lineHeight:1.6,marginBottom:10}}>
+              Hay {nHuerfanos} planificación{nHuerfanos!==1?"es":""} guardada{nHuerfanos!==1?"s":""} antes de separar por centro: {huerfanosMes.map(p=>p.periodo||p.id).concat(huerfanosSem.map(p=>p.semana||p.id)).join(" · ")}.
+              No se ven porque no saben a qué centro pertenecen. Ponte en el centro correcto y adóptalas.
+            </div>
+            <Btn v="secondary" onClick={adoptar}>Asignarlas a “{centro?.nombre||"este centro"}”</Btn>
+          </Card>
+        )}
         {lineasCentro.length===0 && (
           <div style={{background:C.amberBg,border:`1.5px solid ${C.amber}`,borderRadius:12,padding:"11px 14px",marginBottom:12,fontSize:12.5,color:C.amber,fontFamily:F.h,fontWeight:700,lineHeight:1.5}}>
             ⚠️ Este centro no tiene líneas dadas de alta. Se está calculando con 2 líneas por defecto. Créalas en Líneas de Producción.
