@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v2.19.0";
+const APP_VERSION = "v2.20.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -2993,6 +2993,22 @@ function PlanificacionScreen({ onBack, perfil, productos, mps, producciones, cen
     window.alert("Recuperadas. Revisa el mes y la semana que estabas usando.");
   };
 
+  // Copia el calendario de la semana actual al resto de semanas abiertas del mes
+  const replicarEnMes = async (calBase) => {
+    const origen = diasDeSemana(semana);
+    const destino = semanas.filter(sm => sm !== semana &&
+      !planesSemAll.find(p => p.id === `${sm}__${centroId}`)?.cerrado_plan);
+    if (destino.length === 0) { window.alert("No hay más semanas abiertas en este mes."); return 0; }
+    for (const sm of destino) {
+      const ds = diasDeSemana(sm);
+      const nuevo = calBase
+        .map(x => ({ ...x, id: uid(), fecha: ds[origen.indexOf(x.fecha)] }))
+        .filter(x => x.fecha);
+      await save("planes_semana", `${sm}__${centroId}`, { semana: sm, periodo, centro: centroId, calendario: nuevo });
+    }
+    return destino.length;
+  };
+
   const TABS = [["mes","📅 Mes"],["reparto","✂️ Reparto"],["semana","🗓️ Semana"],["cierre","🔒 Cierre"]];
 
   return (
@@ -3040,7 +3056,7 @@ function PlanificacionScreen({ onBack, perfil, productos, mps, producciones, cen
         {tab==="reparto" && <RepartoTab periodo={periodo} semanas={semanas} planMes={planMes} planesSem={planesSem}
           productos={prodCentro} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} irASemana={(s)=>{ setSemana(s); setTab("semana"); }}/>}
         {tab==="semana" && <PlanSemanaTab semana={semana} setSemana={setSemana} semanas={semanas} plan={planSem}
-          guardar={guardarSem} productos={prodCentro} mps={mps} perfil={perfil} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} turnosCentro={turnosCentro} cfgLineas={cfgLineas} centroNombre={centro?.nombre||""}/>}
+          guardar={guardarSem} productos={prodCentro} mps={mps} perfil={perfil} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} turnosCentro={turnosCentro} cfgLineas={cfgLineas} centroNombre={centro?.nombre||""} replicarEnMes={replicarEnMes} nSemanasMes={semanas.length}/>}
         {tab==="cierre" && <CierreSemanaTab semana={semana} setSemana={setSemana} semanas={semanas} plan={planSem}
           guardar={guardarSem} productos={prodCentro} mps={mps} producciones={producciones} perfil={perfil}/>}
       </div>
@@ -3390,7 +3406,7 @@ const DIA_CORTO = (f) => {
 };
 const codigoCorto = (n="") => n.split(" ")[0].slice(0,13);
 
-function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLineas, turnosCentro=2 }) {
+function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLineas, turnosCentro=2, replicarEnMes, nSemanasMes=4 }) {
   const CFG = (cfgLineas && cfgLineas.length) ? cfgLineas : [{nombre:"Línea 1",personas:3},{nombre:"Línea 2",personas:3}];
   const LINEAS_CAL = CFG.map(l=>l.nombre);
   const persDeLinea = (n) => CFG.find(l=>l.nombre===n)?.personas || 3;
@@ -3466,6 +3482,42 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
     setCal(cal.filter(x => e.grupo ? x.grupo!==e.grupo : x.id!==e.id));
     setEdit(null);
   };
+  // ── Repetir un patrón en más sitios ─────────────────────────────────────────
+  const resumenDe = (entradas) => {
+    const t = {};
+    entradas.forEach(x => { t[x.producto_id] = (t[x.producto_id]||0) + toNum(x.cantidad); });
+    return Object.entries(t).map(([pid,q]) => `· ${productos.find(p=>p.id===pid)?.nombre||"?"}: ${num(q)} uds`).join("\n");
+  };
+
+  const repetirTurnoEnDia = (f, t) => {
+    const patron = cal.filter(x => x.fecha===f && x.turno===t);
+    if (!patron.length) { window.alert("Este turno está vacío. Planifícalo primero."); return; }
+    const otros = TURNOS_CAL.filter(z => z !== t);
+    if (!otros.length) { window.alert("Este centro solo tiene un turno."); return; }
+    if (!window.confirm(`Copiar el ${t} del ${DIA_CORTO(f)} a ${otros.join(" y ")} de ese mismo día.\n\nCada turno quedará con:\n${resumenDe(patron)}\n\n¿Seguir?`)) return;
+    let base = cal.filter(x => !(x.fecha===f && otros.includes(x.turno)));
+    otros.forEach(t2 => patron.forEach(x => base.push({ ...x, id: uid(), turno: t2 })));
+    setCal(base);
+  };
+
+  const repetirDiaEnSemana = (f) => {
+    const patron = cal.filter(x => x.fecha===f);
+    if (!patron.length) { window.alert("Este día está vacío. Planifícalo primero."); return; }
+    const otros = dias.filter(z => z !== f);
+    if (!window.confirm(`Copiar el ${DIA_CORTO(f)} entero a los otros ${otros.length} días de la semana.\n\nCada día quedará con:\n${resumenDe(patron)}\n\n¿Seguir?`)) return;
+    let base = cal.filter(x => x.fecha === f);
+    otros.forEach(f2 => patron.forEach(x => base.push({ ...x, id: uid(), fecha: f2 })));
+    setCal(base);
+  };
+
+  const repetirSemanaEnMes = async () => {
+    if (!cal.length) { window.alert("La semana está vacía. Planifícala primero."); return; }
+    if (!replicarEnMes) return;
+    if (!window.confirm(`Copiar esta semana entera a las demás semanas abiertas del mes.\n\nCada semana quedará con:\n${resumenDe(cal)}\n\nLas semanas ya cerradas no se tocan. ¿Seguir?`)) return;
+    const n = await replicarEnMes(cal);
+    if (n) window.alert(`Copiada a ${n} semana${n!==1?"s":""}. Revisa el cuadre de cada una.`);
+  };
+
   const vaciarDia = (f) => {
     if (!window.confirm(`¿Vaciar todo el ${DIA_CORTO(f)}?`)) return;
     setCal(cal.filter(x=>x.fecha!==f));
@@ -3493,6 +3545,14 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
         </div>
       )}
 
+      {!bloqueado && cal.length>0 && nSemanasMes>1 && (
+        <button onClick={repetirSemanaEnMes}
+          style={{width:"100%",background:C.blueBg,border:`1.5px solid ${C.blue}55`,color:C.blue,borderRadius:12,padding:"13px",
+            fontFamily:F.h,fontWeight:800,fontSize:14,cursor:"pointer",marginBottom:12}}>
+          ⧉ Repetir esta semana en todo el mes
+        </button>
+      )}
+
       {dias.map(f=>{
         const delDia = cal.filter(x=>x.fecha===f);
         const udsDia = delDia.reduce((s,x)=>s+(parseFloat(x.cantidad)||0),0);
@@ -3503,12 +3563,20 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
               <div style={{fontFamily:F.h,fontWeight:800,fontSize:15,color:C.text,textTransform:"capitalize"}}>{DIA_CORTO(f)}</div>
               <div style={{display:"flex",alignItems:"center",gap:8}}>
                 <span style={{fontSize:12,color:C.mutedD}}>{delDia.length}/{LINEAS_CAL.length*TURNOS_CAL.length} huecos · {num(udsDia)} uds · {persDia}p</span>
+                {!bloqueado && delDia.length>0 && <button onClick={()=>repetirDiaEnSemana(f)} title="Repetir este día en toda la semana"
+                  style={{background:C.blueBg,border:`1px solid ${C.blue}44`,color:C.blue,borderRadius:8,padding:"5px 9px",fontSize:12,fontWeight:800,cursor:"pointer"}}>⧉ semana</button>}
                 {!bloqueado && delDia.length>0 && <button onClick={()=>vaciarDia(f)} style={{background:"none",border:"none",color:C.red,fontSize:15,cursor:"pointer"}}>✕</button>}
               </div>
             </div>
             {TURNOS_CAL.map(t=>(
               <div key={t} style={{display:"flex",alignItems:"stretch",gap:6,marginBottom:6}}>
-                <div style={{width:30,display:"flex",alignItems:"center",justifyContent:"center",background:C.card2,borderRadius:9,fontFamily:F.h,fontWeight:800,fontSize:12,color:C.mutedD}}>{t}</div>
+                <div style={{width:34,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:3,background:C.card2,borderRadius:9,padding:"4px 0"}}>
+                  <span style={{fontFamily:F.h,fontWeight:800,fontSize:12,color:C.mutedD}}>{t}</span>
+                  {!bloqueado && cal.some(x=>x.fecha===f && x.turno===t) && TURNOS_CAL.length>1 && (
+                    <button onClick={()=>repetirTurnoEnDia(f,t)} title="Repetir en los demás turnos del día"
+                      style={{background:"none",border:"none",color:C.blue,fontSize:13,cursor:"pointer",padding:0,lineHeight:1}}>⧉</button>
+                  )}
+                </div>
                 {LINEAS_CAL.map(l=>{
                   const e = enSlot(f,t,l);
                   const prod = e && productos.find(p=>p.id===e.producto_id);
@@ -3635,7 +3703,7 @@ function SlotEditor({ slot, entrada, productos, items, colocado, objetivo, persL
 }
 
 // ── TAB 2: PLAN SEMANAL + CUADRE ───────────────────────────────────────────────
-function PlanSemanaTab({ semana, setSemana, semanas, plan, guardar, productos, mps, perfil, slotsDia=SLOTS_DIA, persLinea=3, persDia=12, turnosCentro=TURNOS_ABIERTOS, cfgLineas, centroNombre="" }) {
+function PlanSemanaTab({ semana, setSemana, semanas, plan, guardar, productos, mps, perfil, slotsDia=SLOTS_DIA, persLinea=3, persDia=12, turnosCentro=TURNOS_ABIERTOS, cfgLineas, centroNombre="", replicarEnMes, nSemanasMes=4 }) {
   const items = plan.items || [];
   const bloqueado = !!plan.cerrado_plan;
   const setItems = (v) => guardar({ items: v });
@@ -3721,7 +3789,7 @@ function PlanSemanaTab({ semana, setSemana, semanas, plan, guardar, productos, m
         </div>
       )}
 
-      <CalendarioSemana semana={semana} plan={plan} guardar={guardar} productos={productos} bloqueado={bloqueado} cfgLineas={cfgLineas} turnosCentro={turnosCentro}/>
+      <CalendarioSemana semana={semana} plan={plan} guardar={guardar} productos={productos} bloqueado={bloqueado} cfgLineas={cfgLineas} turnosCentro={turnosCentro} replicarEnMes={replicarEnMes} nSemanasMes={nSemanasMes}/>
 
       <button onClick={()=>setVerObjetivo(v=>!v)}
         style={{width:"100%",background:"#fff",border:`1.5px solid ${C.border}`,color:C.mutedD,borderRadius:12,padding:"13px",fontFamily:F.h,fontWeight:800,fontSize:13.5,cursor:"pointer",marginBottom:12}}>
