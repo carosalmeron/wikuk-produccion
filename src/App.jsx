@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v2.23.0";
+const APP_VERSION = "v2.23.1";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -3164,7 +3164,7 @@ function PlanificacionScreen({ onBack, perfil, productos, mps, producciones, cen
         {tab==="mes" && <PlanMesTab periodo={periodo} setPeriodo={setPeriodo} plan={planMes} guardar={guardarMes}
           productos={prodCentro} mps={mps} semanas={semanas} planesSem={planesSem} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} turnosCentro={turnosCentro} centroNombre={centro?.nombre||""} perfil={perfil} irReparto={()=>setTab("reparto")}/>}
         {tab==="reparto" && <RepartoTab periodo={periodo} semanas={semanas} planMes={planMes} planesSem={planesSem}
-          productos={prodCentro} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} irASemana={(s)=>{ setSemana(s); setTab("semana"); }}/>}
+          productos={prodCentro} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} centroId={centroId} irASemana={(s)=>{ setSemana(s); setTab("semana"); }} irAlMes={()=>setTab("mes")}/>}
         {tab==="semana" && <PlanSemanaTab semana={semana} setSemana={setSemana} semanas={semanas} plan={planSem}
           guardar={guardarSem} productos={prodCentro} mps={mps} perfil={perfil} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} turnosCentro={turnosCentro} cfgLineas={cfgLineas} centroNombre={centro?.nombre||""} replicarEnMes={replicarEnMes} nSemanasMes={semanas.length} moldes={moldes}/>}
         {tab==="cierre" && <CierreSemanaTab semana={semana} setSemana={setSemana} semanas={semanas} plan={planSem}
@@ -3425,7 +3425,7 @@ function PlanMesTab({ periodo, setPeriodo, plan, guardar, productos, mps, semana
 }
 
 // ── TAB: REPARTO DEL PLAN MENSUAL EN SEMANAS ───────────────────────────────────
-function RepartoTab({ periodo, semanas, planMes, planesSem, productos, slotsDia=SLOTS_DIA, persLinea=3, persDia=12, irASemana }) {
+function RepartoTab({ periodo, semanas, planMes, planesSem, productos, slotsDia=SLOTS_DIA, persLinea=3, persDia=12, centroId="", irASemana, irAlMes }) {
   const items = planMes.items || [];
   const [draft, setDraft] = useState({});
   const [guardado, setGuardado] = useState(false);
@@ -3475,7 +3475,6 @@ function RepartoTab({ periodo, semanas, planMes, planesSem, productos, slotsDia=
       const prev = planesSem.find(p=>p.semana===s)?.items || [];
       const extras = prev.filter(x => !items.some(it => it.producto_id === x.producto_id));
       const nuevos = semanaItems(s).map(x => ({ id: uid(), producto_id: x.producto_id, cantidad: x.cantidad }));
-      const centroId = planMes.centro || (planesSem[0]?.centro) || "";
       await save("planes_semana", `${s}__${centroId}`, { semana: s, periodo, centro: centroId, items: [...extras, ...nuevos], desde_plan_mes: true });
     }
     setGuardado(true);
@@ -3485,7 +3484,15 @@ function RepartoTab({ periodo, semanas, planMes, planesSem, productos, slotsDia=
 
   return (
     <>
-      {items.length === 0 && <Empty icon="📭" text="Primero define el plan del mes en la pestaña Mes"/>}
+      {items.length === 0 && (
+        <Card style={{marginBottom:12}} color={C.amber+"66"}>
+          <div style={{fontFamily:F.h,fontWeight:800,fontSize:15,color:C.text,marginBottom:5}}>📭 Nada que repartir</div>
+          <div style={{fontSize:12.5,color:C.mutedD,lineHeight:1.6,marginBottom:11}}>
+            El plan de {nombreMes(periodo)} está vacío para este centro. Ve a la pestaña <b>📅 Mes</b>, añade los productos y las cantidades, y vuelve aquí para repartirlos por semanas.
+          </div>
+          <Btn v="secondary" onClick={()=>irAlMes && irAlMes()}>📅 Ir al plan del mes</Btn>
+        </Card>
+      )}
 
       {items.length > 0 && (
         <>
@@ -3494,10 +3501,8 @@ function RepartoTab({ periodo, semanas, planMes, planesSem, productos, slotsDia=
             <div style={{fontSize:12.5,color:C.mutedD,lineHeight:1.6,marginBottom:11}}>
               Escribe cuánto va en cada semana. El chip de la derecha te dice lo que falta por repartir de cada producto.
             </div>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-              <button onClick={autoTodo} style={{background:C.blueBg,border:`1.5px solid ${C.blue}55`,color:C.blue,borderRadius:11,padding:"12px",fontFamily:F.h,fontWeight:800,fontSize:13.5,cursor:"pointer"}}>⚖️ Repartir lo que falta</button>
-              <button onClick={vaciar} style={{background:"#fff",border:`1.5px solid ${C.border}`,color:C.mutedD,borderRadius:11,padding:"12px",fontFamily:F.h,fontWeight:800,fontSize:13.5,cursor:"pointer"}}>↺ Empezar de cero</button>
-            </div>
+            <button onClick={autoTodo} style={{width:"100%",background:C.accent,border:"none",color:"#fff",borderRadius:12,padding:"15px",fontFamily:F.h,fontWeight:800,fontSize:15,cursor:"pointer",marginBottom:8}}>⚖️ Repartir automáticamente lo que falta</button>
+            <button onClick={vaciar} style={{width:"100%",background:"#fff",border:`1.5px solid ${C.border}`,color:C.mutedD,borderRadius:12,padding:"13px",fontFamily:F.h,fontWeight:800,fontSize:13.5,cursor:"pointer"}}>↺ Empezar de cero</button>
           </Card>
 
           {items.map(it => {
@@ -3579,7 +3584,24 @@ function RepartoTab({ periodo, semanas, planMes, planesSem, productos, slotsDia=
             </div>
           )}
 
-          <Btn onClick={guardar} v={guardado?"green":"primary"}>{guardado?"✔ Reparto guardado":"💾 Guardar reparto en las semanas"}</Btn>
+          {/* hueco para que la barra fija no tape el contenido */}
+          <div style={{height:78}}/>
+
+          <div style={{position:"fixed",left:0,right:0,bottom:0,zIndex:20,background:"rgba(255,255,255,0.97)",
+            borderTop:`1px solid ${C.border}`,padding:"10px 12px calc(10px + env(safe-area-inset-bottom))",
+            boxShadow:"0 -4px 14px rgba(15,23,42,0.08)"}}>
+            <div style={{maxWidth:900,margin:"0 auto",display:"flex",gap:8,alignItems:"center"}}>
+              <div style={{flex:"0 0 auto",fontSize:11.5,color:sinRepartir.length?C.amber:C.green,fontFamily:F.h,fontWeight:800,lineHeight:1.3,maxWidth:96}}>
+                {sinRepartir.length ? `${sinRepartir.length} sin cuadrar` : "✔ Todo repartido"}
+              </div>
+              <button onClick={guardar}
+                style={{flex:1,background:guardado?C.greenBg:C.accent,color:guardado?C.green:"#fff",
+                  border:guardado?`1.5px solid ${C.green}`:"none",borderRadius:12,padding:"15px 10px",
+                  fontFamily:F.h,fontWeight:800,fontSize:15,cursor:"pointer"}}>
+                {guardado?"✔ Guardado":"💾 Guardar reparto"}
+              </button>
+            </div>
+          </div>
         </>
       )}
     </>
