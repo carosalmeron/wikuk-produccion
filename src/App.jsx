@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v2.32.0";
+const APP_VERSION = "v2.33.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -120,7 +120,7 @@ const sumaPeriodo = (periodo, delta) => {
 
 // Recursos necesarios para una lista de {producto_id, cantidad}
 const calcRecursos = (items, productos, persLinea = 3) => {
-  let uds=0, slots=0, personaTurnos=0, costeMP=0, costeMO=0;
+  let uds=0, slots=0, personaTurnos=0, costeMP=0, costeMO=0, ventas=0, costeFicha=0;
   const materias = {};
   const sinRitmo = [];
   (items||[]).forEach(it => {
@@ -135,6 +135,8 @@ const calcRecursos = (items, productos, persLinea = 3) => {
     slots += turnos * (pers/(persLinea||3));
     personaTurnos += turnos * pers;
     costeMP += (parseFloat(p.coste_mp_objetivo)||0) * q;
+    ventas  += (parseFloat(p.precio_venta)||0) * q;
+    costeFicha += (parseFloat(p.coste_objetivo)||0) * q;
     costeMO += turnos * pers * 8 * TARIFA_MO;
     (p.materias_asignadas||[]).forEach(m => {
       const rend = (parseFloat(m.rendimiento)||100)/100;
@@ -142,7 +144,8 @@ const calcRecursos = (items, productos, persLinea = 3) => {
       materias[m.mp_id] = (materias[m.mp_id]||0) + metros;
     });
   });
-  return { uds, slots, personaTurnos, costeMP, costeMO, coste: costeMP+costeMO, materias, sinRitmo };
+  return { uds, slots, personaTurnos, costeMP, costeMO, coste: costeMP+costeMO,
+           ventas, costeFicha, materias, sinRitmo };
 };
 
 // ── IMPRESIÓN ──────────────────────────────────────────────────────────────────
@@ -3070,6 +3073,8 @@ function PlanificacionScreen({ onBack, perfil, productos, mps, producciones, cen
   const [semana, setSemana] = useState(semanas.includes(semanaHoy) ? semanaHoy : semanas[0]);
   useEffect(()=>{ const ss = semanasDeMes(periodo); if(!ss.includes(semana)) setSemana(ss[0]); },[periodo]);
 
+  const [costesCfg] = useCol("config_costes");
+  const ggMes = toNum(costesCfg.find(c => c.id === centroId)?.fijos_mensuales);
   const [planesMesAll] = useCol("planes_mes");
   const [planesSemAll] = useCol("planes_semana");
   const idMes = `${periodo}__${centroId}`;
@@ -3164,7 +3169,7 @@ function PlanificacionScreen({ onBack, perfil, productos, mps, producciones, cen
           </div>
         )}
         {tab==="mes" && <PlanMesTab periodo={periodo} setPeriodo={setPeriodo} plan={planMes} guardar={guardarMes}
-          productos={prodCentro} mps={mps} semanas={semanas} planesSem={planesSem} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} turnosCentro={turnosCentro} centroNombre={centro?.nombre||""} perfil={perfil} irReparto={()=>setTab("reparto")}/>}
+          productos={prodCentro} mps={mps} semanas={semanas} planesSem={planesSem} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} turnosCentro={turnosCentro} centroNombre={centro?.nombre||""} perfil={perfil} ggMes={ggMes} irReparto={()=>setTab("reparto")}/>}
         {tab==="reparto" && <RepartoTab periodo={periodo} semanas={semanas} planMes={planMes} planesSem={planesSem}
           productos={prodCentro} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} centroId={centroId} moldes={moldes} irASemana={(s)=>{ setSemana(s); setTab("semana"); }} irAlMes={()=>setTab("mes")}/>}
         {tab==="semana" && <PlanSemanaTab semana={semana} setSemana={setSemana} semanas={semanas} plan={planSem}
@@ -3342,7 +3347,7 @@ function LineaEditor({ it, productos, otros, onGuardar, onQuitar, onCerrar }) {
 }
 
 // ── TAB 1: PLAN MENSUAL ────────────────────────────────────────────────────────
-function PlanMesTab({ periodo, setPeriodo, plan, guardar, productos, mps, semanas, planesSem, slotsDia=SLOTS_DIA, persLinea=3, persDia=12, turnosCentro=TURNOS_ABIERTOS, centroNombre="", perfil, irReparto }) {
+function PlanMesTab({ periodo, setPeriodo, plan, guardar, productos, mps, semanas, planesSem, slotsDia=SLOTS_DIA, persLinea=3, persDia=12, turnosCentro=TURNOS_ABIERTOS, centroNombre="", perfil, ggMes=0, irReparto }) {
   const items = plan.items || [];
   const setItems = (v) => guardar({ items: v });
   const dias = diasLaborablesMes(periodo).length;
@@ -3356,6 +3361,13 @@ function PlanMesTab({ periodo, setPeriodo, plan, guardar, productos, mps, semana
 
   const imprimir = () => {
     if (items.length===0) { window.alert("No hay nada planificado este mes"); return; }
+    const ocupImp = capacidad>0 ? Math.min(1, r.slots/capacidad) : 0;
+    const ggImput = ggMes * ocupImp;
+    const costeCalcP = r.costeMO + ggImput;
+    const desvP = costeCalcP - r.costeFicha;
+    const totalP = r.costeMP + r.costeMO + ggMes;
+    const benefP = r.ventas - totalP;
+    const margenP = r.ventas>0 ? benefP/r.ventas : 0;
     const filas = items.map(it=>{
       const p = productos.find(x=>x.id===it.producto_id);
       const ritmo = toNum(p?.uds_turno_linea), pers = parseInt(p?.personas_linea)||3;
@@ -3375,6 +3387,31 @@ function PlanMesTab({ periodo, setPeriodo, plan, guardar, productos, mps, semana
       ${bloqueRecursos(r, mps, dias, persDia)}
       <h2>Reparto por semanas</h2>
       <table><tr><th>Semana</th><th>Fechas</th><th class="n">Uds</th><th class="n">Pers./día</th><th class="n">Coste obj.</th><th>Estado</th></tr>${porSemana}</table>
+      <h2>Coste objetivo: fichas frente a plan</h2>
+      <table>
+        <tr><th>Concepto</th><th class="n">Importe</th><th class="n">€/ud</th></tr>
+        <tr><td>Coste objetivo según fichas de producto</td><td class="n">${eur(r.costeFicha)}</td><td class="n">${r.uds>0?(r.costeFicha/r.uds).toFixed(2):"0.00"}</td></tr>
+        <tr><td>Mano de obra del plan (${TARIFA_MO} €/h)</td><td class="n">${eur(r.costeMO)}</td><td class="n">${r.uds>0?(r.costeMO/r.uds).toFixed(2):"0.00"}</td></tr>
+        <tr><td>Gastos generales imputados (${Math.round(ocupImp*100)}% de ${eur(ggMes)})</td><td class="n">${eur(ggImput)}</td><td class="n">${r.uds>0?(ggImput/r.uds).toFixed(2):"0.00"}</td></tr>
+        <tr><td><b>Coste objetivo del plan</b></td><td class="n"><b>${eur(costeCalcP)}</b></td><td class="n"><b>${r.uds>0?(costeCalcP/r.uds).toFixed(2):"0.00"}</b></td></tr>
+        <tr><td>Desvío frente a las fichas</td><td class="n">${desvP>=0?"+":""}${eur(desvP)}</td><td class="n">${r.costeFicha>0?`${(desvP/r.costeFicha*100).toFixed(0)}%`:"—"}</td></tr>
+      </table>
+
+      <h2>Beneficio estimado del mes</h2>
+      <div class="kpis">
+        <div class="kpi"><b>${eur(r.ventas)}</b><span>Ventas previstas</span></div>
+        <div class="kpi"><b>${eur(totalP)}</b><span>Coste total</span></div>
+        <div class="kpi"><b>${benefP>=0?"+":""}${eur(benefP)}</b><span>Beneficio (${Math.round(margenP*100)}%)</span></div>
+      </div>
+      <table>
+        <tr><th>Concepto</th><th class="n">Importe</th><th class="n">% ventas</th></tr>
+        <tr><td>Materia prima</td><td class="n">${eur(r.costeMP)}</td><td class="n">${r.ventas>0?Math.round(r.costeMP/r.ventas*100):"—"}%</td></tr>
+        <tr><td>Mano de obra</td><td class="n">${eur(r.costeMO)}</td><td class="n">${r.ventas>0?Math.round(r.costeMO/r.ventas*100):"—"}%</td></tr>
+        <tr><td>Gastos generales del mes (completos)</td><td class="n">${eur(ggMes)}</td><td class="n">${r.ventas>0?Math.round(ggMes/r.ventas*100):"—"}%</td></tr>
+        <tr><td><b>Coste total</b></td><td class="n"><b>${eur(totalP)}</b></td><td class="n"><b>${r.ventas>0?Math.round(totalP/r.ventas*100):"—"}%</b></td></tr>
+        <tr><td><b>Beneficio estimado</b></td><td class="n"><b>${benefP>=0?"+":""}${eur(benefP)}</b></td><td class="n"><b>${Math.round(margenP*100)}%</b></td></tr>
+      </table>
+
       <h2>Capacidad</h2>
       <table>
         <tr><td>Personas necesarias al día</td><td class="n">${Math.ceil(r.personaTurnos/(dias||1))}</td></tr>
@@ -3395,6 +3432,72 @@ function PlanMesTab({ periodo, setPeriodo, plan, guardar, productos, mps, semana
 
       <ItemsEditor items={items} setItems={setItems} productos={productos} persLinea={persLinea}/>
       <RecursosCard r={r} mps={mps} dias={dias} slotsDia={slotsDia} persDia={persDia} turnosCentro={turnosCentro} titulo="Recursos del mes"/>
+
+      {(() => {
+        const ocup = capacidad>0 ? Math.min(1, r.slots/capacidad) : 0;
+        const ggImput = ggMes * ocup;                       // prorrateados por ocupación
+        const costeCalc = r.costeMO + ggImput;              // MO real de líneas + generales
+        const desv = costeCalc - r.costeFicha;              // frente al coste de ficha
+        const total = r.costeMP + r.costeMO + ggMes;        // el mes se paga entero
+        const benef = r.ventas - total;
+        const margen = r.ventas>0 ? benef/r.ventas : 0;
+        const fila = (l, v, extra, cl) => (
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",fontSize:13,padding:"6px 0"}}>
+            <span style={{color:C.mutedD}}>{l}{extra && <span style={{fontSize:11,color:C.muted}}> · {extra}</span>}</span>
+            <b style={{color:cl||C.text,flexShrink:0,marginLeft:10}}>{v}</b>
+          </div>
+        );
+        return (
+          <>
+            <Card style={{marginBottom:12}}>
+              <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text,marginBottom:3}}>🎯 Coste objetivo: ficha frente a plan</div>
+              <div style={{fontSize:11.5,color:C.mutedD,lineHeight:1.55,marginBottom:9}}>
+                La ficha del producto lleva un coste estimado por unidad. El plan lo recalcula con la gente que va a intervenir según líneas y turnos, más los gastos generales repartidos.
+              </div>
+              {fila("Coste objetivo según fichas", eur(r.costeFicha), `${r.uds>0?(r.costeFicha/r.uds).toFixed(2):"0.00"} €/ud`)}
+              {fila("Mano de obra del plan", eur(r.costeMO), `${TARIFA_MO} €/h`)}
+              {fila("Gastos generales imputados", eur(ggImput), `${Math.round(ocup*100)}% de ${eur(ggMes)}/mes`)}
+              <div style={{borderTop:`1px solid ${C.border}`,marginTop:4,paddingTop:4}}>
+                {fila("Coste objetivo del plan", eur(costeCalc), `${r.uds>0?(costeCalc/r.uds).toFixed(2):"0.00"} €/ud`)}
+                {fila("Desvío frente a las fichas", `${desv>=0?"+":""}${eur(desv)}`, r.costeFicha>0?`${(desv/r.costeFicha*100).toFixed(0)}%`:"", desv<=0?C.green:C.red)}
+              </div>
+              {ggMes===0 && (
+                <div style={{background:C.amberBg,border:`1.5px solid ${C.amber}`,borderRadius:10,padding:"9px 11px",marginTop:8,fontSize:12,color:C.amber,fontWeight:700,lineHeight:1.5}}>
+                  ⚠️ Este centro no tiene gastos generales configurados. Ponlos en Costes Fijos o el coste saldrá corto.
+                </div>
+              )}
+            </Card>
+
+            <Card style={{marginBottom:12}} color={(benef>=0?C.green:C.red)+"66"}>
+              <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text,marginBottom:9}}>💶 Beneficio estimado del mes</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
+                <div style={{background:C.card2,borderRadius:12,padding:"12px 8px",textAlign:"center"}}>
+                  <div style={{fontFamily:F.h,fontWeight:900,fontSize:20,color:C.text}}>{eur(r.ventas)}</div>
+                  <div style={{fontSize:10.5,color:C.mutedD,marginTop:2}}>Ventas previstas</div>
+                </div>
+                <div style={{background:C.card2,borderRadius:12,padding:"12px 8px",textAlign:"center"}}>
+                  <div style={{fontFamily:F.h,fontWeight:900,fontSize:20,color:benef>=0?C.green:C.red}}>{benef>=0?"+":""}{eur(benef)}</div>
+                  <div style={{fontSize:10.5,color:C.mutedD,marginTop:2}}>Beneficio ({Math.round(margen*100)}%)</div>
+                </div>
+              </div>
+              {fila("Materia prima", eur(r.costeMP), r.ventas>0?`${Math.round(r.costeMP/r.ventas*100)}% de ventas`:"")}
+              {fila("Mano de obra", eur(r.costeMO), r.ventas>0?`${Math.round(r.costeMO/r.ventas*100)}%`:"")}
+              {fila("Gastos generales del mes", eur(ggMes), "completos", C.text)}
+              <div style={{borderTop:`1px solid ${C.border}`,marginTop:4,paddingTop:4}}>
+                {fila("Coste total", eur(total), r.uds>0?`${(total/r.uds).toFixed(2)} €/ud`:"")}
+              </div>
+              <div style={{fontSize:11.5,color:C.mutedD,marginTop:8,lineHeight:1.55}}>
+                Los gastos generales van enteros: se pagan aunque la fábrica no esté llena. Con {Math.round(ocup*100)}% de ocupación, cada unidad carga más de lo que debería.
+              </div>
+              {r.ventas===0 && (
+                <div style={{background:C.amberBg,border:`1.5px solid ${C.amber}`,borderRadius:10,padding:"9px 11px",marginTop:8,fontSize:12,color:C.amber,fontWeight:700,lineHeight:1.5}}>
+                  ⚠️ Ningún producto del plan tiene precio de venta. Ponlo en su ficha para ver el beneficio.
+                </div>
+              )}
+            </Card>
+          </>
+        );
+      })()}
 
       <Card style={{marginBottom:12}} color={col+"66"}>
         <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text,marginBottom:10}}>⚖️ Capacidad del mes</div>
