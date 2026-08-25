@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v2.27.1";
+const APP_VERSION = "v2.30.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -3929,11 +3929,23 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
     setCal(cal.filter(x=>x.fecha!==f));
   };
 
-  // colores estables por producto
+  // Lo que debería salir de ese hueco según el ritmo del producto
+  const objetivoSlot = (e) => {
+    const p = productos.find(z=>z.id===e.producto_id);
+    const r = ritmoDe(p);
+    if (r <= 0) return 0;
+    const nSlots = e.grupo ? Math.max(1, cal.filter(x=>x.grupo===e.grupo).length) : 1;
+    return r / nSlots;
+  };
+  const faltaEnSlot = (e) => { const o = objetivoSlot(e); return o > 0 ? o - toNum(e.cantidad) : 0; };
+
+  // ── Un color por MOLDE: mismo color = misma línea sin parar a cambiar
   const paleta = ["#DBEAFE","#DCFCE7","#FEF3C7","#FCE7F3","#E0E7FF","#FFE4E6","#CCFBF1","#F3E8FF"];
   const bordes = ["#3B82F6","#16A34A","#F59E0B","#EC4899","#6366F1","#F43F5E","#14B8A6","#A855F7"];
-  const pids = [...new Set(cal.map(x=>x.producto_id))];
-  const colorDe = (pid) => { const i = pids.indexOf(pid); return { bg: paleta[i%paleta.length], bd: bordes[i%bordes.length] }; };
+  const moldesEnCal = [...new Set(cal.map(x => moldeDe(productos.find(p=>p.id===x.producto_id))))];
+  const colorMoldeK = (k) => { const i = Math.max(0, moldesEnCal.indexOf(k));
+    return { bg: paleta[i%paleta.length], bd: bordes[i%bordes.length] }; };
+  const colorDe = (pid) => colorMoldeK(moldeDe(productos.find(p=>p.id===pid)));
 
   const colocado = {};
   cal.forEach(x=>{ colocado[x.producto_id] = (colocado[x.producto_id]||0) + (parseFloat(x.cantidad)||0); });
@@ -3959,16 +3971,40 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
         </button>
       )}
 
+      {cal.length>0 && moldesEnCal.length>0 && (
+        <Card style={{marginBottom:10,padding:"11px 12px"}}>
+          <div style={{fontFamily:F.h,fontWeight:800,fontSize:12.5,color:C.text,marginBottom:7}}>Qué significa cada color</div>
+          <div style={{display:"flex",gap:7,flexWrap:"wrap",marginBottom:7}}>
+            {moldesEnCal.map(k=>{
+              const c = colorMoldeK(k);
+              return (
+                <span key={k||"sin"} style={{display:"inline-flex",alignItems:"center",gap:6,background:c.bg,
+                  border:`1.5px solid ${c.bd}`,borderRadius:9,padding:"6px 10px",fontSize:12,fontWeight:700,color:C.text}}>
+                  🔧 {nombreMolde(k)}
+                </span>
+              );
+            })}
+          </div>
+          <div style={{fontSize:11.5,color:C.mutedD,lineHeight:1.55}}>
+            Un color = un molde. Si una línea cambia de color de un turno al siguiente, hay que parar a cambiar molde: eso se marca con <b style={{color:C.amber}}>⇄</b>.
+          </div>
+        </Card>
+      )}
+
       {dias.map(f=>{
         const delDia = cal.filter(x=>x.fecha===f);
         const udsDia = delDia.reduce((s,x)=>s+(parseFloat(x.cantidad)||0),0);
+        const objDia = delDia.reduce((s,x)=>s+objetivoSlot(x),0);
+        const cortoDia = objDia>0 && objDia - udsDia > 0.5;
         const persDia = delDia.reduce((s,x)=>s+persDeLinea(x.linea),0);
         return (
           <Card key={f} style={{marginBottom:10,padding:12}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:9}}>
               <div style={{fontFamily:F.h,fontWeight:800,fontSize:15,color:C.text,textTransform:"capitalize"}}>{DIA_CORTO(f)}</div>
               <div style={{display:"flex",alignItems:"center",gap:8}}>
-                <span style={{fontSize:12,color:C.mutedD}}>{delDia.length}/{LINEAS_CAL.length*TURNOS_CAL.length} huecos · {num(udsDia)} uds · {persDia}p</span>
+                <span style={{fontSize:12,color:C.mutedD}}>
+                  {delDia.length}/{LINEAS_CAL.length*TURNOS_CAL.length} huecos · <b style={{color:cortoDia?C.amber:C.text}}>{num(udsDia)}</b>{objDia>0 && <span>/{num(objDia)}</span>} uds · {persDia}p
+                </span>
                 {!bloqueado && delDia.length>0 && <button onClick={()=>repetirDiaEnSemana(f)} title="Repetir este día en toda la semana"
                   style={{background:C.blueBg,border:`1px solid ${C.blue}44`,color:C.blue,borderRadius:8,padding:"5px 9px",fontSize:12,fontWeight:800,cursor:"pointer"}}>⧉ semana</button>}
                 {!bloqueado && delDia.length>0 && <button onClick={()=>vaciarDia(f)} style={{background:"none",border:"none",color:C.red,fontSize:15,cursor:"pointer"}}>✕</button>}
@@ -3995,7 +4031,26 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
                       {e ? (
                         <>
                           <div style={{fontFamily:F.h,fontWeight:800,fontSize:12.5,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{codigoCorto(prod?.nombre||"?")}</div>
-                          <div style={{fontFamily:F.h,fontWeight:900,fontSize:17,color:c.bd,marginTop:1}}>{num(e.cantidad)}</div>
+                          {(() => {
+                            const obj = objetivoSlot(e);
+                            const dif = obj>0 ? toNum(e.cantidad) - obj : 0;
+                            const bajo = obj>0 && dif < -0.5;
+                            return (
+                              <>
+                                <div style={{display:"flex",alignItems:"baseline",gap:4,marginTop:1}}>
+                                  <span style={{fontFamily:F.h,fontWeight:900,fontSize:17,color:bajo?C.amber:c.bd}}>{num(e.cantidad)}</span>
+                                  {obj>0 && <span style={{fontSize:10.5,color:C.mutedD}}>/{num(obj)}</span>}
+                                </div>
+                                {obj>0 && (
+                                  <div style={{height:4,background:"rgba(0,0,0,0.10)",borderRadius:2,overflow:"hidden",margin:"2px 0 1px"}}>
+                                    <div style={{width:Math.min(100,(toNum(e.cantidad)/obj)*100)+"%",height:"100%",
+                                      background:bajo?C.amber:C.green,borderRadius:2}}/>
+                                  </div>
+                                )}
+                                {bajo && <div style={{fontSize:9.5,color:C.amber,fontWeight:800}}>↓ {num(-dif)} menos</div>}
+                              </>
+                            );
+                          })()}
                           <div style={{fontSize:10,color:C.mutedD,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
                             {moldeDe(prod) ? `🔧 ${nombreMolde(moldeDe(prod))}` : l} · {cal.filter(x=>x.grupo===e.grupo).reduce((a,z)=>a+persDeLinea(z.linea),0)||persDeLinea(l)}p
                             {cambio && <span style={{color:C.amber,fontWeight:800}}> ⇄</span>}
@@ -4055,6 +4110,50 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
           <Btn v="secondary" onClick={colocarPorMolde}>⚡ Colocar agrupado por molde</Btn>
         </Card>
       )}
+
+      {cal.length>0 && (() => {
+        const flojos = cal.filter(e => faltaEnSlot(e) > 0.5);
+        const perdidas = flojos.reduce((a,e) => a + faltaEnSlot(e), 0);
+        const vacios = LINEAS_CAL.length*TURNOS_CAL.length*dias.length - cal.length;
+        if (!flojos.length && !vacios) return (
+          <Card style={{marginBottom:12}} color={C.green+"55"}>
+            <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.green}}>✔ Semana llena y a ritmo</div>
+            <div style={{fontSize:12.5,color:C.mutedD,marginTop:3,lineHeight:1.55}}>Todos los huecos están ocupados y ninguno va por debajo del ritmo estándar.</div>
+          </Card>
+        );
+        return (
+          <Card style={{marginBottom:12}} color={C.amber+"66"}>
+            <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.amber,marginBottom:8}}>⚠️ Capacidad que se queda sin usar</div>
+            <div style={{display:"flex",gap:8,marginBottom:9}}>
+              <div style={{flex:1,background:C.card2,borderRadius:12,padding:"11px 8px",textAlign:"center"}}>
+                <div style={{fontFamily:F.h,fontWeight:900,fontSize:22,color:vacios?C.amber:C.green}}>{vacios}</div>
+                <div style={{fontSize:10.5,color:C.mutedD}}>Huecos vacíos</div>
+              </div>
+              <div style={{flex:1,background:C.card2,borderRadius:12,padding:"11px 8px",textAlign:"center"}}>
+                <div style={{fontFamily:F.h,fontWeight:900,fontSize:22,color:flojos.length?C.amber:C.green}}>{flojos.length}</div>
+                <div style={{fontSize:10.5,color:C.mutedD}}>Turnos flojos</div>
+              </div>
+              <div style={{flex:1,background:C.card2,borderRadius:12,padding:"11px 8px",textAlign:"center"}}>
+                <div style={{fontFamily:F.h,fontWeight:900,fontSize:22,color:C.amber}}>{num(perdidas)}</div>
+                <div style={{fontSize:10.5,color:C.mutedD}}>Uds que dejas de hacer</div>
+              </div>
+            </div>
+            {flojos.slice(0,6).map((e,i)=>{
+              const p = productos.find(z=>z.id===e.producto_id);
+              return (
+                <div key={i} style={{display:"flex",justifyContent:"space-between",fontSize:12.5,color:C.mutedD,padding:"3px 0"}}>
+                  <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{DIA_CORTO(e.fecha)} · {e.turno} · {e.linea} — {codigoCorto(p?.nombre||"?")}</span>
+                  <b style={{color:C.amber,flexShrink:0,marginLeft:8}}>{num(e.cantidad)}/{num(objetivoSlot(e))}</b>
+                </div>
+              );
+            })}
+            {flojos.length>6 && <div style={{fontSize:11.5,color:C.mutedD,marginTop:4}}>…y {flojos.length-6} más</div>}
+            <div style={{fontSize:11.5,color:C.mutedD,marginTop:8,lineHeight:1.55}}>
+              Un turno “flojo” lleva menos unidades de las que da el ritmo estándar del producto. Súbelo tocando el hueco, o deja constancia de por qué no llega.
+            </div>
+          </Card>
+        );
+      })()}
 
       {cal.length>0 && (
         <Card style={{marginBottom:12}} color={cambiosSemana>0?C.amber+"55":C.green+"55"}>
@@ -4182,7 +4281,13 @@ function SlotEditor({ slot, entrada, productos, items, colocado, objetivo, persL
                 : <>⚠️ Este producto no tiene ritmo definido. Ponlo en su ficha o el cuadre no contará bien.</>}
             </div>
             <div style={{marginBottom:14}}>
-              <div style={{fontSize:11,color:C.mutedD,fontWeight:800,marginBottom:6}}>UNIDADES EN ESTE HUECO</div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:6}}>
+                <span style={{fontSize:11,color:C.mutedD,fontWeight:800}}>UNIDADES EN ESTE HUECO</span>
+                {ritmo>0 && <button onClick={()=>setQ(String(ritmo))}
+                  style={{background:"none",border:"none",color:C.blue,fontSize:11.5,fontWeight:800,cursor:"pointer",padding:0}}>
+                  poner el estándar ({ritmo})
+                </button>}
+              </div>
               <div style={{display:"flex",alignItems:"center",gap:10}}>
                 <button onClick={()=>setQ(String(Math.max(0,(parseFloat(q)||0)-5)))} style={{width:56,height:56,borderRadius:13,border:`1.5px solid ${C.border}`,background:"#fff",fontSize:24,color:C.text,cursor:"pointer"}}>−</button>
                 <input type="number" value={q} onChange={e=>setQ(e.target.value)}
@@ -4191,6 +4296,19 @@ function SlotEditor({ slot, entrada, productos, items, colocado, objetivo, persL
               </div>
             </div>
           </>
+        )}
+
+        {pid && ritmo>0 && toNum(q)>0 && toNum(q) < ritmo - 0.5 && (
+          <div style={{background:C.amberBg,border:`1.5px solid ${C.amber}`,borderRadius:11,padding:"11px 13px",marginBottom:14,
+            fontSize:12.5,color:C.amber,fontWeight:700,lineHeight:1.55}}>
+            ⚠️ Por debajo del estándar: el ritmo de este turno son <b>{num(ritmo)} uds</b> y estás poniendo <b>{num(toNum(q))}</b>.
+            Te dejas <b>{num(ritmo-toNum(q))} uds</b> sin fabricar en este hueco.
+          </div>
+        )}
+        {pid && ritmo>0 && toNum(q) > ritmo + 0.5 && (
+          <div style={{background:C.blueBg,borderRadius:11,padding:"11px 13px",marginBottom:14,fontSize:12.5,color:C.text,lineHeight:1.55}}>
+            Por encima del estándar: son <b>{(toNum(q)/ritmo).toFixed(1)} turnos</b> de trabajo, no cabe en uno solo.
+          </div>
         )}
 
         <div style={{display:"grid",gap:8}}>
@@ -4223,6 +4341,57 @@ function PlanSemanaTab({ semana, setSemana, semanas, plan, guardar, productos, m
   const col = estado==="ok"?C.green:estado==="falta"?C.red:C.amber;
   const bg  = estado==="ok"?C.greenBg:estado==="falta"?C.redBg:C.amberBg;
 
+  // ═══ LAS TRES COMPROBACIONES ANTES DE CERRAR ═══════════════════════════════
+  const CFGL = (cfgLineas && cfgLineas.length) ? cfgLineas : [{id:"_l1",nombre:"Línea 1",personas:3}];
+  const TT = Array.from({length: turnosCentro}, (_,i)=>`T${i+1}`);
+  const diasSem = diasDeSemana(semana);
+  const totalHuecos = CFGL.length * TT.length * diasSem.length;
+  const ritmoP = (pid) => toNum(productos.find(x=>x.id===pid)?.uds_turno_linea);
+  const objSlot = (e) => {
+    const rr = ritmoP(e.producto_id);
+    if (rr <= 0) return 0;
+    const n = e.grupo ? Math.max(1, cal.filter(x=>x.grupo===e.grupo).length) : 1;
+    return rr / n;
+  };
+
+  // 1 · CAPACIDAD DE LÍNEA
+  const huecosVacios = totalHuecos - cal.length;
+  const flojos = cal.filter(e => objSlot(e) > 0 && objSlot(e) - toNum(e.cantidad) > 0.5);
+  const udsPerdidas = flojos.reduce((a,e) => a + (objSlot(e) - toNum(e.cantidad)), 0);
+  const check1 = huecosVacios === 0 && flojos.length === 0;
+
+  // 2 · TURNOS CUADRADOS (personas necesarias frente a las disponibles, día a día)
+  const persDeL = (n) => CFGL.find(l=>l.nombre===n)?.personas || 3;
+  const diasDescuadrados = diasSem.filter(f => {
+    const p = cal.filter(x=>x.fecha===f).reduce((a,x)=>a+persDeL(x.linea),0);
+    return p !== persDia;
+  });
+  const check2 = cal.length>0 && diasDescuadrados.length === 0;
+
+  // 3 · LO REPARTIDO, COLOCADO EN EL CALENDARIO
+  const colocadoDe = (pid) => cal.filter(x=>x.producto_id===pid).reduce((a,x)=>a+toNum(x.cantidad),0);
+  const descuadres = (plan.items||[]).map(it => ({
+    pid: it.producto_id, obj: toNum(it.cantidad), col: colocadoDe(it.producto_id) }))
+    .filter(x => Math.abs(x.obj - x.col) > 0.5);
+  const sueltosEnCal = [...new Set(cal.map(x=>x.producto_id))]
+    .filter(pid => !(plan.items||[]).some(it => it.producto_id === pid));
+  const check3 = (plan.items||[]).length>0 && descuadres.length === 0 && sueltosEnCal.length === 0;
+
+  const checks = [
+    { ok: check1, titulo: "Capacidad de línea completa",
+      detalle: check1 ? "Todos los huecos ocupados y a ritmo"
+        : `${huecosVacios} hueco${huecosVacios!==1?"s":""} vacío${huecosVacios!==1?"s":""} · ${flojos.length} turno${flojos.length!==1?"s":""} por debajo del ritmo (${num(udsPerdidas)} uds)` },
+    { ok: check2, titulo: "Turnos cuadrados con la plantilla",
+      detalle: check2 ? `${persDia} personas todos los días`
+        : (cal.length===0 ? "Sin calendario" : `${diasDescuadrados.length} día(s) descuadrado(s): ${diasDescuadrados.map(DIA_CORTO).join(" · ")}`) },
+    { ok: check3, titulo: "Lo repartido está todo colocado",
+      detalle: check3 ? "El calendario coincide con el reparto de la semana"
+        : ((plan.items||[]).length===0 ? "Esta semana no tiene reparto"
+          : [descuadres.length?`${descuadres.length} producto(s) descuadrado(s)`:"",
+             sueltosEnCal.length?`${sueltosEnCal.length} en el calendario sin estar en el reparto`:""].filter(Boolean).join(" · ")) },
+  ];
+  const todoOk = checks.every(c => c.ok);
+
   const imprimir = () => {
     const CFG = (cfgLineas && cfgLineas.length) ? cfgLineas : [{nombre:"Línea 1",personas:3},{nombre:"Línea 2",personas:3}];
     const TT = Array.from({length: turnosCentro}, (_,i)=>`T${i+1}`);
@@ -4250,7 +4419,11 @@ function PlanSemanaTab({ semana, setSemana, semanas, plan, guardar, productos, m
     imprimirHTML(`
       <h1>Planificación semanal — Semana ${semana.split("-W")[1]}</h1>
       <div class="sub">${esc(centroNombre)} · ${esc(rotuloSemana(semana))} · plantilla ${persDia} personas/día${plan.cerrado_plan?" · PLAN CERRADO":""}</div>
-      ${plan.forzado ? `<div class="aviso"><b>Cierre forzado.</b> Motivo: ${esc(plan.motivo_forzado||"")}</div>` : ""}
+      ${plan.forzado ? `<div class="aviso"><b>Cerrado sin cuadrar.</b> Motivo: ${esc(plan.motivo_forzado||"")}${(plan.fallos_cierre||[]).length?` · Falla: ${esc((plan.fallos_cierre||[]).join(" · "))}`:""}</div>` : ""}
+      <h2>Comprobaciones</h2>
+      <table><tr><th>Comprobación</th><th>Estado</th><th>Detalle</th></tr>
+        ${checks.map(c=>`<tr><td>${esc(c.titulo)}</td><td>${c.ok?"OK":"NO"}</td><td>${esc(c.detalle)}</td></tr>`).join("")}
+      </table>
       <h2>Calendario de producción</h2>
       <table><tr><th>Turno · Línea</th>${cabecera}</tr>${cuerpo || `<tr><td colspan="${ds.length+1}">Sin calendario</td></tr>`}</table>
       <h2>Carga por día</h2>
@@ -4263,18 +4436,20 @@ function PlanSemanaTab({ semana, setSemana, semanas, plan, guardar, productos, m
 
   const cerrarPlan = async () => {
     if (items.length===0) { window.alert("No hay nada planificado"); return; }
-    if (estado!=="ok") {
-      const msg = estado==="falta"
-        ? `El plan NO cuadra: necesitas ${r.slots.toFixed(1)} turnos-línea y tienes ${dispo}.`
-        : `El plan NO cuadra: te sobran ${(-dif).toFixed(1)} turnos-línea sin producción asignada.`;
-      const motivo = window.prompt(msg + "\n\nPuedes cerrarlo igualmente, pero el desfase saldrá en el informe al CEO.\nEscribe el motivo para forzar el cierre (o Cancelar):");
+    const base = { slots_plan:r.slots, slots_dispo:dispo, coste_objetivo:r.coste, uds_objetivo:r.uds,
+      huecos_vacios:huecosVacios, turnos_flojos:flojos.length, uds_perdidas:Math.round(udsPerdidas),
+      cerrado_por:perfil?.nombre||"", cerrado_at:new Date().toISOString() };
+    if (!todoOk) {
+      const fallos = checks.filter(c=>!c.ok).map((c,i)=>`${i+1}. ${c.titulo}: ${c.detalle}`).join("\n");
+      const motivo = window.prompt(
+        "No se cumplen todas las comprobaciones:\n\n" + fallos +
+        "\n\nPuedes cerrar igualmente, pero quedará registrado y saldrá en el informe al CEO.\nEscribe el motivo (o Cancelar):");
       if (!motivo || !motivo.trim()) return;
-      await guardar({ cerrado_plan:true, forzado:true, motivo_forzado:motivo.trim(), slots_plan:r.slots, slots_dispo:dispo,
-        coste_objetivo:r.coste, uds_objetivo:r.uds, cerrado_por:perfil?.nombre||"", cerrado_at:new Date().toISOString() });
+      await guardar({ ...base, cerrado_plan:true, forzado:true, motivo_forzado:motivo.trim(),
+        fallos_cierre: checks.filter(c=>!c.ok).map(c=>c.titulo) });
       return;
     }
-    await guardar({ cerrado_plan:true, forzado:false, motivo_forzado:"", slots_plan:r.slots, slots_dispo:dispo,
-      coste_objetivo:r.coste, uds_objetivo:r.uds, cerrado_por:perfil?.nombre||"", cerrado_at:new Date().toISOString() });
+    await guardar({ ...base, cerrado_plan:true, forzado:false, motivo_forzado:"", fallos_cierre:[] });
   };
 
   return (
@@ -4286,7 +4461,10 @@ function PlanSemanaTab({ semana, setSemana, semanas, plan, guardar, productos, m
           <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:plan.forzado?C.amber:C.green}}>
             {plan.forzado?"⚠️ Plan cerrado forzando el cuadre":"🔒 Plan cerrado y cuadrado"}
           </div>
-          {plan.forzado && <div style={{fontSize:12.5,color:C.mutedD,marginTop:4,lineHeight:1.5}}>Motivo: {plan.motivo_forzado}</div>}
+          {plan.forzado && <>
+            <div style={{fontSize:12.5,color:C.mutedD,marginTop:4,lineHeight:1.5}}>Motivo: {plan.motivo_forzado}</div>
+            {(plan.fallos_cierre||[]).length>0 && <div style={{fontSize:12,color:C.amber,marginTop:3,fontWeight:700,lineHeight:1.5}}>Sin cuadrar: {(plan.fallos_cierre||[]).join(" · ")}</div>}
+          </>}
           <button onClick={()=>{ if(window.confirm("¿Reabrir el plan de esta semana?")) guardar({cerrado_plan:false}); }}
             style={{background:"#fff",border:`1px solid ${C.border}`,color:C.mutedD,borderRadius:10,padding:"7px 14px",fontSize:12.5,fontWeight:700,cursor:"pointer",marginTop:8}}>↺ Reabrir</button>
         </div>
@@ -4334,10 +4512,33 @@ function PlanSemanaTab({ semana, setSemana, semanas, plan, guardar, productos, m
         </div>
       </Card>
 
+      {!bloqueado && (
+        <Card style={{marginBottom:12}} color={(todoOk?C.green:C.amber)+"77"}>
+          <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:todoOk?C.green:C.amber,marginBottom:3}}>
+            {todoOk ? "✔ Listo para cerrar" : "Antes de cerrar la semana"}
+          </div>
+          <div style={{fontSize:12,color:C.mutedD,lineHeight:1.55,marginBottom:11}}>
+            Tres cosas tienen que cuadrar. Puedes cerrar sin ellas, pero queda registrado.
+          </div>
+          {checks.map((c,i)=>(
+            <div key={i} style={{display:"flex",gap:10,alignItems:"flex-start",padding:"9px 0",
+              borderBottom: i<checks.length-1 ? `1px solid ${C.card2}` : "none"}}>
+              <div style={{flexShrink:0,width:26,height:26,borderRadius:13,display:"flex",alignItems:"center",justifyContent:"center",
+                background:c.ok?C.greenBg:C.amberBg,border:`1.5px solid ${c.ok?C.green:C.amber}`,
+                color:c.ok?C.green:C.amber,fontSize:14,fontWeight:900}}>{c.ok?"✔":i+1}</div>
+              <div style={{minWidth:0}}>
+                <div style={{fontFamily:F.h,fontWeight:700,fontSize:13.5,color:C.text}}>{c.titulo}</div>
+                <div style={{fontSize:12,color:c.ok?C.mutedD:C.amber,marginTop:2,lineHeight:1.5,fontWeight:c.ok?400:700}}>{c.detalle}</div>
+              </div>
+            </div>
+          ))}
+        </Card>
+      )}
+
       <div style={{display:"grid",gap:9}}>
         <Btn onClick={imprimir} v="secondary">🖨️ Imprimir la planificación de la semana</Btn>
-        {!bloqueado && <Btn onClick={cerrarPlan} v={estado==="ok"?"primary":"secondary"}>
-          {estado==="ok" ? "🔒 Cerrar plan de la semana" : "🔒 Cerrar forzando (pedirá motivo)"}
+        {!bloqueado && <Btn onClick={cerrarPlan} v={todoOk?"primary":"secondary"}>
+          {todoOk ? "🔒 Cerrar plan de la semana" : "🔒 Cerrar sin cuadrar (pedirá motivo)"}
         </Btn>}
       </div>
     </>
