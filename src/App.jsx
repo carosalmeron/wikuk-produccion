@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v2.25.1";
+const APP_VERSION = "v2.25.2";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -3438,6 +3438,13 @@ function RepartoTab({ periodo, semanas, planMes, planesSem, productos, moldes=[]
   const [draft, setDraft] = useState({});
   const [guardado, setGuardado] = useState(false);
 
+  // ── declarar SIEMPRE antes de cualquier efecto que lo use
+  const LN = cfgLineas.length ? cfgLineas : [{id:"_l1",nombre:"Línea 1",personas:3}];
+  const cerradas = (s) => !!planesSem.find(p => p.semana === s)?.cerrado_plan;
+  const abiertas = semanas.filter(s => !cerradas(s));
+  const capSemana = slotsDia * 5;                       // huecos de todo el centro en la semana
+  const capLinea = turnosCentro * 5;                    // huecos de UNA línea en la semana
+
   // borrador: draft[semana][lineaId][productoId] = uds
   useEffect(() => {
     const d = {};
@@ -3451,12 +3458,6 @@ function RepartoTab({ periodo, semanas, planMes, planesSem, productos, moldes=[]
     });
     setDraft(d); setGuardado(false);
   }, [periodo, planesSem.length, LN.length]);
-
-  const cerradas = (s) => !!planesSem.find(p => p.semana === s)?.cerrado_plan;
-  const abiertas = semanas.filter(s => !cerradas(s));
-  const capSemana = slotsDia * 5;                       // huecos de todo el centro en la semana
-  const LN = cfgLineas.length ? cfgLineas : [{id:"_l1",nombre:"Línea 1",personas:3}];
-  const capLinea = turnosCentro * 5;                    // huecos de UNA línea en la semana
   const lineaNom = (id) => LN.find(l=>l.id===id)?.nombre || "Línea";
   // Las líneas son polivalentes: cualquiera puede fabricar cualquier producto.
   const permitidas = () => LN.map(l => l.id);
