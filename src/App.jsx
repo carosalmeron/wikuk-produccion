@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v2.21.0";
+const APP_VERSION = "v2.23.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -2101,6 +2101,95 @@ function LineasScreen({ onBack, centros }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // MOTIVOS DE PARO (catálogo configurable)
 // ═══════════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════
+// MOLDES — catálogo cerrado. La planificación agrupa productos por molde.
+// ═══════════════════════════════════════════════════════════════════════════════
+function MoldesScreen({ onBack, productos }) {
+  const [moldes] = useCol("moldes", "nombre");
+  const [nombre, setNombre] = useState("");
+  const [calibre, setCalibre] = useState("");
+  const [minutos, setMinutos] = useState("30");
+  const [editId, setEditId] = useState(null);
+  const [nuevoAbierto, setNuevoAbierto] = useState(false);
+
+  const startEdit = (m) => { setNuevoAbierto(false); setEditId(m.id); setNombre(m.nombre||"");
+    setCalibre(m.calibre||""); setMinutos((m.minutos_cambio ?? 30).toString()); window.scrollTo(0,0); };
+  const add = async () => {
+    if (!nombre.trim()) { window.alert("Ponle nombre al molde"); return; }
+    const rep = moldes.find(m => m.id !== editId && (m.nombre||"").trim().toLowerCase() === nombre.trim().toLowerCase());
+    if (rep) { window.alert("Ya existe un molde con ese nombre."); return; }
+    await save("moldes", editId||uid(), { nombre: nombre.trim(), calibre: calibre.trim(), minutos_cambio: toNum(minutos)||30 });
+    setNombre(""); setCalibre(""); setMinutos("30"); setEditId(null); setNuevoAbierto(false);
+  };
+
+  // Moldes escritos a mano en productos que aún no están en el catálogo
+  const sueltos = [...new Set(productos.map(p => (p.molde||"").trim()).filter(Boolean))]
+    .filter(t => !moldes.some(m => (m.nombre||"").trim().toLowerCase() === t.toLowerCase()));
+
+  const importar = async () => {
+    if (!window.confirm(`Se van a crear ${sueltos.length} molde(s) a partir de lo escrito en los productos:\n\n${sueltos.join(" · ")}\n\n¿Seguir?`)) return;
+    for (const t of sueltos) await save("moldes", uid(), { nombre: t, calibre: "", minutos_cambio: 30 });
+    window.alert("Creados. Revisa los minutos de cambio de cada uno.");
+  };
+
+  const usos = (m) => productos.filter(p => p.molde_id === m.id || (p.molde||"").trim().toLowerCase() === (m.nombre||"").trim().toLowerCase()).length;
+
+  return (
+    <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
+      <Header title="MOLDES" onBack={onBack} sub="Productos con el mismo molde se fabrican seguidos"/>
+      <div style={{padding:14}}>
+        <FormPlegable abierto={nuevoAbierto} setAbierto={setNuevoAbierto} editando={!!editId} etiqueta="Molde"
+          onCancelar={()=>{setEditId(null);setNombre("");setCalibre("");setMinutos("30");}}>
+          <Field label="Nombre del molde" value={nombre} onChange={setNombre} placeholder="Ej: M-68"/>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+            <Field label="Calibre (opcional)" value={calibre} onChange={setCalibre} placeholder="68"/>
+            <Field dec label="Cambio (min)" value={minutos} onChange={setMinutos} placeholder="30" min="0" step="1"/>
+          </div>
+          <Btn v="ghost" onClick={add}>{editId?"💾 Guardar cambios":"＋ Añadir Molde"}</Btn>
+        </FormPlegable>
+
+        {sueltos.length>0 && (
+          <Card style={{marginBottom:14}} color={C.amber+"66"}>
+            <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.amber,marginBottom:5}}>⚠️ Moldes escritos a mano</div>
+            <div style={{fontSize:12.5,color:C.mutedD,lineHeight:1.6,marginBottom:10}}>
+              Hay {sueltos.length} molde(s) escrito(s) en productos que no están en este catálogo: {sueltos.join(" · ")}.
+              Mientras no estén aquí, la planificación no puede agruparlos.
+            </div>
+            <Btn v="secondary" onClick={importar}>Crearlos en el catálogo</Btn>
+          </Card>
+        )}
+
+        {moldes.length===0 && <Empty icon="🔧" text="Sin moldes. Crea los que tengáis en planta y asígnalos en la ficha de cada producto."/>}
+
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          {moldes.map(m=>{
+            const n = usos(m);
+            return (
+              <Card key={m.id}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
+                  <div style={{minWidth:0}}>
+                    <div style={{fontFamily:F.h,fontWeight:800,fontSize:16,color:C.text}}>🔧 {m.nombre}</div>
+                    <div style={{fontSize:12.5,color:C.mutedD,marginTop:2}}>
+                      {m.calibre?`Calibre ${m.calibre} · `:""}Cambio {m.minutos_cambio ?? 30} min · {n} producto{n!==1?"s":""}
+                    </div>
+                  </div>
+                  <div style={{display:"flex",gap:4,flexShrink:0}}>
+                    <IconBtn onClick={()=>startEdit(m)}>✏️</IconBtn>
+                    <IconBtn danger onClick={()=>{
+                      if (n>0) { window.alert(`No se puede borrar: lo usan ${n} producto(s). Cámbialos primero.`); return; }
+                      if (window.confirm(`¿Eliminar el molde ${m.nombre}?`)) del("moldes", m.id);
+                    }}>🗑️</IconBtn>
+                  </div>
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function MotivosScreen({ onBack }) {
   const [motivos] = useCol("motivos_paro", "nombre");
   const [nombre, setNombre] = useState("");
@@ -2473,6 +2562,7 @@ function ProductoBuscador({ label="Producto", value, onChange, productos, placeh
 
 function ProductosScreen({ onBack, procesos, mps, centros }) {
   const [productos] = useCol("productos", "nombre");
+  const [moldes] = useCol("moldes", "nombre");
   const [edit, setEdit] = useState(null);
   const [busq, setBusq] = useState("");
   const normB = s => String(s||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
@@ -2482,7 +2572,7 @@ function ProductosScreen({ onBack, procesos, mps, centros }) {
     const hay = normB(p.nombre+" "+(p.descripcion||"")+" "+(p.calibre_catalogo||""));
     return términosB.every(t=>hay.includes(t));
   });
-  if (edit !== null) return <ProductoForm onBack={()=>setEdit(null)} ep={edit.id?edit:null} procesos={procesos} mps={mps} centros={centros}/>;
+  if (edit !== null) return <ProductoForm moldes={moldes} onBack={()=>setEdit(null)} ep={edit.id?edit:null} procesos={procesos} mps={mps} centros={centros}/>;
 
   const duplicar = async p => {
     const { id, ...data } = p;
@@ -2513,6 +2603,7 @@ function ProductosScreen({ onBack, procesos, mps, centros }) {
                     {p.uds_turno_linea>0
                       ? <>{" · "}<span style={{color:C.green,fontWeight:700}}>⏱️ {p.uds_turno_linea}/turno · {p.personas_linea||3}p</span></>
                       : <>{" · "}<span style={{color:C.red,fontWeight:700}}>⏱️ sin ritmo</span></>}
+                    {p.molde && <>{" · "}<span style={{color:C.blue,fontWeight:700}}>🔧 {p.molde}</span></>}
                     {" · "}Coste obj: <span style={{color:C.text,fontWeight:700}}>{p.coste_objetivo}€/{p.unidad}</span>
                     {" · "}{p.procesos_asignados?.length||0} procesos · {p.materias_asignadas?.length||0} materias
                   </div>
@@ -2564,7 +2655,7 @@ const NumIn = ({ value, onChange, suf, w=72, step="0.01", ph="" }) => (
   </div>
 );
 
-function ProductoForm({ onBack, ep, procesos, mps, centros }) {
+function ProductoForm({ onBack, ep, procesos, mps, centros, moldes = [] }) {
   const [nombre, setNombre] = useState(ep?.nombre||"");
   const [centro, setCentro] = useState(ep?.centro||"");
   const [unidad, setUnidad] = useState(ep?.unidad||"Stick");
@@ -2574,6 +2665,8 @@ function ProductoForm({ onBack, ep, procesos, mps, centros }) {
   const [objDiario, setObjDiario] = useState(ep?.objetivo_diario?.toString()||"");
   const [udsTurno, setUdsTurno] = useState(ep?.uds_turno_linea?.toString()||"");
   const [persLinea, setPersLinea] = useState(ep?.personas_linea?.toString()||"3");
+  const [moldeId, setMoldeId] = useState(ep?.molde_id
+    || (ep?.molde ? (moldes.find(m=>(m.nombre||"").trim().toLowerCase()===(ep.molde||"").trim().toLowerCase())?.id || "") : ""));
   const [pa, setPa]         = useState(ep?.procesos_asignados||[]); // [{proceso_id,min_obj,define_cantidad}]
   const [ma, setMa]         = useState(ep?.materias_asignadas||[]); // [{mp_id,capas,precio_ud,rendimiento}]
   const [selProc, setSelProc] = useState("");
@@ -2635,6 +2728,8 @@ function ProductoForm({ onBack, ep, procesos, mps, centros }) {
       objetivo_diario: toNum(objDiario),
       uds_turno_linea: toNum(udsTurno),
       personas_linea: parseInt(persLinea)||3,
+      molde_id: moldeId,
+      molde: moldes.find(m=>m.id===moldeId)?.nombre || "",
       procesos_asignados: pa.map(x=>({...x, min_obj: toNum(x.min_obj)})),
       materias_asignadas: ma.map(x=>({...x, capas: toNum(x.capas), precio_ud: toNum(x.precio_ud), rendimiento: toNum(x.rendimiento)||85 })),
     });
@@ -2665,6 +2760,21 @@ function ProductoForm({ onBack, ep, procesos, mps, centros }) {
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
             <Field dec label="Uds por turno-línea" value={udsTurno} onChange={setUdsTurno} type="number" placeholder="150" min="0" step="1"/>
             <Field dec label="Personas que necesita" value={persLinea} onChange={setPersLinea} placeholder="3" min="1" step="1"/>
+          </div>
+          <div style={{borderTop:`1px solid ${C.border}`,marginTop:4,paddingTop:12,marginBottom:12}}>
+            <div style={{fontFamily:F.h,fontWeight:800,fontSize:13,color:C.text,marginBottom:3}}>🔧 Molde</div>
+            <div style={{fontSize:12,color:C.mutedD,marginBottom:11,lineHeight:1.5}}>Elígelo del catálogo. Los productos que comparten molde se pueden fabricar seguidos sin parar la línea.</div>
+            {moldes.length===0
+              ? <div style={{background:C.amberBg,border:`1.5px solid ${C.amber}`,borderRadius:10,padding:"10px 12px",fontSize:12.5,color:C.amber,fontWeight:700,lineHeight:1.5}}>
+                  No hay moldes en el catálogo. Créalos en la pantalla <b>Moldes</b> y vuelve aquí.
+                </div>
+              : <>
+                  <Sel label="Molde que utiliza" value={moldeId} onChange={setMoldeId} placeholder="Sin molde asignado"
+                    options={moldes.map(m=>({value:m.id,label:`🔧 ${m.nombre}${m.calibre?` · cal ${m.calibre}`:""}`}))}/>
+                  {moldeId && (()=>{ const m = moldes.find(z=>z.id===moldeId); return (
+                    <div style={{fontSize:12,color:C.mutedD,marginTop:-8,lineHeight:1.5}}>Cambiar a este molde cuesta <b>{m?.minutos_cambio ?? 30} min</b>. Se edita en la pantalla Moldes.</div>
+                  ); })()}
+                </>}
           </div>
           {toNum(udsTurno)>0 && (
             <div style={{background:C.blueBg,borderRadius:10,padding:"10px 12px",fontSize:13,color:C.text,lineHeight:1.6}}>
@@ -2937,7 +3047,7 @@ function CostesScreen({ onBack, centros }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // PLANIFICACIÓN — plan mensual → recursos → organizador → cuadre → cierre semanal
 // ═══════════════════════════════════════════════════════════════════════════════
-function PlanificacionScreen({ onBack, perfil, productos, mps, producciones, centros, lineas }) {
+function PlanificacionScreen({ onBack, perfil, productos, mps, producciones, centros, lineas, moldes=[] }) {
   const [tab, setTab] = useState("mes");
   const [centroId, setCentroId] = useState("");
   useEffect(()=>{ if(!centroId && centros.length) setCentroId(centros[0].id); },[centros.length]);
@@ -3056,7 +3166,7 @@ function PlanificacionScreen({ onBack, perfil, productos, mps, producciones, cen
         {tab==="reparto" && <RepartoTab periodo={periodo} semanas={semanas} planMes={planMes} planesSem={planesSem}
           productos={prodCentro} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} irASemana={(s)=>{ setSemana(s); setTab("semana"); }}/>}
         {tab==="semana" && <PlanSemanaTab semana={semana} setSemana={setSemana} semanas={semanas} plan={planSem}
-          guardar={guardarSem} productos={prodCentro} mps={mps} perfil={perfil} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} turnosCentro={turnosCentro} cfgLineas={cfgLineas} centroNombre={centro?.nombre||""} replicarEnMes={replicarEnMes} nSemanasMes={semanas.length}/>}
+          guardar={guardarSem} productos={prodCentro} mps={mps} perfil={perfil} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} turnosCentro={turnosCentro} cfgLineas={cfgLineas} centroNombre={centro?.nombre||""} replicarEnMes={replicarEnMes} nSemanasMes={semanas.length} moldes={moldes}/>}
         {tab==="cierre" && <CierreSemanaTab semana={semana} setSemana={setSemana} semanas={semanas} plan={planSem}
           guardar={guardarSem} productos={prodCentro} mps={mps} producciones={producciones} perfil={perfil}/>}
       </div>
@@ -3137,7 +3247,8 @@ const ItemsEditor = ({ items, setItems, productos, bloqueado, persLinea=3 }) => 
               <div style={{fontFamily:F.h,fontWeight:800,fontSize:15,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p?.nombre||"(producto borrado)"}</div>
               {prodSub(p) && <div style={{fontSize:12.5,color:C.blue,fontWeight:600,marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{prodSub(p)}</div>}
               <div style={{fontSize:11.5,color:C.mutedD,marginTop:2}}>
-                {ritmo>0 ? `${turnos.toFixed(1)} huecos de línea · ${pers} persona${pers!==1?"s":""}` : "⚠️ sin ritmo"}
+                {ritmo>0 ? `⏱️ ${num(ritmo)} uds/turno · ${pers} persona${pers!==1?"s":""} · ${turnos.toFixed(1)} huecos` : "⚠️ sin ritmo"}
+                {p?.molde ? ` · 🔧 ${p.molde}` : ""}
               </div>
             </div>
             <div style={{fontFamily:F.h,fontWeight:900,fontSize:19,color:C.text,minWidth:56,textAlign:"right"}}>{num(it.cantidad)}</div>
@@ -3247,7 +3358,7 @@ function PlanMesTab({ periodo, setPeriodo, plan, guardar, productos, mps, semana
       const p = productos.find(x=>x.id===it.producto_id);
       const ritmo = toNum(p?.uds_turno_linea), pers = parseInt(p?.personas_linea)||3;
       const huecos = ritmo>0 ? (toNum(it.cantidad)/ritmo)*(pers/persLinea) : 0;
-      return `<tr><td><b>${esc(p?.nombre||"?")}</b>${prodSub(p)?`<br/><span style="font-size:9.5px;color:#666">${esc(prodSub(p))}</span>`:""}</td><td class="n">${num(it.cantidad)}</td><td class="n">${ritmo||"—"}</td><td class="n">${pers}</td><td class="n">${huecos.toFixed(1)}</td><td class="n">${eur(toNum(p?.coste_objetivo)*toNum(it.cantidad))}</td></tr>`;
+      return `<tr><td><b>${esc(p?.nombre||"?")}</b>${prodSub(p)?`<br/><span style="font-size:9.5px;color:#666">${esc(prodSub(p))}</span>`:""}</td><td class="n">${num(it.cantidad)}</td><td class="n">${ritmo||"—"}</td><td class="n">${pers}</td><td>${esc(p?.molde||"—")}</td><td class="n">${huecos.toFixed(1)}</td><td class="n">${eur(toNum(p?.coste_objetivo)*toNum(it.cantidad))}</td></tr>`;
     }).join("");
     const porSemana = semanas.map(sm=>{
       const ps = planesSem.find(x=>x.semana===sm);
@@ -3258,7 +3369,7 @@ function PlanMesTab({ periodo, setPeriodo, plan, guardar, productos, mps, semana
       <h1>Planificación mensual — ${esc(nombreMes(periodo))}</h1>
       <div class="sub">${esc(centroNombre)} · ${nLineasTxt} · ${turnosCentro} turno${turnosCentro!==1?"s":""} · ${dias} días laborables · plantilla ${persDia} personas/día</div>
       <h2>Qué se va a fabricar</h2>
-      <table><tr><th>Producto</th><th class="n">Uds</th><th class="n">Ritmo</th><th class="n">Pers.</th><th class="n">Huecos</th><th class="n">Coste obj.</th></tr>${filas}</table>
+      <table><tr><th>Producto</th><th class="n">Uds</th><th class="n">Ritmo</th><th class="n">Pers.</th><th>Molde</th><th class="n">Huecos</th><th class="n">Coste obj.</th></tr>${filas}</table>
       ${bloqueRecursos(r, mps, dias, persDia)}
       <h2>Reparto por semanas</h2>
       <table><tr><th>Semana</th><th>Fechas</th><th class="n">Uds</th><th class="n">Pers./día</th><th class="n">Coste obj.</th><th>Estado</th></tr>${porSemana}</table>
@@ -3399,6 +3510,12 @@ function RepartoTab({ periodo, semanas, planMes, planesSem, productos, slotsDia=
                   <div style={{minWidth:0}}>
                     <div style={{fontFamily:F.h,fontWeight:800,fontSize:15,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p?.nombre||"?"}</div>
                     {prodSub(p) && <div style={{fontSize:12,color:C.blue,fontWeight:600,marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{prodSub(p)}</div>}
+                    <div style={{fontSize:11.5,color:C.mutedD,marginTop:2}}>
+                      {toNum(p?.uds_turno_linea)>0
+                        ? <>⏱️ {num(toNum(p.uds_turno_linea))} uds/turno · {parseInt(p.personas_linea)||3}p</>
+                        : <span style={{color:C.red,fontWeight:700}}>⚠️ sin ritmo</span>}
+                      {p?.molde && <> · 🔧 {p.molde}</>}
+                    </div>
                     <div style={{fontSize:11.5,color:C.mutedD,marginTop:1}}>Plan del mes: {num(it.cantidad)} uds</div>
                   </div>
                   <span style={{flexShrink:0,background:ok?C.greenBg:C.amberBg,border:`1.5px solid ${ok?C.green:C.amber}`,color:ok?C.green:C.amber,borderRadius:20,padding:"5px 12px",fontFamily:F.h,fontWeight:800,fontSize:12.5}}>
@@ -3476,7 +3593,11 @@ const DIA_CORTO = (f) => {
 };
 const codigoCorto = (n="") => n.split(" ")[0].slice(0,13);
 
-function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLineas, turnosCentro=2, replicarEnMes, nSemanasMes=4 }) {
+function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLineas, turnosCentro=2, replicarEnMes, nSemanasMes=4, moldes=[] }) {
+  const moldeDe = (p) => p?.molde_id || (p?.molde ? `txt:${(p.molde||"").trim().toLowerCase()}` : "");
+  const nombreMolde = (k) => !k ? "Sin molde"
+    : (k.startsWith("txt:") ? k.slice(4) : (moldes.find(m=>m.id===k)?.nombre || "Molde"));
+  const minutosMolde = (k) => k && !k.startsWith("txt:") ? (moldes.find(m=>m.id===k)?.minutos_cambio ?? 30) : 30;
   const CFG = (cfgLineas && cfgLineas.length) ? cfgLineas : [{nombre:"Línea 1",personas:3},{nombre:"Línea 2",personas:3}];
   const LINEAS_CAL = CFG.map(l=>l.nombre);
   const persDeLinea = (n) => CFG.find(l=>l.nombre===n)?.personas || 3;
@@ -3499,11 +3620,21 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
     const pend = {};
     items.forEach(it=>{ pend[it.producto_id] = (pend[it.producto_id]||0) + (parseFloat(it.cantidad)||0); });
     const out = [];
+    const ultimoMolde = {};
     for (const f of dias) {
       for (const t of TURNOS_CAL) {
         const libres = [...LINEAS_CAL];
         while (libres.length>0) {
-          const pid = Object.keys(pend).find(k => pend[k] > 0.5 && ritmoDe(productos.find(p=>p.id===k))>0);
+          // preferimos seguir con el mismo molde que ya tenía esa línea: evita paradas por cambio
+          const moldeActual = ultimoMolde[libres[0]];
+          const candidatos = Object.keys(pend)
+            .filter(k => pend[k] > 0.5 && ritmoDe(productos.find(p=>p.id===k))>0)
+            .sort((a,b) => {
+              const ma = moldeDe(productos.find(p=>p.id===a));
+              const mb = moldeDe(productos.find(p=>p.id===b));
+              return (mb===moldeActual?1:0) - (ma===moldeActual?1:0);
+            });
+          const pid = candidatos[0];
           if (!pid) break;
           const prod = productos.find(p=>p.id===pid);
           const ritmo = ritmoDe(prod), pers = persDe(prod);
@@ -3514,8 +3645,10 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
           const q = Math.min(ritmo, pend[pid]);
           const g = uid();
           const usadas = libres.splice(0, nSlots);
-          usadas.forEach(l => out.push({ id:uid(), grupo:g, fecha:f, turno:t, linea:l,
-            producto_id:pid, cantidad: Math.round(q/nSlots*10)/10 }));
+          usadas.forEach(l => {
+            out.push({ id:uid(), grupo:g, fecha:f, turno:t, linea:l, producto_id:pid, cantidad: Math.round(q/nSlots*10)/10 });
+            ultimoMolde[l] = moldeDe(productos.find(p=>p.id===pid));
+          });
           pend[pid] = Math.round((pend[pid]-q)*10)/10;
         }
       }
@@ -3588,6 +3721,107 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
     if (n) window.alert(`Copiada a ${n} semana${n!==1?"s":""}. Revisa el cuadre de cada una.`);
   };
 
+  // ¿este hueco obliga a cambiar el molde respecto al anterior de la misma línea?
+  const secuencia = (l) => {
+    const out = [];
+    dias.forEach(f => TURNOS_CAL.forEach(t => {
+      const e = cal.find(x=>x.fecha===f && x.turno===t && x.linea===l);
+      if (e) out.push({ f, t, molde: moldeDe(productos.find(p=>p.id===e.producto_id)) });
+    }));
+    return out;
+  };
+  const hayCambioMolde = (f,t,l) => {
+    const sq = secuencia(l);
+    const i = sq.findIndex(x=>x.f===f && x.t===t);
+    return i > 0 && sq[i].molde !== sq[i-1].molde;
+  };
+  const cambiosSemana = LINEAS_CAL.reduce((a,l)=>{
+    const sq = secuencia(l);
+    return a + sq.filter((x,i)=> i>0 && x.molde !== sq[i-1].molde).length;
+  },0);
+  const minutosCambio = LINEAS_CAL.reduce((a,l)=>{
+    const sq = secuencia(l);
+    return a + sq.reduce((b,x,i)=>{
+      if (i===0 || x.molde===sq[i-1].molde) return b;
+      return b + minutosMolde(x.molde);
+    },0);
+  },0);
+
+  // ── Agrupación por molde: qué se puede encadenar sin parar la línea ─────────
+  const slotsPorLinea = dias.length * TURNOS_CAL.length;
+  const grupos = (() => {
+    const g = {};
+    (items||[]).forEach(it => {
+      const p = productos.find(x=>x.id===it.producto_id);
+      const ritmo = ritmoDe(p);
+      if (!p || ritmo<=0) return;
+      const k = moldeDe(p);
+      const turnos = toNum(it.cantidad)/ritmo;
+      const slots = turnos * Math.max(1, Math.ceil(persDe(p)/(CFG[0]?.personas||3)));
+      (g[k] = g[k] || { molde:k, productos:[], slots:0 });
+      g[k].productos.push({ p, uds: toNum(it.cantidad), turnos, slots });
+      g[k].slots += slots;
+    });
+    return Object.values(g).sort((a,b)=>b.slots-a.slots);
+  })();
+  const combinables = grupos.filter(g => g.molde && g.productos.length > 1);
+
+  // Coloca el calendario agrupando por molde: cada línea agota un molde antes de cambiar
+  const colocarPorMolde = () => {
+    if (!grupos.length) { window.alert("Esta semana no tiene objetivo con ritmo definido."); return; }
+    if (cal.length>0 && !window.confirm("Se va a rehacer el calendario entero agrupando por molde. ¿Seguir?")) return;
+    const ocupado = {};
+    const libre = (f,t,l) => !ocupado[`${f}|${t}|${l}`];
+    const marcar = (f,t,l) => { ocupado[`${f}|${t}|${l}`] = true; };
+    const out = [];
+    const sobra = [];
+
+    // 1) productos que necesitan más de una línea: van por día/turno ocupando líneas contiguas
+    const multi = [];
+    grupos.forEach(g => g.productos.forEach(x => {
+      if (persDe(x.p) > (CFG[0]?.personas||3)) multi.push(x);
+    }));
+    multi.forEach(x => {
+      let pend = x.uds;
+      for (const f of dias) { for (const t of TURNOS_CAL) {
+        if (pend <= 0.5) break;
+        const libres = LINEAS_CAL.filter(l => libre(f,t,l));
+        let acum = 0; const usadas = [];
+        for (const l of libres) { usadas.push(l); acum += persDeLinea(l); if (acum >= persDe(x.p)) break; }
+        if (acum < persDe(x.p)) continue;
+        const q = Math.min(ritmoDe(x.p), pend);
+        const g2 = uid();
+        usadas.forEach(l => { marcar(f,t,l); out.push({ id:uid(), grupo:g2, fecha:f, turno:t, linea:l,
+          producto_id:x.p.id, cantidad: Math.round(q/usadas.length*10)/10 }); });
+        pend = Math.round((pend-q)*10)/10;
+      }}
+      if (pend > 0.5) sobra.push(`· ${x.p.nombre}: ${num(pend)} uds`);
+    });
+
+    // 2) el resto: línea por línea, agotando cada molde antes de pasar al siguiente
+    const cola = [];
+    grupos.forEach(g => g.productos.forEach(x => {
+      if (persDe(x.p) <= (CFG[0]?.personas||3)) cola.push({ ...x, molde:g.molde, pend:x.uds });
+    }));
+    let i = 0;
+    for (const l of LINEAS_CAL) {
+      for (const f of dias) { for (const t of TURNOS_CAL) {
+        if (!libre(f,t,l)) continue;
+        while (i < cola.length && cola[i].pend <= 0.5) i++;
+        if (i >= cola.length) break;
+        const x = cola[i];
+        const q = Math.min(ritmoDe(x.p), x.pend);
+        marcar(f,t,l);
+        out.push({ id:uid(), grupo:uid(), fecha:f, turno:t, linea:l, producto_id:x.p.id, cantidad:Math.round(q*10)/10 });
+        x.pend = Math.round((x.pend-q)*10)/10;
+      }}
+    }
+    cola.filter(x=>x.pend>0.5).forEach(x=>sobra.push(`· ${x.p.nombre}: ${num(x.pend)} uds`));
+
+    setCal(out);
+    if (sobra.length) window.alert(`Colocado agrupando por molde.\n\nNo cabe todo en la semana. Se queda fuera:\n${sobra.join("\n")}`);
+  };
+
   const vaciarDia = (f) => {
     if (!window.confirm(`¿Vaciar todo el ${DIA_CORTO(f)}?`)) return;
     setCal(cal.filter(x=>x.fecha!==f));
@@ -3651,6 +3885,7 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
                   const e = enSlot(f,t,l);
                   const prod = e && productos.find(p=>p.id===e.producto_id);
                   const c = e ? colorDe(e.producto_id) : null;
+                  const cambio = e && hayCambioMolde(f,t,l);
                   return (
                     <button key={l} onClick={()=>!bloqueado && setEdit({fecha:f,turno:t,linea:l})}
                       style={{flex:1,minWidth:0,minHeight:60,background:e?c.bg:"#fff",border:e?`1.5px solid ${c.bd}`:`1.5px dashed ${C.border}`,
@@ -3659,7 +3894,10 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
                         <>
                           <div style={{fontFamily:F.h,fontWeight:800,fontSize:12.5,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{codigoCorto(prod?.nombre||"?")}</div>
                           <div style={{fontFamily:F.h,fontWeight:900,fontSize:17,color:c.bd,marginTop:1}}>{num(e.cantidad)}</div>
-                          <div style={{fontSize:10,color:C.mutedD,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{l} · {cal.filter(x=>x.grupo===e.grupo).reduce((a,z)=>a+persDeLinea(z.linea),0)||persDeLinea(l)}p</div>
+                          <div style={{fontSize:10,color:C.mutedD,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                            {moldeDe(prod) ? `🔧 ${nombreMolde(moldeDe(prod))}` : l} · {cal.filter(x=>x.grupo===e.grupo).reduce((a,z)=>a+persDeLinea(z.linea),0)||persDeLinea(l)}p
+                            {cambio && <span style={{color:C.amber,fontWeight:800}}> ⇄</span>}
+                          </div>
                         </>
                       ) : (
                         <div style={{color:C.muted,fontSize:11.5,textAlign:"center",paddingTop:16,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{bloqueado?"—":`+ ${l} · ${persDeLinea(l)}p`}</div>
@@ -3672,6 +3910,70 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
           </Card>
         );
       })}
+
+      {!bloqueado && grupos.length>0 && (
+        <Card style={{marginBottom:12}} color={C.blue+"55"}>
+          <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text,marginBottom:3}}>💡 Agrupación por molde</div>
+          <div style={{fontSize:12,color:C.mutedD,lineHeight:1.55,marginBottom:11}}>
+            Lo que hay que fabricar esta semana, ordenado por molde. Los productos de un mismo bloque se pueden encadenar sin parar la línea.
+          </div>
+          {grupos.map(g=>{
+            const dias2 = g.slots/TURNOS_CAL.length;
+            const juntos = g.productos.length>1 && g.molde;
+            return (
+              <div key={g.molde||"sin"} style={{background:juntos?C.blueBg:C.card2,borderRadius:11,padding:"11px 12px",marginBottom:8}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8,marginBottom:6}}>
+                  <b style={{fontFamily:F.h,fontSize:14,color:juntos?C.blue:C.text}}>🔧 {nombreMolde(g.molde)}</b>
+                  <span style={{fontSize:12.5,color:C.mutedD,flexShrink:0}}>{g.slots.toFixed(1)} huecos · {dias2.toFixed(1)} día{dias2!==1?"s":""} de línea</span>
+                </div>
+                {g.productos.map(x=>(
+                  <div key={x.p.id} style={{display:"flex",justifyContent:"space-between",fontSize:12.5,color:C.mutedD,padding:"2px 0"}}>
+                    <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{x.p.nombre}</span>
+                    <span style={{flexShrink:0,marginLeft:8}}>{num(x.uds)} uds · {(x.slots/TURNOS_CAL.length).toFixed(1)} d</span>
+                  </div>
+                ))}
+                {juntos && (
+                  <div style={{fontSize:12,color:C.blue,fontWeight:700,marginTop:6,lineHeight:1.5}}>
+                    ✔ {g.productos.length} productos con el mismo molde: {dias2.toFixed(1)} días seguidos en una línea, sin cambios.
+                  </div>
+                )}
+                {!g.molde && (
+                  <div style={{fontSize:12,color:C.amber,fontWeight:700,marginTop:6,lineHeight:1.5}}>
+                    ⚠️ Sin molde asignado en su ficha. No se pueden agrupar.
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          {combinables.length>0 && (
+            <div style={{background:C.greenBg,borderRadius:10,padding:"10px 12px",marginBottom:10,fontSize:12.5,color:C.green,fontWeight:700,lineHeight:1.55}}>
+              💡 Hay {combinables.length} molde{combinables.length!==1?"s":""} con varios productos. Colocándolos seguidos te ahorras {combinables.reduce((a,g)=>a+(g.productos.length-1)*minutosMolde(g.molde),0)} min de cambios.
+            </div>
+          )}
+          <Btn v="secondary" onClick={colocarPorMolde}>⚡ Colocar agrupado por molde</Btn>
+        </Card>
+      )}
+
+      {cal.length>0 && (
+        <Card style={{marginBottom:12}} color={cambiosSemana>0?C.amber+"55":C.green+"55"}>
+          <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text,marginBottom:7}}>🔧 Cambios de molde</div>
+          <div style={{display:"flex",gap:8,marginBottom:8}}>
+            <div style={{flex:1,background:C.card2,borderRadius:12,padding:"11px 8px",textAlign:"center"}}>
+              <div style={{fontFamily:F.h,fontWeight:900,fontSize:22,color:cambiosSemana>0?C.amber:C.green}}>{cambiosSemana}</div>
+              <div style={{fontSize:10.5,color:C.mutedD}}>Cambios en la semana</div>
+            </div>
+            <div style={{flex:1,background:C.card2,borderRadius:12,padding:"11px 8px",textAlign:"center"}}>
+              <div style={{fontFamily:F.h,fontWeight:900,fontSize:22,color:C.text}}>{Math.round(minutosCambio/60*10)/10} h</div>
+              <div style={{fontSize:10.5,color:C.mutedD}}>Tiempo perdido</div>
+            </div>
+          </div>
+          <div style={{fontSize:12,color:C.mutedD,lineHeight:1.55}}>
+            {cambiosSemana===0
+              ? "Ningún cambio de molde: cada línea encadena el mismo molde toda la semana."
+              : "Los huecos marcados con ⇄ obligan a cambiar el molde. Agrupa productos del mismo molde seguidos en la misma línea para quitarlos."}
+          </div>
+        </Card>
+      )}
 
       <Card style={{marginBottom:12}}>
         <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text,marginBottom:9}}>📊 Colocado frente al objetivo</div>
@@ -3706,7 +4008,8 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
 function SlotEditor({ slot, entrada, productos, items, colocado, objetivo, persLinea=3, onAsignar, onQuitar, onCerrar }) {
   const [pid, setPid] = useState(entrada?.producto_id || "");
   const [q, setQ] = useState(entrada ? String(entrada.cantidad) : "");
-  const prod = productos.find(p=>p.id===pid);
+  const p = productos.find(z=>z.id===pid);
+  const prod = p;
   const ritmo = parseFloat(prod?.uds_turno_linea)||0;
   const pers = parseInt(prod?.personas_linea)||3;
   const dobles = pers > persLinea;
@@ -3749,7 +4052,7 @@ function SlotEditor({ slot, entrada, productos, items, colocado, objetivo, persL
           <>
             <div style={{background:ritmo>0?C.blueBg:C.redBg,borderRadius:11,padding:"11px 13px",marginBottom:12,fontSize:12.5,color:ritmo>0?C.text:C.red,lineHeight:1.6}}>
               {ritmo>0
-                ? <>Ritmo estándar <b>{ritmo} uds</b> por turno con <b>{pers} personas</b>{dobles && <b style={{color:C.amber}}> — ocupa {Math.ceil(pers/persLinea)} líneas del turno</b>}</>
+                ? <>Ritmo estándar <b>{ritmo} uds</b> por turno con <b>{pers} personas</b>{p?.molde && <> · molde <b>🔧 {p.molde}</b></>}{dobles && <b style={{color:C.amber}}> — ocupa {Math.ceil(pers/persLinea)} líneas del turno</b>}</>
                 : <>⚠️ Este producto no tiene ritmo definido. Ponlo en su ficha o el cuadre no contará bien.</>}
             </div>
             <div style={{marginBottom:14}}>
@@ -3777,7 +4080,7 @@ function SlotEditor({ slot, entrada, productos, items, colocado, objetivo, persL
 }
 
 // ── TAB 2: PLAN SEMANAL + CUADRE ───────────────────────────────────────────────
-function PlanSemanaTab({ semana, setSemana, semanas, plan, guardar, productos, mps, perfil, slotsDia=SLOTS_DIA, persLinea=3, persDia=12, turnosCentro=TURNOS_ABIERTOS, cfgLineas, centroNombre="", replicarEnMes, nSemanasMes=4 }) {
+function PlanSemanaTab({ semana, setSemana, semanas, plan, guardar, productos, mps, perfil, slotsDia=SLOTS_DIA, persLinea=3, persDia=12, turnosCentro=TURNOS_ABIERTOS, cfgLineas, centroNombre="", replicarEnMes, nSemanasMes=4, moldes=[] }) {
   const items = plan.items || [];
   const bloqueado = !!plan.cerrado_plan;
   const setItems = (v) => guardar({ items: v });
@@ -3804,7 +4107,7 @@ function PlanSemanaTab({ semana, setSemana, semanas, plan, guardar, productos, m
         const e = cal.find(x=>x.fecha===f && x.turno===t && x.linea===l.nombre);
         if (!e) return `<td class="n" style="color:#aaa">—</td>`;
         const p = productos.find(z=>z.id===e.producto_id);
-        return `<td class="n"><b>${esc(codigoCorto(p?.nombre||"?"))}</b><br/>${num(e.cantidad)} uds</td>`;
+        return `<td class="n"><b>${esc(codigoCorto(p?.nombre||"?"))}</b><br/>${num(e.cantidad)} uds${p?.molde?`<br/><span style="font-size:9px;color:#666">🔧 ${esc(p.molde)}</span>`:""}</td>`;
       }).join("");
       return `<tr><td><b>${esc(t)}</b> · ${esc(l.nombre)}<br/><span style="font-size:9px;color:#666">${l.personas}p</span></td>${celdas}</tr>`;
     }).join("")).join("");
@@ -3863,7 +4166,7 @@ function PlanSemanaTab({ semana, setSemana, semanas, plan, guardar, productos, m
         </div>
       )}
 
-      <CalendarioSemana semana={semana} plan={plan} guardar={guardar} productos={productos} bloqueado={bloqueado} cfgLineas={cfgLineas} turnosCentro={turnosCentro} replicarEnMes={replicarEnMes} nSemanasMes={nSemanasMes}/>
+      <CalendarioSemana semana={semana} plan={plan} guardar={guardar} productos={productos} bloqueado={bloqueado} cfgLineas={cfgLineas} turnosCentro={turnosCentro} replicarEnMes={replicarEnMes} nSemanasMes={nSemanasMes} moldes={moldes}/>
 
       <button onClick={()=>setVerObjetivo(v=>!v)}
         style={{width:"100%",background:"#fff",border:`1.5px solid ${C.border}`,color:C.mutedD,borderRadius:12,padding:"13px",fontFamily:F.h,fontWeight:800,fontSize:13.5,cursor:"pointer",marginBottom:12}}>
@@ -4132,6 +4435,7 @@ function Home({ perfil, onGo, onLogout, counts, ordenes=[], producciones=[], pro
   const esGerencia = perfil.rol === "gerencia";
   const tiles = [
     { id:"planificacion", icon:"📅", bg:"#EEF2FF", label:"Planificación", sub:"Mes · semana · cuadre · cierre",     roles:["gerencia","sup_fabrica"] },
+    { id:"moldes",    icon:"🔧", bg:"#F1F5F9", label:"Moldes",               sub:"Catálogo para agrupar producción", roles:["gerencia","sup_fabrica"] },
     { id:"ordenes",   icon:"📋", bg:"#ECFDF5", label:"Órdenes de Producción", sub:"Planificar y registrar",           roles:["gerencia","sup_fabrica","sup_oficina"] },
     { id:"diario",    icon:"📖", bg:"#EFF6FF", label:"Diario de Fabricación", sub:"El parte oficial del día",          roles:["gerencia","sup_fabrica","sup_oficina"] },
     { id:"analitica", icon:"📊", bg:"#FDF2F8", label:"Analítica",         sub:"Evolución · costes · lotes · equipos", roles:["gerencia","sup_fabrica"] },
@@ -4243,6 +4547,7 @@ export default function App() {
   const [usuarios] = useCol("usuarios", "nombre");
   const [centros]  = useCol("centros", "nombre");
   const [lineas]   = useCol("lineas", "nombre");
+  const [moldes]   = useCol("moldes", "nombre");
   const [motivos]  = useCol("motivos_paro", "nombre");
   const [turnos]   = useCol("turnos");
   const [procesos] = useCol("procesos", "nombre");
@@ -4346,7 +4651,8 @@ export default function App() {
     <div style={{fontFamily:F.b}}>
       <style>{STYLES}</style>
       {view==="home"      && <Home perfil={perfil} onGo={setView} onLogout={()=>signOut(auth)} counts={counts} ordenes={ordenesRoot} producciones={produccionesRoot} productos={productos}/>}
-      {view==="planificacion" && <PlanificacionScreen onBack={back} perfil={perfil} productos={productos} mps={mps} producciones={produccionesRoot} centros={centros} lineas={lineas}/>}
+      {view==="moldes"    && <MoldesScreen onBack={back} productos={productos}/>}
+      {view==="planificacion" && <PlanificacionScreen onBack={back} perfil={perfil} productos={productos} mps={mps} producciones={produccionesRoot} centros={centros} lineas={lineas} moldes={moldes}/>}
       {view==="ordenes"   && <OrdenesScreen onBack={back} perfil={perfil} productos={productos} lineas={lineas} turnos={turnos} centros={centros} mps={mps} motivos={motivos} usuarios={usuarios}/>}
       {view==="diario"    && <DiarioScreen onBack={back} productos={productos} lineas={lineas} turnos={turnos} mps={mps} motivos={motivos} usuarios={usuarios} centros={centros}/>}
       {view==="analitica" && <AnaliticaScreen onBack={back} productos={productos} mps={mps} lineas={lineas} turnos={turnos} usuarios={usuarios} centros={centros}/>}
