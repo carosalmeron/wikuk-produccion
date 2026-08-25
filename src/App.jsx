@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v2.18.0";
+const APP_VERSION = "v2.19.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -257,6 +257,28 @@ const Btn = ({ children, onClick, v = "primary", disabled, style = {} }) => {
   };
   return <button onClick={disabled?undefined:onClick} style={{fontFamily:F.h,fontWeight:700,fontSize:15,borderRadius:12,padding:"14px 20px",cursor:disabled?"not-allowed":"pointer",width:"100%",textAlign:"center",opacity:disabled?0.35:1,...vs[v],...style}}>{children}</button>;
 };
+// Formulario que solo se abre cuando se pide (o cuando se está editando algo)
+const FormPlegable = ({ abierto, setAbierto, editando, etiqueta, onCancelar, children }) => {
+  const visible = abierto || editando;
+  if (!visible) return (
+    <button onClick={()=>setAbierto(true)}
+      style={{width:"100%",background:C.accent,border:"none",color:"#fff",borderRadius:14,padding:"16px",
+        fontFamily:F.h,fontWeight:800,fontSize:15.5,cursor:"pointer",marginBottom:14}}>＋ {etiqueta}</button>
+  );
+  return (
+    <Card style={{marginBottom:14}} color={editando?C.amber+"66":undefined}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+        <span style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:editando?C.amber:C.text}}>
+          {editando ? "✏️ Editando" : `＋ ${etiqueta}`}
+        </span>
+        <button onClick={()=>{ setAbierto(false); onCancelar && onCancelar(); }}
+          style={{background:"none",border:"none",color:C.muted,fontSize:20,cursor:"pointer",lineHeight:1}}>✕</button>
+      </div>
+      {children}
+    </Card>
+  );
+};
+
 const Field = ({ label, value, onChange, type = "text", placeholder, min, step, dec }) => (
   <div style={{marginBottom:14}}>
     {label && <label style={{display:"block",fontFamily:F.h,fontWeight:600,fontSize:12,color:C.mutedD,marginBottom:5,letterSpacing:0.2}}>{label}</label>}
@@ -1954,20 +1976,21 @@ function CentrosScreen({ onBack }) {
   const [tarifa, setTarifa] = useState("");
   const [turnosAb, setTurnosAb] = useState("2");
   const [editId, setEditId] = useState(null);
+  const [nuevoAbierto, setNuevoAbierto] = useState(false);
 
   const add = async () => {
     if (!nombre.trim()) return;
     await save("centros", editId||uid(), { nombre: nombre.trim(), ubicacion: ubicacion.trim(),
       tarifa_mo: toNum(tarifa)||0, turnos_abiertos: parseInt(turnosAb)||2, activo: true });
-    setNombre(""); setUbicacion(""); setTarifa(""); setTurnosAb("2"); setEditId(null);
+    setNombre(""); setUbicacion(""); setTarifa(""); setTurnosAb("2"); setEditId(null); setNuevoAbierto(false);
   };
-  const startEdit = (x) => { setEditId(x.id); setNombre(x.nombre||""); setUbicacion(x.ubicacion||"");
+  const startEdit = (x) => { setNuevoAbierto(false); setEditId(x.id); setNombre(x.nombre||""); setUbicacion(x.ubicacion||"");
     setTarifa(x.tarifa_mo?.toString()||""); setTurnosAb((x.turnos_abiertos||2).toString()); window.scrollTo(0,0); };
   return (
     <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
       <Header title="CENTROS DE TRABAJO" onBack={onBack} sub="Cada centro produce de forma independiente"/>
       <div style={{padding:14}}>
-        <Card style={{marginBottom:14}}>
+        <FormPlegable abierto={nuevoAbierto} setAbierto={setNuevoAbierto} editando={!!editId} etiqueta="Centro" onCancelar={()=>{setEditId(null);setNombre("");setUbicacion("");setTarifa("");setTurnosAb("2");}}>
           <Field label="Nombre del centro" value={nombre} onChange={setNombre} placeholder="Ej: Planta Baza"/>
           <Field label="Ubicación (opcional)" value={ubicacion} onChange={setUbicacion} placeholder="Ej: Baza, Granada"/>
           <Field dec label="Tarifa MO de referencia (€/hora)" value={tarifa} onChange={setTarifa} placeholder="15.25" min="0" step="0.01"/>
@@ -1978,8 +2001,7 @@ function CentrosScreen({ onBack }) {
             <div style={{fontSize:12,color:C.mutedD,marginTop:-8,lineHeight:1.5}}>Las personas de cada línea se ponen en <b>Líneas de Producción</b>, una por una.</div>
           </div>
           <Btn v="ghost" onClick={add}>{editId?"💾 Guardar cambios":"＋ Añadir Centro"}</Btn>
-          {editId && <button onClick={()=>{setEditId(null);setNombre("");setUbicacion("");setTarifa("");setTurnosAb("2");}} style={{marginLeft:8,background:"none",border:"none",color:C.muted,fontSize:14,cursor:"pointer",textDecoration:"underline"}}>Cancelar</button>}
-        </Card>
+        </FormPlegable>
         {centros.length===0 && <Empty icon="🏭" text="Sin centros. Crea al menos uno para poder asignar operarios y productos."/>}
         <div style={{display:"flex",flexDirection:"column",gap:8}}>
           {centros.map(c=>(
@@ -2020,27 +2042,27 @@ function LineasScreen({ onBack, centros }) {
   const [nombre, setNombre] = useState("");
   const [pers, setPers] = useState("3");
   const [editId, setEditId] = useState(null);
-  const startEdit = (x)=>{ setEditId(x.id); setNombre(x.nombre||""); setCentro(x.centro||""); setPers((x.personas||3).toString()); window.scrollTo(0,0); };
+  const [nuevoAbierto, setNuevoAbierto] = useState(false);
+  const startEdit = (x)=>{ setNuevoAbierto(false); setEditId(x.id); setNombre(x.nombre||""); setCentro(x.centro||""); setPers((x.personas||3).toString()); window.scrollTo(0,0); };
   useEffect(()=>{ if(!centro && centros.length) setCentro(centros[0].id); },[centros.length]);
 
   const add = async () => {
     if (!nombre.trim() || !centro) return;
     await save("lineas", editId||uid(), { centro, nombre: nombre.trim(), personas: parseInt(pers)||3, activo: true });
-    setNombre(""); setPers("3"); setEditId(null);
+    setNombre(""); setPers("3"); setEditId(null); setNuevoAbierto(false);
   };
   return (
     <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
       <Header title="LÍNEAS DE PRODUCCIÓN" onBack={onBack} sub="Una orden nace y muere en su línea"/>
       <div style={{padding:14}}>
-        <Card style={{marginBottom:14}}>
+        <FormPlegable abierto={nuevoAbierto} setAbierto={setNuevoAbierto} editando={!!editId} etiqueta="Línea" onCancelar={()=>{setEditId(null);setNombre("");setPers("3");}}>
           <Sel label="Centro" value={centro} onChange={setCentro} placeholder="Centro…"
             options={centros.map(x=>({value:x.id,label:`🏭 ${x.nombre}`}))}/>
           <Field label="Nombre de la línea" value={nombre} onChange={setNombre} placeholder="Ej: Maextra / Especta / MX368"/>
           <Field dec label="Personas en la línea" value={pers} onChange={setPers} placeholder="3" min="1" step="1"/>
           <div style={{fontSize:12,color:C.mutedD,marginTop:-8,marginBottom:12,lineHeight:1.5}}>Cuánta gente trabaja en esta línea en un turno. Es lo que la planificación usa para saber si cuadra la plantilla.</div>
           <Btn v="ghost" onClick={add}>{editId?"💾 Guardar cambios":"＋ Añadir Línea"}</Btn>
-          {editId && <button onClick={()=>{setEditId(null);setNombre("");setPers("3");}} style={{marginLeft:8,background:"none",border:"none",color:C.muted,fontSize:14,cursor:"pointer",textDecoration:"underline"}}>Cancelar</button>}
-        </Card>
+        </FormPlegable>
         {centros.map(ct=>{
           const rows = lineas.filter(l=>l.centro===ct.id);
           if(!rows.length) return null;
@@ -2084,6 +2106,7 @@ function MotivosScreen({ onBack }) {
   const [nombre, setNombre] = useState("");
   const [icono, setIcono] = useState("");
   const [editId, setEditId] = useState(null);
+  const [nuevoAbierto, setNuevoAbierto] = useState(false);
   const startEdit = (m)=>{ setEditId(m.id); setNombre(m.nombre||""); setIcono(m.icono||""); window.scrollTo(0,0); };
   const add = async () => {
     if (!nombre.trim()) return;
@@ -2095,20 +2118,19 @@ function MotivosScreen({ onBack }) {
     <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
       <Header title="MOTIVOS DE PARO" onBack={onBack} sub="Los botones que verá el operario al parar"/>
       <div style={{padding:14}}>
-        <Card style={{marginBottom:14}}>
+        <FormPlegable abierto={nuevoAbierto} setAbierto={setNuevoAbierto} editando={!!editId} etiqueta="Motivo" onCancelar={()=>{setEditId(null);}}>
           <div style={{display:"grid",gridTemplateColumns:"70px 1fr",gap:10}}>
             <Field label="Icono" value={icono} onChange={setIcono} placeholder="🔧"/>
             <Field label="Motivo" value={nombre} onChange={setNombre} placeholder="Ej: Avería máquina"/>
           </div>
           <Btn v="ghost" onClick={add}>{editId?"💾 Guardar cambios":"＋ Añadir Motivo"}</Btn>
-          {editId && <button onClick={()=>{setEditId(null);setNombre("");setIcono("");}} style={{marginLeft:8,background:"none",border:"none",color:C.muted,fontSize:14,cursor:"pointer",textDecoration:"underline"}}>Cancelar</button>}
           {motivos.length===0 && (
             <div style={{marginTop:12}}>
               <div style={{fontSize:12,color:C.mutedD,marginBottom:8}}>Sugerencia rápida — pulsa para crear los 8 típicos:</div>
               <Btn v="secondary" onClick={async()=>{for(const [ic,nm] of sugerencias){await save("motivos_paro",uid(),{nombre:nm,icono:ic});}}}>⚡ Crear los 8 motivos estándar</Btn>
             </div>
           )}
-        </Card>
+        </FormPlegable>
         <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))",gap:8}}>
           {motivos.map(m=>(
             <Card key={m.id} style={{textAlign:"center",position:"relative"}}>
@@ -2135,6 +2157,7 @@ function TurnosScreen({ onBack }) {
   const [hi, setHi] = useState("06:00");
   const [hf, setHf] = useState("14:00");
   const [editId, setEditId] = useState(null);
+  const [nuevoAbierto, setNuevoAbierto] = useState(false);
   const startEdit = (t)=>{ setEditId(t.id); setNombre(t.nombre||""); setHi(t.hora_inicio||"06:00"); setHf(t.hora_fin||"14:00"); window.scrollTo(0,0); };
 
   const add = async () => {
@@ -2146,15 +2169,14 @@ function TurnosScreen({ onBack }) {
     <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
       <Header title="TURNOS" onBack={onBack}/>
       <div style={{padding:14}}>
-        <Card style={{marginBottom:14}}>
+        <FormPlegable abierto={nuevoAbierto} setAbierto={setNuevoAbierto} editando={!!editId} etiqueta="Turno" onCancelar={()=>{setEditId(null);}}>
           <Field label="Nombre del turno" value={nombre} onChange={setNombre} placeholder="Ej: Mañana"/>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
             <Field label="Inicio" value={hi} onChange={setHi} type="time"/>
             <Field label="Fin" value={hf} onChange={setHf} type="time"/>
           </div>
           <Btn v="ghost" onClick={add}>{editId?"💾 Guardar cambios":"＋ Añadir Turno"}</Btn>
-          {editId && <button onClick={()=>{setEditId(null);setNombre("");}} style={{marginLeft:8,background:"none",border:"none",color:C.muted,fontSize:14,cursor:"pointer",textDecoration:"underline"}}>Cancelar</button>}
-        </Card>
+        </FormPlegable>
         {turnos.length===0 && <Empty icon="🕐" text="Sin turnos. Crea Mañana y Tarde."/>}
         <div style={{display:"flex",flexDirection:"column",gap:8}}>
           {turnos.map(t=>(
@@ -2188,6 +2210,7 @@ function ProcesosScreen({ onBack }) {
   const [diferido, setDiferido] = useState(false);
   const [apoyo, setApoyo] = useState(false);
   const [editId, setEditId] = useState(null);
+  const [nuevoAbierto, setNuevoAbierto] = useState(false);
   const startEdit = (p)=>{ setEditId(p.id); setNombre(p.nombre||""); setDiferido(!!p.diferido); setApoyo(!!p.apoyo); window.scrollTo(0,0); };
 
   const add = async () => {
@@ -2199,7 +2222,7 @@ function ProcesosScreen({ onBack }) {
     <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
       <Header title="CATÁLOGO DE PROCESOS" onBack={onBack} sub="Reutilizables en todos los productos"/>
       <div style={{padding:14}}>
-        <Card style={{marginBottom:14}}>
+        <FormPlegable abierto={nuevoAbierto} setAbierto={setNuevoAbierto} editando={!!editId} etiqueta="Proceso" onCancelar={()=>{setEditId(null);}}>
           <Field label="Nombre del proceso" value={nombre} onChange={setNombre} placeholder="Ej: Plisado"/>
           <button onClick={()=>setDiferido(d=>!d)}
             style={{background:"#fff",border:`1.5px solid ${diferido?C.amber:C.border}`,color:diferido?C.amber:C.muted,borderRadius:20,padding:"6px 16px",fontSize:14,fontFamily:F.h,fontWeight:600,cursor:"pointer",marginBottom:12}}>
@@ -2210,8 +2233,7 @@ function ProcesosScreen({ onBack }) {
             {apoyo?"🤝 Apoyo compartido (se reparte entre líneas)":"◯ Apoyo compartido"}
           </button>
           <Btn v="ghost" onClick={add}>{editId?"💾 Guardar cambios":"＋ Añadir Proceso"}</Btn>
-          {editId && <button onClick={()=>{setEditId(null);setNombre("");setDiferido(false);setApoyo(false);}} style={{marginLeft:8,background:"none",border:"none",color:C.muted,fontSize:14,cursor:"pointer",textDecoration:"underline"}}>Cancelar</button>}
-        </Card>
+        </FormPlegable>
         {procesos.length===0 && <Empty icon="⚙️" text="Sin procesos. Ej: Estirar, Ensanchar, Plisar…"/>}
         <div style={{display:"flex",flexDirection:"column",gap:8}}>
           {procesos.map(p=>(
@@ -2835,27 +2857,29 @@ function CostesScreen({ onBack, centros }) {
   useEffect(()=>{
     if (!sel && centros.length) setSel(centros[0].id);
   },[centros.length]);
+  const guardado = cfg.find(x=>x.id===sel);
+  // recarga los valores al cambiar de centro o cuando llegan los datos de Firebase
+  const huella = guardado ? `${guardado.amortizacion_mes}|${guardado.alquiler_mes}|${guardado.luz_agua_mes}|${guardado.horas_persona_mes}` : "";
   useEffect(()=>{
-    const c = cfg.find(x=>x.id===sel);
-    setAmort(c?.amortizacion_mes?.toString()||"");
-    setAlquiler(c?.alquiler_mes?.toString()||"");
-    setLuz(c?.luz_agua_mes?.toString()||"");
-    setHoras(c?.horas_persona_mes?.toString()||"");
-  },[sel, cfg.length]);
+    setAmort(guardado?.amortizacion_mes?.toString()||"");
+    setAlquiler(guardado?.alquiler_mes?.toString()||"");
+    setLuz(guardado?.luz_agua_mes?.toString()||"");
+    setHoras(guardado?.horas_persona_mes?.toString()||"");
+  },[sel, huella]);
 
-  const total = (parseFloat(amort)||0)+(parseFloat(alquiler)||0)+(parseFloat(luz)||0);
+  const total = toNum(amort)+toNum(alquiler)+toNum(luz);
   const guardar = async () => {
     if (!sel) return;
     await save("config_costes", sel, {
-      amortizacion_mes:parseFloat(amort)||0, alquiler_mes:parseFloat(alquiler)||0,
-      luz_agua_mes:parseFloat(luz)||0, fijos_mensuales:total,
-      horas_persona_mes:parseFloat(horas)||0,
+      amortizacion_mes:toNum(amort), alquiler_mes:toNum(alquiler),
+      luz_agua_mes:toNum(luz), fijos_mensuales:total,
+      horas_persona_mes:toNum(horas),
     });
     setMsg("Guardado"); setTimeout(()=>setMsg(null),2000);
   };
-  const costeHoraFijo = total&&horas ? (total/parseFloat(horas)).toFixed(2) : null;
+  const costeHoraFijo = total && toNum(horas) ? (total/toNum(horas)).toFixed(2) : null;
   const centroSel = centros.find(x=>x.id===sel);
-  const cargada = costeHoraFijo && centroSel?.tarifa_mo ? (parseFloat(costeHoraFijo)+centroSel.tarifa_mo).toFixed(2) : null;
+  const cargada = costeHoraFijo && centroSel?.tarifa_mo ? (toNum(costeHoraFijo)+toNum(centroSel.tarifa_mo)).toFixed(2) : null;
   return (
     <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
       <Header title="COSTES FIJOS POR CENTRO" onBack={onBack} sub="Cada centro reparte sus fijos por hora trabajada"/>
@@ -2865,10 +2889,15 @@ function CostesScreen({ onBack, centros }) {
           options={centros.map(c=>({value:c.id,label:`🏭 ${c.nombre}`}))}/>
         {sel && <>
           <Card style={{marginBottom:14}}>
-            <Field label="Amortización maquinaria (€/mes)" value={amort} onChange={setAmort} type="number" placeholder="Ej: 2431 (350.000÷12 años÷12)" min="0" step="1"/>
-            <Field label="Alquiler nave (€/mes)" value={alquiler} onChange={setAlquiler} type="number" placeholder="Ej: 1200" min="0" step="1"/>
-            <Field label="Luz + agua (€/mes)" value={luz} onChange={setLuz} type="number" placeholder="Ej: 900" min="0" step="1"/>
-            <Field label="Horas-persona trabajadas / mes" value={horas} onChange={setHoras} type="number" placeholder="Ej: 1848 (11 operarios × 168 h)" min="1"/>
+            {guardado && (
+              <div style={{background:C.amberBg,border:`1.5px solid ${C.amber}`,borderRadius:10,padding:"10px 12px",marginBottom:14,fontSize:12.5,color:C.amber,fontWeight:700,lineHeight:1.5}}>
+                ✏️ Editando los costes ya guardados de este centro. Cambia lo que necesites y pulsa Guardar.
+              </div>
+            )}
+            <Field dec label="Amortización maquinaria (€/mes)" value={amort} onChange={setAmort} type="number" placeholder="Ej: 2431 (350.000÷12 años÷12)" min="0" step="1"/>
+            <Field dec label="Alquiler nave (€/mes)" value={alquiler} onChange={setAlquiler} type="number" placeholder="Ej: 1200" min="0" step="1"/>
+            <Field dec label="Luz + agua (€/mes)" value={luz} onChange={setLuz} type="number" placeholder="Ej: 900" min="0" step="1"/>
+            <Field dec label="Horas-persona trabajadas / mes" value={horas} onChange={setHoras} type="number" placeholder="Ej: 1848 (11 operarios × 168 h)" min="1"/>
             {costeHoraFijo && (
               <div style={{background:C.card2,borderRadius:10,padding:"12px 14px",marginBottom:12}}>
                 <div style={{fontSize:13,color:C.muted}}>Estructura: {total.toFixed(0)} €/mes ÷ {horas} h</div>
@@ -2878,7 +2907,7 @@ function CostesScreen({ onBack, centros }) {
               </div>
             )}
           </Card>
-          <Btn onClick={guardar}>💾 Guardar</Btn>
+          <Btn onClick={guardar}>{guardado?"💾 Guardar cambios":"💾 Guardar"}</Btn>
         </>}
         {/* Resumen de todos los centros */}
         {cfg.length>0 && (
@@ -2889,7 +2918,7 @@ function CostesScreen({ onBack, centros }) {
               if (!x) return null;
               const ch = x.horas_persona_mes ? (x.fijos_mensuales/x.horas_persona_mes).toFixed(2) : "—";
               return (
-                <div key={c.id} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:`1px solid ${C.border}`}}>
+                <div key={c.id} onClick={()=>{setSel(c.id); window.scrollTo(0,0);}} style={{display:"flex",justifyContent:"space-between",padding:"10px 0",borderBottom:`1px solid ${C.border}`,cursor:"pointer"}}>
                   <span style={{fontSize:14,color:C.text,fontFamily:F.h,fontWeight:600}}>🏭 {c.nombre}</span>
                   <span style={{fontSize:14,color:C.muted}}>{x.fijos_mensuales}€/mes → <span style={{color:C.accent,fontWeight:700}}>{ch}€/h</span></span>
                 </div>
