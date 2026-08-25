@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v2.30.0";
+const APP_VERSION = "v2.31.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -3111,8 +3111,10 @@ function PlanificacionScreen({ onBack, perfil, productos, mps, producciones, cen
     if (destino.length === 0) { window.alert("No hay más semanas abiertas en este mes."); return 0; }
     for (const sm of destino) {
       const ds = diasDeSemana(sm);
+      const mapa = {};
       const nuevo = calBase
-        .map(x => ({ ...x, id: uid(), fecha: ds[origen.indexOf(x.fecha)] }))
+        .map(x => { if (x.grupo && !mapa[x.grupo]) mapa[x.grupo] = uid();
+          return { ...x, id: uid(), grupo: x.grupo ? mapa[x.grupo] : uid(), fecha: ds[origen.indexOf(x.fecha)] }; })
         .filter(x => x.fecha);
       await save("planes_semana", `${sm}__${centroId}`, { semana: sm, periodo, centro: centroId, calendario: nuevo });
     }
@@ -3692,6 +3694,7 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
   const cal = plan.calendario || [];
   const items = plan.items || [];
   const [edit, setEdit] = useState(null);   // {fecha,turno,linea} o null
+  const [cogido, setCogido] = useState(null); // producto seleccionado en la bandeja
 
   const ritmoDe = (p) => parseFloat(p?.uds_turno_linea)||0;
   const persDe  = (p) => parseInt(p?.personas_linea)||3;
@@ -3785,7 +3788,9 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
     if (!otros.length) { window.alert("Este centro solo tiene un turno."); return; }
     if (!window.confirm(`Copiar el ${t} del ${DIA_CORTO(f)} a ${otros.join(" y ")} de ese mismo día.\n\nCada turno quedará con:\n${resumenDe(patron)}\n\n¿Seguir?`)) return;
     let base = cal.filter(x => !(x.fecha===f && otros.includes(x.turno)));
-    otros.forEach(t2 => patron.forEach(x => base.push({ ...x, id: uid(), turno: t2 })));
+    otros.forEach(t2 => { const mapa = {};
+      patron.forEach(x => { if (x.grupo && !mapa[x.grupo]) mapa[x.grupo] = uid();
+        base.push({ ...x, id: uid(), grupo: x.grupo ? mapa[x.grupo] : uid(), turno: t2 }); }); });
     setCal(base);
   };
 
@@ -3795,7 +3800,9 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
     const otros = dias.filter(z => z !== f);
     if (!window.confirm(`Copiar el ${DIA_CORTO(f)} entero a los otros ${otros.length} días de la semana.\n\nCada día quedará con:\n${resumenDe(patron)}\n\n¿Seguir?`)) return;
     let base = cal.filter(x => x.fecha === f);
-    otros.forEach(f2 => patron.forEach(x => base.push({ ...x, id: uid(), fecha: f2 })));
+    otros.forEach(f2 => { const mapa = {};
+      patron.forEach(x => { if (x.grupo && !mapa[x.grupo]) mapa[x.grupo] = uid();
+        base.push({ ...x, id: uid(), grupo: x.grupo ? mapa[x.grupo] : uid(), fecha: f2 }); }); });
     setCal(base);
   };
 
@@ -3951,6 +3958,27 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
   cal.forEach(x=>{ colocado[x.producto_id] = (colocado[x.producto_id]||0) + (parseFloat(x.cantidad)||0); });
   const objetivo = {};
   items.forEach(it=>{ objetivo[it.producto_id] = (objetivo[it.producto_id]||0) + (parseFloat(it.cantidad)||0); });
+  // Soltar el producto cogido en un hueco, avisando si cambia el molde de la línea
+  const soltarEn = (f, t, l) => {
+    if (!cogido) return;
+    const p = productos.find(z=>z.id===cogido);
+    const r = ritmoDe(p);
+    if (r <= 0) { window.alert("Este producto no tiene ritmo definido. Ponlo en su ficha."); return; }
+    const falta = (objetivo[cogido]||0) - (colocado[cogido]||0);
+    if (falta <= 0.5 && !window.confirm(`Ya está colocado todo el ${p.nombre} de esta semana.\n\n¿Poner otro turno de más?`)) return;
+
+    const montado = moldeMontado(f, t, l);
+    const mio = moldeDe(p);
+    if (montado && montado !== mio) {
+      const min = minutosMolde(mio);
+      if (!window.confirm(
+        `⚠️ CAMBIO DE MOLDE\n\nLa ${l} ya trabaja esta semana con el molde ${nombreMolde(montado)}.\n` +
+        `Poner aquí ${p.nombre} obliga a montar el molde ${nombreMolde(mio)}: unos ${min} min de parada.\n\n¿Lo pones igualmente?`)) return;
+    }
+    const q = Math.min(r, falta > 0.5 ? falta : r);
+    asignar({ fecha:f, turno:t, linea:l }, cogido, Math.round(q));
+  };
+
   const todos = [...new Set([...Object.keys(objetivo), ...Object.keys(colocado)])];
 
   return (
@@ -3969,6 +3997,51 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
             fontFamily:F.h,fontWeight:800,fontSize:14,cursor:"pointer",marginBottom:12}}>
           ⧉ Repetir esta semana en todo el mes
         </button>
+      )}
+
+      {!bloqueado && items.length>0 && (
+        <div style={{position:"sticky",top:52,zIndex:12,background:C.bg,paddingBottom:8,marginBottom:6}}>
+          <Card style={{padding:"11px 12px",marginBottom:0}} color={cogido?C.blue+"88":undefined}>
+            <div style={{fontFamily:F.h,fontWeight:800,fontSize:13,color:C.text,marginBottom:3}}>
+              {cogido ? "Ahora toca un hueco libre" : "1 · Coge un producto"}
+            </div>
+            <div style={{fontSize:11.5,color:C.mutedD,lineHeight:1.5,marginBottom:9}}>
+              {cogido ? "Se pondrá un turno completo. Si la línea tiene otro molde, te aviso antes."
+                      : "Toca la caja del producto y después el hueco de la línea donde va."}
+            </div>
+            <div style={{display:"flex",gap:7,overflowX:"auto",paddingBottom:3}}>
+              {items.map(it=>{
+                const p = productos.find(z=>z.id===it.producto_id);
+                const falta = (objetivo[it.producto_id]||0) - (colocado[it.producto_id]||0);
+                const listo = falta <= 0.5;
+                const k = moldeDe(p);
+                const c = colorMoldeK(k);
+                const on = cogido === it.producto_id;
+                return (
+                  <button key={it.producto_id} onClick={()=>setCogido(on?null:it.producto_id)}
+                    style={{flexShrink:0,minWidth:118,textAlign:"left",cursor:"pointer",
+                      background:on?c.bd:(listo?C.card2:c.bg),
+                      border:`2px solid ${on?c.bd:(listo?C.border:c.bd)}`,
+                      borderRadius:12,padding:"9px 11px",opacity:listo&&!on?0.55:1}}>
+                    <div style={{fontFamily:F.h,fontWeight:800,fontSize:12.5,color:on?"#fff":C.text,
+                      overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{codigoCorto(p?.nombre||"?")}</div>
+                    <div style={{fontFamily:F.h,fontWeight:900,fontSize:19,color:on?"#fff":(listo?C.green:C.text),lineHeight:1.15}}>
+                      {listo ? "✔" : num(falta)}
+                    </div>
+                    <div style={{fontSize:10,color:on?"rgba(255,255,255,0.85)":C.mutedD,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                      {listo ? "colocado" : "por colocar"} · 🔧 {nombreMolde(k)}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+            {cogido && (
+              <button onClick={()=>setCogido(null)}
+                style={{width:"100%",marginTop:8,background:"#fff",border:`1.5px solid ${C.border}`,color:C.mutedD,
+                  borderRadius:10,padding:"9px",fontFamily:F.h,fontWeight:800,fontSize:12.5,cursor:"pointer"}}>Soltar sin colocar</button>
+            )}
+          </Card>
+        </div>
       )}
 
       {cal.length>0 && moldesEnCal.length>0 && (
@@ -4025,8 +4098,11 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
                   const c = e ? colorDe(e.producto_id) : null;
                   const cambio = e && hayCambioMolde(f,t,l);
                   return (
-                    <button key={l} onClick={()=>!bloqueado && setEdit({fecha:f,turno:t,linea:l})}
-                      style={{flex:1,minWidth:0,minHeight:60,background:e?c.bg:"#fff",border:e?`1.5px solid ${c.bd}`:`1.5px dashed ${C.border}`,
+                    <button key={l} onClick={()=>{ if(bloqueado) return;
+                        if (cogido && !e) soltarEn(f,t,l); else setEdit({fecha:f,turno:t,linea:l}); }}
+                      style={{flex:1,minWidth:0,minHeight:60,
+                        background:e?c.bg:(cogido?"#F0F9FF":"#fff"),
+                        border:e?`1.5px solid ${c.bd}`:`1.5px dashed ${cogido?C.blue:C.border}`,
                         borderRadius:11,padding:"8px 7px",cursor:bloqueado?"default":"pointer",textAlign:"left",overflow:"hidden"}}>
                       {e ? (
                         <>
@@ -4052,12 +4128,14 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
                             );
                           })()}
                           <div style={{fontSize:10,color:C.mutedD,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                            {moldeDe(prod) ? `🔧 ${nombreMolde(moldeDe(prod))}` : l} · {cal.filter(x=>x.grupo===e.grupo).reduce((a,z)=>a+persDeLinea(z.linea),0)||persDeLinea(l)}p
+                            {moldeDe(prod) ? `🔧 ${nombreMolde(moldeDe(prod))}` : l} · {(e.grupo ? cal.filter(x=>x.grupo===e.grupo) : [e]).reduce((a,z)=>a+persDeLinea(z.linea),0)||persDeLinea(l)}p
                             {cambio && <span style={{color:C.amber,fontWeight:800}}> ⇄</span>}
                           </div>
                         </>
                       ) : (
-                        <div style={{color:C.muted,fontSize:11.5,textAlign:"center",paddingTop:16,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{bloqueado?"—":`+ ${l} · ${persDeLinea(l)}p`}</div>
+                        <div style={{color:cogido?C.blue:C.muted,fontSize:11.5,fontWeight:cogido?800:400,textAlign:"center",paddingTop:16,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                          {bloqueado ? "—" : (cogido ? "soltar aquí" : `+ ${l} · ${persDeLinea(l)}p`)}
+                        </div>
                       )}
                     </button>
                   );
