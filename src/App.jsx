@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v2.31.0";
+const APP_VERSION = "v2.32.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -3691,7 +3691,23 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
   const persDeLinea = (n) => CFG.find(l=>l.nombre===n)?.personas || 3;
   const TURNOS_CAL = Array.from({length: turnosCentro}, (_,i)=>`T${i+1}`);
   const dias = diasDeSemana(semana);
-  const cal = plan.calendario || [];
+  // Una tirada (grupo) solo puede ocupar líneas del MISMO día y turno. Las copias
+  // antiguas heredaban el grupo entre días: se separan al vuelo para no falsear ritmos.
+  const cal = (() => {
+    const raw = plan.calendario || [];
+    const porGrupo = {};
+    raw.forEach(x => { if (x.grupo) (porGrupo[x.grupo] = porGrupo[x.grupo] || []).push(x); });
+    const rotos = new Set(Object.keys(porGrupo).filter(g =>
+      new Set(porGrupo[g].map(x => `${x.fecha}|${x.turno}`)).size > 1));
+    if (!rotos.size) return raw;
+    const mapa = {};
+    return raw.map(x => {
+      if (!x.grupo || !rotos.has(x.grupo)) return x;
+      const k = `${x.grupo}|${x.fecha}|${x.turno}`;
+      if (!mapa[k]) mapa[k] = uid();
+      return { ...x, grupo: mapa[k] };
+    });
+  })();
   const items = plan.items || [];
   const [edit, setEdit] = useState(null);   // {fecha,turno,linea} o null
   const [cogido, setCogido] = useState(null); // producto seleccionado en la bandeja
@@ -4005,10 +4021,28 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
             <div style={{fontFamily:F.h,fontWeight:800,fontSize:13,color:C.text,marginBottom:3}}>
               {cogido ? "Ahora toca un hueco libre" : "1 · Coge un producto"}
             </div>
-            <div style={{fontSize:11.5,color:C.mutedD,lineHeight:1.5,marginBottom:9}}>
-              {cogido ? "Se pondrá un turno completo. Si la línea tiene otro molde, te aviso antes."
-                      : "Toca la caja del producto y después el hueco de la línea donde va."}
-            </div>
+            {(() => {
+              if (!cogido) return (
+                <div style={{fontSize:11.5,color:C.mutedD,lineHeight:1.5,marginBottom:9}}>
+                  Toca la caja del producto y después el hueco de la línea donde va.
+                </div>
+              );
+              const p = productos.find(z=>z.id===cogido);
+              const r = ritmoDe(p);
+              const falta = (objetivo[cogido]||0) - (colocado[cogido]||0);
+              const q = r>0 ? Math.min(r, falta>0.5 ? falta : r) : 0;
+              const pers = persDe(p);
+              const nL = Math.max(1, Math.ceil(pers/(CFG[0]?.personas||3)));
+              return (
+                <div style={{background:C.blueBg,borderRadius:10,padding:"9px 11px",marginBottom:9,fontSize:12,color:C.text,lineHeight:1.6}}>
+                  {r>0
+                    ? <>Cada hueco que toques coge <b>{num(q)} uds</b>{q<r && <span style={{color:C.amber,fontWeight:700}}> (es lo que queda; el turno completo son {num(r)})</span>}
+                        {nL>1 && <> · ocupa <b>{nL} líneas</b> del turno, {num(Math.round(q/nL))} en cada una</>}
+                        <div style={{fontSize:11,color:C.mutedD,marginTop:2}}>{pers} personas · quedan {num(Math.max(0,falta))} por colocar</div></>
+                    : <span style={{color:C.red,fontWeight:700}}>Este producto no tiene ritmo definido: ponlo en su ficha antes de colocarlo.</span>}
+                </div>
+              );
+            })()}
             <div style={{display:"flex",gap:7,overflowX:"auto",paddingBottom:3}}>
               {items.map(it=>{
                 const p = productos.find(z=>z.id===it.producto_id);
@@ -4030,6 +4064,12 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
                     </div>
                     <div style={{fontSize:10,color:on?"rgba(255,255,255,0.85)":C.mutedD,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
                       {listo ? "colocado" : "por colocar"} · 🔧 {nombreMolde(k)}
+                    </div>
+                    <div style={{fontSize:10.5,fontWeight:800,marginTop:3,
+                      color:on?"#fff":(ritmoDe(p)>0?C.blue:C.red),overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                      {ritmoDe(p)>0
+                        ? `${num(Math.min(ritmoDe(p), listo?ritmoDe(p):falta))} por turno`
+                        : "⚠️ sin ritmo"}
                     </div>
                   </button>
                 );
@@ -4058,8 +4098,22 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
               );
             })}
           </div>
-          <div style={{fontSize:11.5,color:C.mutedD,lineHeight:1.55}}>
-            Un color = un molde. Si una línea cambia de color de un turno al siguiente, hay que parar a cambiar molde: eso se marca con <b style={{color:C.amber}}>⇄</b>.
+          <div style={{fontSize:11.5,color:C.mutedD,lineHeight:1.6}}>
+            <div style={{marginBottom:6}}>
+              <b>El color del hueco = el molde.</b> Si una línea cambia de color de un turno al siguiente hay que parar a cambiarlo: se marca con <b style={{color:C.amber}}>⇄</b>.
+            </div>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+              <span style={{flexShrink:0,width:46,height:5,background:C.card2,borderRadius:3,overflow:"hidden",display:"inline-block"}}>
+                <span style={{display:"block",width:"100%",height:"100%",background:C.green,borderRadius:3}}/>
+              </span>
+              <span><b>La barrita verde llena</b>: el turno va al ritmo estándar (50/50).</span>
+            </div>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <span style={{flexShrink:0,width:46,height:5,background:C.card2,borderRadius:3,overflow:"hidden",display:"inline-block"}}>
+                <span style={{display:"block",width:"55%",height:"100%",background:C.amber,borderRadius:3}}/>
+              </span>
+              <span><b>Ámbar a medias</b>: va por debajo del ritmo y te dice cuántas uds pierdes.</span>
+            </div>
           </div>
         </Card>
       )}
@@ -4201,7 +4255,9 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
         );
         return (
           <Card style={{marginBottom:12}} color={C.amber+"66"}>
-            <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.amber,marginBottom:8}}>⚠️ Capacidad que se queda sin usar</div>
+            <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.amber,marginBottom:8}}>
+              {flojos.length>0 ? "⚠️ Capacidad que se queda sin usar" : `⚠️ Quedan ${vacios} huecos por llenar`}
+            </div>
             <div style={{display:"flex",gap:8,marginBottom:9}}>
               <div style={{flex:1,background:C.card2,borderRadius:12,padding:"11px 8px",textAlign:"center"}}>
                 <div style={{fontFamily:F.h,fontWeight:900,fontSize:22,color:vacios?C.amber:C.green}}>{vacios}</div>
@@ -4227,7 +4283,9 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
             })}
             {flojos.length>6 && <div style={{fontSize:11.5,color:C.mutedD,marginTop:4}}>…y {flojos.length-6} más</div>}
             <div style={{fontSize:11.5,color:C.mutedD,marginTop:8,lineHeight:1.55}}>
-              Un turno “flojo” lleva menos unidades de las que da el ritmo estándar del producto. Súbelo tocando el hueco, o deja constancia de por qué no llega.
+              {flojos.length>0
+                ? <>Un turno <b>flojo</b> lleva menos unidades de las que da el ritmo estándar (la barrita sale ámbar a medias). Súbelo tocando el hueco.</>
+                : <>Los turnos colocados van todos a ritmo <b style={{color:C.green}}>(barritas verdes llenas)</b>. Lo que falta son <b>{vacios} huecos sin nada</b>: coge un producto de la bandeja de arriba y suéltalo, o baja los huecos disponibles de la semana si esos turnos no se van a trabajar.</>}
             </div>
           </Card>
         );
