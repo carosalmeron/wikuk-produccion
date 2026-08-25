@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v2.20.0";
+const APP_VERSION = "v2.21.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -3115,6 +3115,7 @@ const RecursosCard = ({ r, mps, dias, slotsDia=SLOTS_DIA, persDia=12, turnosCent
 const ItemsEditor = ({ items, setItems, productos, bloqueado, persLinea=3 }) => {
   const [pid, setPid] = useState("");
   const [qty, setQty] = useState("");
+  const [editando, setEditando] = useState(null);   // id de la línea que se está modificando
   const add = () => {
     if (!pid || !(parseFloat(qty)>0)) { window.alert("Elige producto y cantidad"); return; }
     if (items.some(i=>i.producto_id===pid)) { window.alert("Ese producto ya está en el plan. Edita su cantidad."); return; }
@@ -3133,18 +3134,27 @@ const ItemsEditor = ({ items, setItems, productos, bloqueado, persLinea=3 }) => 
         return (
           <div key={it.id} style={{display:"flex",alignItems:"center",gap:8,padding:"9px 0",borderBottom:`1px solid ${C.card2}`}}>
             <div style={{flex:1,minWidth:0}}>
-              <div style={{fontFamily:F.h,fontWeight:700,fontSize:14.5,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p?.nombre||"(producto borrado)"}</div>
-              <div style={{fontSize:11.5,color:C.mutedD,marginTop:1}}>
+              <div style={{fontFamily:F.h,fontWeight:800,fontSize:15,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p?.nombre||"(producto borrado)"}</div>
+              {prodSub(p) && <div style={{fontSize:12.5,color:C.blue,fontWeight:600,marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{prodSub(p)}</div>}
+              <div style={{fontSize:11.5,color:C.mutedD,marginTop:2}}>
                 {ritmo>0 ? `${turnos.toFixed(1)} huecos de línea · ${pers} persona${pers!==1?"s":""}` : "⚠️ sin ritmo"}
               </div>
             </div>
-            <input type="number" value={it.cantidad} disabled={bloqueado}
-              onChange={e=>setItems(items.map(x=>x.id===it.id?{...x,cantidad:parseFloat(e.target.value)||0}:x))}
-              style={{width:82,padding:"9px 8px",borderRadius:10,border:`1.5px solid ${C.border}`,fontSize:15,fontFamily:F.h,fontWeight:700,textAlign:"right",background:"#fff",color:C.text}}/>
-            {!bloqueado && <IconBtn danger onClick={()=>setItems(items.filter(x=>x.id!==it.id))}>🗑️</IconBtn>}
+            <div style={{fontFamily:F.h,fontWeight:900,fontSize:19,color:C.text,minWidth:56,textAlign:"right"}}>{num(it.cantidad)}</div>
+            {!bloqueado && <IconBtn onClick={()=>setEditando(it.id)}>✏️</IconBtn>}
+            {!bloqueado && <IconBtn danger onClick={()=>{ if(window.confirm(`¿Quitar ${p?.nombre||"esta línea"} del plan?`)) setItems(items.filter(x=>x.id!==it.id)); }}>🗑️</IconBtn>}
           </div>
         );
       })}
+      {editando && (() => {
+        const it = items.find(x=>x.id===editando);
+        if (!it) return null;
+        return <LineaEditor it={it} productos={productos} otros={items.filter(x=>x.id!==it.id)}
+          onGuardar={(nuevoPid,nuevaQty)=>{ setItems(items.map(x=>x.id===it.id?{...x,producto_id:nuevoPid,cantidad:nuevaQty}:x)); setEditando(null); }}
+          onQuitar={()=>{ setItems(items.filter(x=>x.id!==it.id)); setEditando(null); }}
+          onCerrar={()=>setEditando(null)}/>;
+      })()}
+
       {!bloqueado && (
         <div style={{marginTop:12,paddingTop:12,borderTop:`1px solid ${C.border}`}}>
           <ProductoBuscador label="Añadir producto" value={pid} onChange={setPid} productos={productos}/>
@@ -3158,6 +3168,65 @@ const ItemsEditor = ({ items, setItems, productos, bloqueado, persLinea=3 }) => 
     </Card>
   );
 };
+
+// ── Hoja para modificar una línea del plan ─────────────────────────────────────
+function LineaEditor({ it, productos, otros, onGuardar, onQuitar, onCerrar }) {
+  const [pid, setPid] = useState(it.producto_id);
+  const [q, setQ] = useState(String(it.cantidad ?? ""));
+  const p = productos.find(x => x.id === pid);
+  const ritmo = toNum(p?.uds_turno_linea);
+  const paso = ritmo > 0 ? Math.max(1, Math.round(ritmo/2)) : 10;
+
+  const guardar = () => {
+    const n = toNum(q);
+    if (!pid) { window.alert("Elige un producto"); return; }
+    if (n <= 0) { window.alert("Pon las unidades"); return; }
+    if (pid !== it.producto_id && otros.some(x => x.producto_id === pid)) {
+      window.alert("Ese producto ya está en el plan. Edita la línea que ya existe."); return;
+    }
+    onGuardar(pid, n);
+  };
+
+  return (
+    <div onClick={onCerrar} style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.55)",zIndex:50,display:"flex",alignItems:"flex-end"}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"#fff",width:"100%",borderRadius:"20px 20px 0 0",padding:18,maxHeight:"88vh",overflowY:"auto"}}>
+        <div style={{width:40,height:4,background:C.border,borderRadius:2,margin:"0 auto 14px"}}/>
+        <div style={{fontFamily:F.h,fontWeight:800,fontSize:17,color:C.text,marginBottom:14}}>✏️ Modificar línea del plan</div>
+
+        <ProductoBuscador label="Producto" value={pid} onChange={setPid} productos={productos}/>
+        {p && prodSub(p) && (
+          <div style={{background:C.card2,borderRadius:11,padding:"10px 12px",marginBottom:14}}>
+            <div style={{fontFamily:F.h,fontWeight:800,fontSize:15,color:C.text}}>{p.nombre}</div>
+            <div style={{fontSize:12.5,color:C.blue,fontWeight:600,marginTop:2}}>{prodSub(p)}</div>
+          </div>
+        )}
+
+        <div style={{fontSize:11,color:C.mutedD,fontWeight:800,marginBottom:6}}>UNIDADES</div>
+        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+          <button onClick={()=>setQ(String(Math.max(0, toNum(q)-paso)))}
+            style={{width:56,height:56,borderRadius:13,border:`1.5px solid ${C.border}`,background:"#fff",fontSize:24,color:C.text,cursor:"pointer"}}>−</button>
+          <input type="text" inputMode="decimal" value={q} onChange={e=>setQ(e.target.value.replace(/[^0-9.,]/g,""))}
+            style={{flex:1,height:56,textAlign:"center",borderRadius:13,border:`1.5px solid ${C.border}`,background:"#fff",color:C.text,fontFamily:F.h,fontWeight:900,fontSize:26,boxSizing:"border-box"}}/>
+          <button onClick={()=>setQ(String(toNum(q)+paso))}
+            style={{width:56,height:56,borderRadius:13,border:`1.5px solid ${C.border}`,background:"#fff",fontSize:24,color:C.text,cursor:"pointer"}}>+</button>
+        </div>
+
+        <div style={{background: ritmo>0 ? C.blueBg : C.redBg, borderRadius:11, padding:"11px 13px", marginBottom:16,
+          fontSize:12.5, color: ritmo>0 ? C.text : C.red, lineHeight:1.6}}>
+          {ritmo>0
+            ? <>Ritmo <b>{ritmo} uds</b> por turno con <b>{parseInt(p?.personas_linea)||3} personas</b> · son <b>{(toNum(q)/ritmo).toFixed(1)} turnos</b> de trabajo</>
+            : <>⚠️ Este producto no tiene ritmo definido. No contará en el cuadre hasta que lo pongas en su ficha.</>}
+        </div>
+
+        <div style={{display:"grid",gap:8}}>
+          <Btn onClick={guardar}>✔ Guardar cambios</Btn>
+          <Btn v="danger" onClick={()=>{ if(window.confirm("¿Quitar esta línea del plan?")) onQuitar(); }}>🗑️ Quitar del plan</Btn>
+          <Btn v="secondary" onClick={onCerrar}>Cancelar</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ── TAB 1: PLAN MENSUAL ────────────────────────────────────────────────────────
 function PlanMesTab({ periodo, setPeriodo, plan, guardar, productos, mps, semanas, planesSem, slotsDia=SLOTS_DIA, persLinea=3, persDia=12, turnosCentro=TURNOS_ABIERTOS, centroNombre="", perfil, irReparto }) {
@@ -3178,7 +3247,7 @@ function PlanMesTab({ periodo, setPeriodo, plan, guardar, productos, mps, semana
       const p = productos.find(x=>x.id===it.producto_id);
       const ritmo = toNum(p?.uds_turno_linea), pers = parseInt(p?.personas_linea)||3;
       const huecos = ritmo>0 ? (toNum(it.cantidad)/ritmo)*(pers/persLinea) : 0;
-      return `<tr><td>${esc(p?.nombre||"?")}</td><td class="n">${num(it.cantidad)}</td><td class="n">${ritmo||"—"}</td><td class="n">${pers}</td><td class="n">${huecos.toFixed(1)}</td><td class="n">${eur(toNum(p?.coste_objetivo)*toNum(it.cantidad))}</td></tr>`;
+      return `<tr><td><b>${esc(p?.nombre||"?")}</b>${prodSub(p)?`<br/><span style="font-size:9.5px;color:#666">${esc(prodSub(p))}</span>`:""}</td><td class="n">${num(it.cantidad)}</td><td class="n">${ritmo||"—"}</td><td class="n">${pers}</td><td class="n">${huecos.toFixed(1)}</td><td class="n">${eur(toNum(p?.coste_objetivo)*toNum(it.cantidad))}</td></tr>`;
     }).join("");
     const porSemana = semanas.map(sm=>{
       const ps = planesSem.find(x=>x.semana===sm);
@@ -3329,6 +3398,7 @@ function RepartoTab({ periodo, semanas, planMes, planesSem, productos, slotsDia=
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:9}}>
                   <div style={{minWidth:0}}>
                     <div style={{fontFamily:F.h,fontWeight:800,fontSize:15,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p?.nombre||"?"}</div>
+                    {prodSub(p) && <div style={{fontSize:12,color:C.blue,fontWeight:600,marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{prodSub(p)}</div>}
                     <div style={{fontSize:11.5,color:C.mutedD,marginTop:1}}>Plan del mes: {num(it.cantidad)} uds</div>
                   </div>
                   <span style={{flexShrink:0,background:ok?C.greenBg:C.amberBg,border:`1.5px solid ${ok?C.green:C.amber}`,color:ok?C.green:C.amber,borderRadius:20,padding:"5px 12px",fontFamily:F.h,fontWeight:800,fontSize:12.5}}>
@@ -3613,7 +3683,10 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
           const ok = Math.abs(dif) < 0.5;
           return (
             <div key={pid} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,padding:"7px 0",borderBottom:`1px solid ${C.card2}`}}>
-              <span style={{fontSize:13.5,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p?.nombre||"?"}</span>
+              <span style={{minWidth:0,overflow:"hidden"}}>
+                <div style={{fontSize:13.5,color:C.text,fontFamily:F.h,fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p?.nombre||"?"}</div>
+                {prodSub(p) && <div style={{fontSize:11.5,color:C.mutedD,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{prodSub(p)}</div>}
+              </span>
               <span style={{flexShrink:0,fontFamily:F.h,fontWeight:800,fontSize:13.5,color:ok?C.green:C.amber}}>
                 {num(col2)}/{num(obj)} {ok?"✔":(dif<0?`(faltan ${num(-dif)})`:`(+${num(dif)})`)}
               </span>
@@ -3660,8 +3733,9 @@ function SlotEditor({ slot, entrada, productos, items, colocado, objetivo, persL
                   <button key={id} onClick={()=>setPid(id)}
                     style={{background:pid===id?C.accent:"#fff",color:pid===id?"#fff":C.text,border:`1.5px solid ${pid===id?C.accent:C.border}`,
                       borderRadius:11,padding:"9px 12px",fontFamily:F.h,fontWeight:700,fontSize:13,cursor:"pointer"}}>
-                    {codigoCorto(p?.nombre||"?")}
-                    {falta>0.5 && <span style={{opacity:0.7,marginLeft:5,fontSize:11.5}}>faltan {num(falta)}</span>}
+                    <div>{codigoCorto(p?.nombre||"?")}</div>
+                    {prodSub(p) && <div style={{fontSize:10.5,opacity:0.75,fontWeight:600}}>{prodSub(p)}</div>}
+                    {falta>0.5 && <div style={{opacity:0.7,fontSize:11}}>faltan {num(falta)}</div>}
                   </button>
                 );
               })}
@@ -3737,7 +3811,7 @@ function PlanSemanaTab({ semana, setSemana, semanas, plan, guardar, productos, m
     const porProducto = Object.entries(cal.reduce((a,x)=>{ a[x.producto_id]=(a[x.producto_id]||0)+toNum(x.cantidad); return a; },{}))
       .map(([pid,q])=>{
         const p = productos.find(z=>z.id===pid);
-        return `<tr><td>${esc(p?.nombre||"?")}</td><td class="n">${num(q)}</td><td class="n">${eur(toNum(p?.coste_objetivo)*q)}</td></tr>`;
+        return `<tr><td><b>${esc(p?.nombre||"?")}</b>${prodSub(p)?`<br/><span style="font-size:9.5px;color:#666">${esc(prodSub(p))}</span>`:""}</td><td class="n">${num(q)}</td><td class="n">${eur(toNum(p?.coste_objetivo)*q)}</td></tr>`;
       }).join("");
     const porDia = diasDeSemana(semana).map(f=>{
       const dd = cal.filter(x=>x.fecha===f);
@@ -3988,7 +4062,10 @@ function CierreSemanaTab({ semana, setSemana, semanas, plan, guardar, productos,
         return (
           <Card key={f.pid} style={{marginBottom:10}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8,marginBottom:7}}>
-              <b style={{fontFamily:F.h,fontSize:15,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{f.nombre}</b>
+              <div style={{minWidth:0}}>
+                <b style={{fontFamily:F.h,fontSize:15,color:C.text,display:"block",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{f.nombre}</b>
+                {prodSub(productos.find(x=>x.id===f.pid)) && <div style={{fontSize:11.5,color:C.mutedD,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{prodSub(productos.find(x=>x.id===f.pid))}</div>}
+              </div>
               <span style={{fontFamily:F.h,fontWeight:900,fontSize:15,color:pct>=1?C.green:C.amber,flexShrink:0}}>{num(f.udsReal)}/{num(f.udsObj)}</span>
             </div>
             <div style={{height:7,background:C.card2,borderRadius:4,overflow:"hidden",marginBottom:9}}>
