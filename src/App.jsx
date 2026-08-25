@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v2.23.1";
+const APP_VERSION = "v2.24.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -3164,7 +3164,7 @@ function PlanificacionScreen({ onBack, perfil, productos, mps, producciones, cen
         {tab==="mes" && <PlanMesTab periodo={periodo} setPeriodo={setPeriodo} plan={planMes} guardar={guardarMes}
           productos={prodCentro} mps={mps} semanas={semanas} planesSem={planesSem} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} turnosCentro={turnosCentro} centroNombre={centro?.nombre||""} perfil={perfil} irReparto={()=>setTab("reparto")}/>}
         {tab==="reparto" && <RepartoTab periodo={periodo} semanas={semanas} planMes={planMes} planesSem={planesSem}
-          productos={prodCentro} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} centroId={centroId} irASemana={(s)=>{ setSemana(s); setTab("semana"); }} irAlMes={()=>setTab("mes")}/>}
+          productos={prodCentro} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} centroId={centroId} moldes={moldes} irASemana={(s)=>{ setSemana(s); setTab("semana"); }} irAlMes={()=>setTab("mes")}/>}
         {tab==="semana" && <PlanSemanaTab semana={semana} setSemana={setSemana} semanas={semanas} plan={planSem}
           guardar={guardarSem} productos={prodCentro} mps={mps} perfil={perfil} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} turnosCentro={turnosCentro} cfgLineas={cfgLineas} centroNombre={centro?.nombre||""} replicarEnMes={replicarEnMes} nSemanasMes={semanas.length} moldes={moldes}/>}
         {tab==="cierre" && <CierreSemanaTab semana={semana} setSemana={setSemana} semanas={semanas} plan={planSem}
@@ -3425,7 +3425,15 @@ function PlanMesTab({ periodo, setPeriodo, plan, guardar, productos, mps, semana
 }
 
 // ── TAB: REPARTO DEL PLAN MENSUAL EN SEMANAS ───────────────────────────────────
-function RepartoTab({ periodo, semanas, planMes, planesSem, productos, slotsDia=SLOTS_DIA, persLinea=3, persDia=12, centroId="", irASemana, irAlMes }) {
+const PAL_MOLDE = [
+  { bg:"#DBEAFE", bd:"#3B82F6" }, { bg:"#DCFCE7", bd:"#16A34A" },
+  { bg:"#FEF3C7", bd:"#F59E0B" }, { bg:"#FCE7F3", bd:"#EC4899" },
+  { bg:"#E0E7FF", bd:"#6366F1" }, { bg:"#FFE4E6", bd:"#F43F5E" },
+  { bg:"#CCFBF1", bd:"#14B8A6" }, { bg:"#F3E8FF", bd:"#A855F7" },
+];
+
+function RepartoTab({ periodo, semanas, planMes, planesSem, productos, moldes=[],
+                      slotsDia=SLOTS_DIA, persLinea=3, persDia=12, centroId="", irASemana, irAlMes }) {
   const items = planMes.items || [];
   const [draft, setDraft] = useState({});
   const [guardado, setGuardado] = useState(false);
@@ -3434,45 +3442,137 @@ function RepartoTab({ periodo, semanas, planMes, planesSem, productos, slotsDia=
     const d = {};
     semanas.forEach(s => {
       d[s] = {};
-      (planesSem.find(p => p.semana === s)?.items || []).forEach(it => { d[s][it.producto_id] = it.cantidad; });
+      (planesSem.find(p => p.semana === s)?.items || []).forEach(it => { d[s][it.producto_id] = toNum(it.cantidad); });
     });
     setDraft(d); setGuardado(false);
   }, [periodo, planesSem.length]);
 
   const cerradas = (s) => !!planesSem.find(p => p.semana === s)?.cerrado_plan;
-  const setQ = (s, pid, v) => { setGuardado(false); setDraft(p => ({ ...p, [s]: { ...(p[s]||{}), [pid]: v==="" ? "" : (parseFloat(v)||0) } })); };
-  const repartido = (pid) => semanas.reduce((a,s)=>a+(parseFloat(draft[s]?.[pid])||0),0);
-  const pendiente = (it) => (parseFloat(it.cantidad)||0) - repartido(it.producto_id);
+  const abiertas = semanas.filter(s => !cerradas(s));
+  const capSemana = slotsDia * 5;                       // huecos línea-turno por semana
 
-  const autoUno = (it) => {
-    const libres = semanas.filter(s=>!cerradas(s));
-    if (!libres.length) return;
-    const falta = pendiente(it);
-    if (Math.abs(falta) < 0.01) return;
-    const trozo = Math.round((falta/libres.length)*10)/10;
-    setGuardado(false);
-    setDraft(p => {
-      const n = { ...p };
-      libres.forEach((s,i)=>{
-        const base = parseFloat(n[s]?.[it.producto_id])||0;
-        const add = i===libres.length-1 ? Math.round((falta-trozo*(libres.length-1))*10)/10 : trozo;
-        n[s] = { ...(n[s]||{}), [it.producto_id]: Math.round((base+add)*10)/10 };
-      });
-      return n;
-    });
+  const prodDe   = (pid) => productos.find(x => x.id === pid);
+  const ritmoDe  = (pid) => toNum(prodDe(pid)?.uds_turno_linea);
+  const anchoDe  = (pid) => Math.max(1, Math.ceil((parseInt(prodDe(pid)?.personas_linea)||3) / persLinea));
+  const slotsDe  = (pid, uds) => ritmoDe(pid) > 0 ? (uds / ritmoDe(pid)) * anchoDe(pid) : 0;
+  const udsQueCaben = (pid, slots) => ritmoDe(pid) > 0 ? (slots / anchoDe(pid)) * ritmoDe(pid) : 0;
+  const moldeKey = (pid) => { const p = prodDe(pid); return p?.molde_id || (p?.molde ? `txt:${p.molde}` : ""); };
+  const moldeNom = (k) => !k ? "Sin molde" : (k.startsWith("txt:") ? k.slice(4) : (moldes.find(m=>m.id===k)?.nombre || "Molde"));
+  const clavesMolde = [...new Set(items.map(it => moldeKey(it.producto_id)))];
+  const colorMolde = (k) => PAL_MOLDE[Math.max(0, clavesMolde.indexOf(k)) % PAL_MOLDE.length];
+
+  const enSemana  = (s, pid) => toNum(draft[s]?.[pid]);
+  const repartido = (pid) => semanas.reduce((a,s) => a + enSemana(s,pid), 0);
+  const pendiente = (it)  => toNum(it.cantidad) - repartido(it.producto_id);
+  const cargaSemana = (s) => items.reduce((a,it) => a + slotsDe(it.producto_id, enSemana(s, it.producto_id)), 0);
+  const sinRepartir = items.filter(it => Math.abs(pendiente(it)) > 0.5);
+
+  const setQ = (s, pid, v) => { setGuardado(false);
+    setDraft(p => ({ ...p, [s]: { ...(p[s]||{}), [pid]: Math.max(0, Math.round(v)) } })); };
+
+  // ── PROPUESTA AUTOMÁTICA: agrupa por molde y llena semana a semana sin pasarse
+  const proponer = () => {
+    if (!items.length) return;
+    if (!abiertas.length) { window.alert("Todas las semanas del mes están cerradas."); return; }
+    const sinRitmo = items.filter(it => ritmoDe(it.producto_id) <= 0);
+    if (sinRitmo.length === items.length) {
+      window.alert("Ningún producto tiene ritmo definido. Ponlo en su ficha para poder repartir."); return; }
+    if (!window.confirm("Voy a repartir el mes solo, agrupando por molde y sin pasarme de la capacidad de cada semana.\n\nSe sobrescribe el reparto actual de las semanas abiertas. ¿Seguir?")) return;
+
+    const cola = [...items]
+      .filter(it => ritmoDe(it.producto_id) > 0)
+      .sort((a,b) => {
+        const ka = moldeKey(a.producto_id), kb = moldeKey(b.producto_id);
+        if (ka !== kb) return clavesMolde.indexOf(ka) - clavesMolde.indexOf(kb);
+        return toNum(b.cantidad) - toNum(a.cantidad);
+      })
+      .map(it => ({ pid: it.producto_id, pend: toNum(it.cantidad) }));
+
+    const d = {};
+    semanas.forEach(s => { d[s] = cerradas(s) ? { ...(draft[s]||{}) } : {}; });
+
+    // objetivo: carga pareja entre semanas, sin superar nunca la capacidad
+    const totalSlots = cola.reduce((a,x) => a + slotsDe(x.pid, x.pend), 0);
+    const objetivo = Math.min(capSemana, totalSlots / abiertas.length);
+
+    let i = 0;
+    // 1ª pasada: hasta la carga pareja · 2ª pasada: lo que sobre, hasta llenar
+    for (const paso of [objetivo, capSemana]) {
+    for (const s of abiertas) {
+      let cap = paso - (items.reduce((a,it) => a + slotsDe(it.producto_id, d[s][it.producto_id]||0), 0));
+      while (i < cola.length && cap > 0.05) {
+        const x = cola[i];
+        if (x.pend <= 0.5) { i++; continue; }
+        const necesita = slotsDe(x.pid, x.pend);
+        if (necesita <= cap + 0.05) {
+          d[s][x.pid] = (d[s][x.pid]||0) + Math.round(x.pend);
+          cap -= necesita; x.pend = 0; i++;
+        } else {
+          const uds = Math.floor(udsQueCaben(x.pid, cap));
+          if (uds >= 1) { d[s][x.pid] = (d[s][x.pid]||0) + uds; x.pend -= uds; }
+          cap = 0;
+        }
+      }
+    }
+    i = 0;   // la segunda pasada vuelve a recorrer lo que quedó pendiente
+    }
+    setDraft(d); setGuardado(false);
+
+    const fuera = cola.filter(x => x.pend > 0.5);
+    if (fuera.length) {
+      window.alert("No cabe todo en el mes:\n\n" +
+        fuera.map(x => `· ${prodDe(x.pid)?.nombre}: ${num(x.pend)} uds sin colocar`).join("\n") +
+        "\n\nBaja cantidades en el plan del mes o abre otro turno.");
+    }
   };
-  const autoTodo = () => items.forEach(autoUno);
-  const vaciar = () => { if(!window.confirm("¿Poner a cero todo el reparto?")) return; setGuardado(false);
-    setDraft(p=>{ const n={}; semanas.forEach(s=>{ n[s]= cerradas(s) ? (p[s]||{}) : {}; }); return n; }); };
+
+  const mover = (pid, desde, hacia) => {
+    const q = enSemana(desde, pid);
+    if (q <= 0 || cerradas(hacia)) return;
+    setGuardado(false);
+    setDraft(p => ({ ...p,
+      [desde]: { ...(p[desde]||{}), [pid]: 0 },
+      [hacia]: { ...(p[hacia]||{}), [pid]: toNum(p[hacia]?.[pid]) + q } }));
+  };
+
+  // ── SUGERENCIAS: mover producto de una semana llena a otra con hueco
+  const sugerencias = (() => {
+    const out = [];
+    const carga = {}; abiertas.forEach(s => carga[s] = cargaSemana(s));
+    abiertas.filter(s => carga[s] > capSemana + 0.05).forEach(s => {
+      const exceso = carga[s] - capSemana;
+      const destinos = abiertas.filter(z => z !== s && capSemana - carga[z] > 0.05)
+        .sort((a,b) => (capSemana-carga[b]) - (capSemana-carga[a]));
+      if (!destinos.length) return;
+      const candidatos = items
+        .map(it => ({ pid: it.producto_id, q: enSemana(s, it.producto_id) }))
+        .filter(x => x.q > 0)
+        .map(x => ({ ...x, sl: slotsDe(x.pid, x.q) }))
+        .filter(x => x.sl >= exceso * 0.5)
+        .sort((a,b) => a.sl - b.sl);
+      const elegido = candidatos[0];
+      if (!elegido) return;
+      const destino = destinos.find(z => capSemana - carga[z] >= elegido.sl) || destinos[0];
+      const mismoMolde = items.some(it => it.producto_id !== elegido.pid &&
+        enSemana(destino, it.producto_id) > 0 && moldeKey(it.producto_id) === moldeKey(elegido.pid));
+      out.push({ pid: elegido.pid, desde: s, hacia: destino, slots: elegido.sl, q: elegido.q, mismoMolde });
+    });
+    return out;
+  })();
+
+  // ── cambios de molde entre semanas consecutivas (cuantos menos, mejor)
+  const cambiosMolde = abiertas.reduce((a,s) => {
+    const ks = [...new Set(items.filter(it => enSemana(s, it.producto_id) > 0).map(it => moldeKey(it.producto_id)))];
+    return a + Math.max(0, ks.length - 1);
+  }, 0);
 
   const semanaItems = (s) => items
-    .map(it => ({ producto_id: it.producto_id, cantidad: parseFloat(draft[s]?.[it.producto_id])||0 }))
+    .map(it => ({ producto_id: it.producto_id, cantidad: enSemana(s, it.producto_id) }))
     .filter(x => x.cantidad > 0);
 
   const guardar = async () => {
-    const abiertas = semanas.filter(s=>!cerradas(s));
     for (const s of abiertas) {
-      const prev = planesSem.find(p=>p.semana===s)?.items || [];
+      const prev = planesSem.find(p => p.semana === s)?.items || [];
       const extras = prev.filter(x => !items.some(it => it.producto_id === x.producto_id));
       const nuevos = semanaItems(s).map(x => ({ id: uid(), producto_id: x.producto_id, cantidad: x.cantidad }));
       await save("planes_semana", `${s}__${centroId}`, { semana: s, periodo, centro: centroId, items: [...extras, ...nuevos], desde_plan_mes: true });
@@ -3480,130 +3580,167 @@ function RepartoTab({ periodo, semanas, planMes, planesSem, productos, slotsDia=
     setGuardado(true);
   };
 
-  const sinRepartir = items.filter(it => Math.abs(pendiente(it)) > 0.01);
+  if (items.length === 0) return (
+    <Card color={C.amber+"66"}>
+      <div style={{fontFamily:F.h,fontWeight:800,fontSize:15,color:C.text,marginBottom:5}}>📭 Nada que repartir</div>
+      <div style={{fontSize:12.5,color:C.mutedD,lineHeight:1.6,marginBottom:11}}>
+        El plan de {nombreMes(periodo)} está vacío para este centro. Ve a <b>📅 Mes</b>, añade productos y vuelve aquí.
+      </div>
+      <Btn v="secondary" onClick={()=>irAlMes && irAlMes()}>📅 Ir al plan del mes</Btn>
+    </Card>
+  );
 
   return (
     <>
-      {items.length === 0 && (
-        <Card style={{marginBottom:12}} color={C.amber+"66"}>
-          <div style={{fontFamily:F.h,fontWeight:800,fontSize:15,color:C.text,marginBottom:5}}>📭 Nada que repartir</div>
-          <div style={{fontSize:12.5,color:C.mutedD,lineHeight:1.6,marginBottom:11}}>
-            El plan de {nombreMes(periodo)} está vacío para este centro. Ve a la pestaña <b>📅 Mes</b>, añade los productos y las cantidades, y vuelve aquí para repartirlos por semanas.
-          </div>
-          <Btn v="secondary" onClick={()=>irAlMes && irAlMes()}>📅 Ir al plan del mes</Btn>
+      <button onClick={proponer}
+        style={{width:"100%",background:C.accent,border:"none",color:"#fff",borderRadius:14,padding:"17px",
+          fontFamily:F.h,fontWeight:800,fontSize:16,cursor:"pointer",marginBottom:6}}>
+        ⚡ Hacer la propuesta del mes
+      </button>
+      <div style={{fontSize:11.5,color:C.mutedD,textAlign:"center",marginBottom:14,lineHeight:1.5}}>
+        Reparte solo, junta los productos que comparten molde y no llena ninguna semana por encima de su capacidad.
+      </div>
+
+      {/* ── SUGERENCIAS DE AJUSTE ── */}
+      {sugerencias.length > 0 && (
+        <Card style={{marginBottom:12}} color={C.amber+"88"}>
+          <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.amber,marginBottom:8}}>💡 Cómo arreglarlo</div>
+          {sugerencias.map((g,i)=>(
+            <div key={i} style={{background:C.amberBg,borderRadius:11,padding:"11px 12px",marginBottom:8}}>
+              <div style={{fontSize:13,color:C.text,lineHeight:1.6,marginBottom:8}}>
+                La <b>S{g.desde.split("-W")[1]}</b> no cabe. Mueve <b>{prodDe(g.pid)?.nombre}</b> ({num(g.q)} uds) a la <b>S{g.hacia.split("-W")[1]}</b>, que tiene hueco.
+                {g.mismoMolde && <span style={{color:C.green,fontWeight:700}}> Además allí ya hay un producto de su mismo molde.</span>}
+              </div>
+              <button onClick={()=>mover(g.pid, g.desde, g.hacia)}
+                style={{width:"100%",background:C.accent,border:"none",color:"#fff",borderRadius:10,padding:"11px",
+                  fontFamily:F.h,fontWeight:800,fontSize:13.5,cursor:"pointer"}}>
+                ✔ Hacer este cambio
+              </button>
+            </div>
+          ))}
         </Card>
       )}
 
-      {items.length > 0 && (
-        <>
-          <Card style={{marginBottom:12}}>
-            <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text,marginBottom:4}}>✂️ Reparto en semanas</div>
-            <div style={{fontSize:12.5,color:C.mutedD,lineHeight:1.6,marginBottom:11}}>
-              Escribe cuánto va en cada semana. El chip de la derecha te dice lo que falta por repartir de cada producto.
+      {/* ── LAS SEMANAS, EN BARRAS ── */}
+      {semanas.map(s => {
+        const carga = cargaSemana(s);
+        const pct = capSemana > 0 ? carga/capSemana : 0;
+        const pers = Math.ceil(carga/5*persLinea);
+        const col = pct > 1.001 ? C.red : pct < 0.6 ? C.amber : C.green;
+        const cerrada = cerradas(s);
+        const enEsta = items.filter(it => enSemana(s, it.producto_id) > 0);
+        const iS = semanas.indexOf(s);
+        return (
+          <Card key={s} style={{marginBottom:10}} color={cerrada ? undefined : col+"55"}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8}}>
+              <div>
+                <div style={{fontFamily:F.h,fontWeight:800,fontSize:16,color:C.text}}>{cerrada?"🔒 ":""}Semana {s.split("-W")[1]}</div>
+                <div style={{fontSize:11.5,color:C.mutedD}}>{rotuloSemana(s)}</div>
+              </div>
+              <div style={{textAlign:"right"}}>
+                <div style={{fontFamily:F.h,fontWeight:900,fontSize:22,color:col}}>{Math.round(pct*100)}%</div>
+                <div style={{fontSize:10.5,color:C.mutedD}}>{pers} pers./día</div>
+              </div>
             </div>
-            <button onClick={autoTodo} style={{width:"100%",background:C.accent,border:"none",color:"#fff",borderRadius:12,padding:"15px",fontFamily:F.h,fontWeight:800,fontSize:15,cursor:"pointer",marginBottom:8}}>⚖️ Repartir automáticamente lo que falta</button>
-            <button onClick={vaciar} style={{width:"100%",background:"#fff",border:`1.5px solid ${C.border}`,color:C.mutedD,borderRadius:12,padding:"13px",fontFamily:F.h,fontWeight:800,fontSize:13.5,cursor:"pointer"}}>↺ Empezar de cero</button>
-          </Card>
 
-          {items.map(it => {
-            const p = productos.find(x=>x.id===it.producto_id);
-            const falta = pendiente(it);
-            const ok = Math.abs(falta) < 0.01;
-            return (
-              <Card key={it.id} style={{marginBottom:10}} color={ok?C.green+"55":C.amber+"66"}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:9}}>
-                  <div style={{minWidth:0}}>
-                    <div style={{fontFamily:F.h,fontWeight:800,fontSize:15,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p?.nombre||"?"}</div>
-                    {prodSub(p) && <div style={{fontSize:12,color:C.blue,fontWeight:600,marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{prodSub(p)}</div>}
-                    <div style={{fontSize:11.5,color:C.mutedD,marginTop:2}}>
-                      {toNum(p?.uds_turno_linea)>0
-                        ? <>⏱️ {num(toNum(p.uds_turno_linea))} uds/turno · {parseInt(p.personas_linea)||3}p</>
-                        : <span style={{color:C.red,fontWeight:700}}>⚠️ sin ritmo</span>}
-                      {p?.molde && <> · 🔧 {p.molde}</>}
-                    </div>
-                    <div style={{fontSize:11.5,color:C.mutedD,marginTop:1}}>Plan del mes: {num(it.cantidad)} uds</div>
-                  </div>
-                  <span style={{flexShrink:0,background:ok?C.greenBg:C.amberBg,border:`1.5px solid ${ok?C.green:C.amber}`,color:ok?C.green:C.amber,borderRadius:20,padding:"5px 12px",fontFamily:F.h,fontWeight:800,fontSize:12.5}}>
-                    {ok ? "✔ repartido" : (falta>0 ? `faltan ${num(falta)}` : `sobran ${num(-falta)}`)}
-                  </span>
-                </div>
-                <div style={{display:"grid",gridTemplateColumns:`repeat(${Math.min(semanas.length,5)},1fr)`,gap:6}}>
-                  {semanas.map(s => {
-                    const bloq = cerradas(s);
-                    return (
-                      <div key={s}>
-                        <div style={{fontSize:10.5,color:bloq?C.muted:C.mutedD,fontWeight:800,textAlign:"center",marginBottom:3}}>
-                          {bloq?"🔒 ":""}S{s.split("-W")[1]}
-                        </div>
-                        <input type="number" min="0" step="1" disabled={bloq}
-                          value={draft[s]?.[it.producto_id] ?? ""}
-                          onChange={e=>setQ(s, it.producto_id, e.target.value)}
-                          style={{width:"100%",padding:"11px 4px",borderRadius:10,border:`1.5px solid ${bloq?C.border:C.border}`,
-                            background:bloq?C.card2:"#fff",color:bloq?C.muted:C.text,fontSize:15,fontFamily:F.h,fontWeight:700,
-                            textAlign:"center",boxSizing:"border-box"}}/>
-                      </div>
-                    );
-                  })}
-                </div>
-                {!ok && <button onClick={()=>autoUno(it)}
-                  style={{width:"100%",marginTop:9,background:"#fff",border:`1.5px solid ${C.blue}55`,color:C.blue,borderRadius:10,padding:"9px",fontFamily:F.h,fontWeight:800,fontSize:12.5,cursor:"pointer"}}>
-                  ⚖️ Repartir estas {num(Math.abs(falta))} uds
-                </button>}
-              </Card>
-            );
-          })}
+            {/* barra apilada por producto, color = molde */}
+            <div style={{display:"flex",height:26,borderRadius:8,overflow:"hidden",background:C.card2,marginBottom:4}}>
+              {enEsta.map(it => {
+                const w = capSemana>0 ? (slotsDe(it.producto_id, enSemana(s,it.producto_id))/capSemana)*100 : 0;
+                const c = colorMolde(moldeKey(it.producto_id));
+                return <div key={it.producto_id} title={prodDe(it.producto_id)?.nombre}
+                  style={{width:Math.max(0,Math.min(100,w))+"%",background:c.bg,borderRight:`2px solid ${c.bd}`}}/>;
+              })}
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:10.5,color:C.mutedD,marginBottom:9}}>
+              <span>0</span><span>lleno = {capSemana} huecos</span>
+            </div>
 
-          <Card style={{marginBottom:12}}>
-            <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text,marginBottom:10}}>👥 Cómo queda cada semana</div>
-            {semanas.map(s => {
-              const r = calcRecursos(semanaItems(s), productos, persLinea);
-              const disp = planesSem.find(p=>p.id.startsWith(s))?.slots_disponibles ?? slotsDia*5;
-              const necesita = Math.ceil(r.personaTurnos/5);
-              const tiene = Math.round(disp/(slotsDia*5)*persDia);
-              const est = necesita > tiene ? "falta" : necesita < tiene*0.9 ? "sobra" : "ok";
-              const col = est==="ok"?C.green:est==="falta"?C.red:C.amber;
+            {enEsta.length === 0 && !cerrada && (
+              <div style={{fontSize:12.5,color:C.amber,fontWeight:700,padding:"4px 0"}}>Semana vacía — no hay nada asignado.</div>
+            )}
+
+            {enEsta.map(it => {
+              const pid = it.producto_id;
+              const c = colorMolde(moldeKey(pid));
+              const q = enSemana(s, pid);
+              const paso = Math.max(1, Math.round(ritmoDe(pid) || 10));
               return (
-                <div key={s} onClick={()=>irASemana(s)} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0",borderBottom:`1px solid ${C.card2}`,cursor:"pointer"}}>
-                  <div style={{minWidth:0,flex:1}}>
-                    <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text}}>{cerradas(s)?"🔒 ":""}Semana {s.split("-W")[1]}</div>
-                    <div style={{fontSize:11.5,color:C.mutedD}}>{rotuloSemana(s)} · {num(r.uds)} uds</div>
+                <div key={pid} style={{background:c.bg,border:`1.5px solid ${c.bd}`,borderRadius:11,padding:"9px 10px",marginBottom:7}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8,marginBottom:6}}>
+                    <div style={{minWidth:0}}>
+                      <div style={{fontFamily:F.h,fontWeight:800,fontSize:13.5,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{prodDe(pid)?.nombre}</div>
+                      <div style={{fontSize:11,color:C.mutedD}}>🔧 {moldeNom(moldeKey(pid))} · {(slotsDe(pid,q)/1).toFixed(1)} huecos</div>
+                    </div>
+                    <div style={{fontFamily:F.h,fontWeight:900,fontSize:18,color:C.text,flexShrink:0}}>{num(q)}</div>
                   </div>
-                  <div style={{textAlign:"right",flexShrink:0}}>
-                    <div style={{fontFamily:F.h,fontWeight:900,fontSize:17,color:col}}>{necesita}<span style={{fontSize:12,color:C.muted}}>/{tiene}</span></div>
-                    <div style={{fontSize:10,color:C.mutedD}}>personas/día</div>
-                  </div>
-                  <span style={{color:C.muted,fontSize:17,flexShrink:0}}>›</span>
+                  {!cerrada && (
+                    <div style={{display:"flex",gap:5}}>
+                      <button disabled={iS===0||cerradas(semanas[iS-1])} onClick={()=>mover(pid,s,semanas[iS-1])}
+                        style={{flex:1,background:"#fff",border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 4px",fontSize:13,fontWeight:800,
+                          color:(iS===0||cerradas(semanas[iS-1]))?C.muted:C.text,cursor:"pointer",opacity:(iS===0||cerradas(semanas[iS-1]))?0.35:1}}>← antes</button>
+                      <button onClick={()=>setQ(s,pid,Math.max(0,q-paso))}
+                        style={{width:46,background:"#fff",border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 0",fontSize:16,color:C.text,cursor:"pointer"}}>−</button>
+                      <button onClick={()=>setQ(s,pid,q+paso)}
+                        style={{width:46,background:"#fff",border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 0",fontSize:16,color:C.text,cursor:"pointer"}}>+</button>
+                      <button disabled={iS===semanas.length-1||cerradas(semanas[iS+1])} onClick={()=>mover(pid,s,semanas[iS+1])}
+                        style={{flex:1,background:"#fff",border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 4px",fontSize:13,fontWeight:800,
+                          color:(iS===semanas.length-1||cerradas(semanas[iS+1]))?C.muted:C.text,cursor:"pointer",opacity:(iS===semanas.length-1||cerradas(semanas[iS+1]))?0.35:1}}>después →</button>
+                    </div>
+                  )}
                 </div>
               );
             })}
-          </Card>
 
-          {sinRepartir.length>0 && (
-            <div style={{background:C.amberBg,border:`1.5px solid ${C.amber}`,borderRadius:12,padding:"11px 14px",marginBottom:12,fontSize:13,color:C.amber,fontFamily:F.h,fontWeight:700,lineHeight:1.5}}>
-              ⚠️ Quedan {sinRepartir.length} producto(s) sin cuadrar con el plan del mes.
-            </div>
-          )}
-
-          {/* hueco para que la barra fija no tape el contenido */}
-          <div style={{height:78}}/>
-
-          <div style={{position:"fixed",left:0,right:0,bottom:0,zIndex:20,background:"rgba(255,255,255,0.97)",
-            borderTop:`1px solid ${C.border}`,padding:"10px 12px calc(10px + env(safe-area-inset-bottom))",
-            boxShadow:"0 -4px 14px rgba(15,23,42,0.08)"}}>
-            <div style={{maxWidth:900,margin:"0 auto",display:"flex",gap:8,alignItems:"center"}}>
-              <div style={{flex:"0 0 auto",fontSize:11.5,color:sinRepartir.length?C.amber:C.green,fontFamily:F.h,fontWeight:800,lineHeight:1.3,maxWidth:96}}>
-                {sinRepartir.length ? `${sinRepartir.length} sin cuadrar` : "✔ Todo repartido"}
-              </div>
-              <button onClick={guardar}
-                style={{flex:1,background:guardado?C.greenBg:C.accent,color:guardado?C.green:"#fff",
-                  border:guardado?`1.5px solid ${C.green}`:"none",borderRadius:12,padding:"15px 10px",
-                  fontFamily:F.h,fontWeight:800,fontSize:15,cursor:"pointer"}}>
-                {guardado?"✔ Guardado":"💾 Guardar reparto"}
+            {!cerrada && enEsta.length>0 && (
+              <button onClick={()=>irASemana(s)}
+                style={{width:"100%",background:"none",border:"none",color:C.blue,fontSize:12.5,fontWeight:800,cursor:"pointer",padding:"6px 0 0"}}>
+                Ver el calendario de esta semana →
               </button>
-            </div>
+            )}
+          </Card>
+        );
+      })}
+
+      {/* ── LO QUE FALTA POR COLOCAR ── */}
+      {sinRepartir.length > 0 && (
+        <Card style={{marginBottom:12}} color={C.red+"66"}>
+          <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.red,marginBottom:8}}>⚠️ Sin colocar en ninguna semana</div>
+          {sinRepartir.map(it=>{
+            const f = pendiente(it);
+            return (
+              <div key={it.id} style={{display:"flex",justifyContent:"space-between",fontSize:13,padding:"5px 0"}}>
+                <span style={{color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{prodDe(it.producto_id)?.nombre}</span>
+                <b style={{color:C.red,flexShrink:0,marginLeft:8}}>{f>0?`faltan ${num(f)}`:`sobran ${num(-f)}`}</b>
+              </div>
+            );
+          })}
+          <div style={{fontSize:11.5,color:C.mutedD,marginTop:8,lineHeight:1.5}}>
+            Pulsa “Hacer la propuesta del mes” para que lo coloque solo, o ajústalo a mano con los botones de cada semana.
           </div>
-        </>
+        </Card>
       )}
+
+      <div style={{fontSize:12,color:C.mutedD,textAlign:"center",marginBottom:8,lineHeight:1.5}}>
+        🔧 {cambiosMolde} cambio{cambiosMolde!==1?"s":""} de molde entre semanas · cuantos menos, menos paradas
+      </div>
+
+      <div style={{height:78}}/>
+      <div style={{position:"fixed",left:0,right:0,bottom:0,zIndex:20,background:"rgba(255,255,255,0.97)",
+        borderTop:`1px solid ${C.border}`,padding:"10px 12px calc(10px + env(safe-area-inset-bottom))",
+        boxShadow:"0 -4px 14px rgba(15,23,42,0.08)"}}>
+        <div style={{maxWidth:900,margin:"0 auto",display:"flex",gap:8,alignItems:"center"}}>
+          <div style={{flex:"0 0 auto",fontSize:11.5,color:sinRepartir.length?C.amber:C.green,fontFamily:F.h,fontWeight:800,lineHeight:1.3,maxWidth:96}}>
+            {sinRepartir.length ? `${sinRepartir.length} sin colocar` : "✔ Todo colocado"}
+          </div>
+          <button onClick={guardar}
+            style={{flex:1,background:guardado?C.greenBg:C.accent,color:guardado?C.green:"#fff",
+              border:guardado?`1.5px solid ${C.green}`:"none",borderRadius:12,padding:"15px 10px",
+              fontFamily:F.h,fontWeight:800,fontSize:15,cursor:"pointer"}}>
+            {guardado?"✔ Guardado":"💾 Guardar reparto"}
+          </button>
+        </div>
+      </div>
     </>
   );
 }
