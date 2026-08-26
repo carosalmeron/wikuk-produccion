@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v2.46.0";
+const APP_VERSION = "v2.48.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -3079,7 +3079,6 @@ function CostesScreen({ onBack, centros }) {
 function PlanificacionScreen({ onBack, perfil, productos, mps, producciones, centros, lineas, moldes=[] }) {
   const [tab, setTab] = useState("mes");
   const [centroId, setCentroId] = useState("");
-  useEffect(()=>{ if(!centroId && centros.length) setCentroId(centros[0].id); },[centros.length]);
   const centro = centros.find(c=>c.id===centroId);
   const lineasCentro = lineas.filter(l=>l.centro===centroId && l.activo!==false);
   const cfgLineas = lineasCentro.length>0
@@ -3154,18 +3153,45 @@ function PlanificacionScreen({ onBack, perfil, productos, mps, producciones, cen
 
   const TABS = [["mes","📅 Mes"],["reparto","✂️ Reparto"],["semana","🗓️ Semana"],["cierre","🔒 Cierre"]];
 
+  // ── Primero se elige el centro: no se carga nada hasta entonces
+  if (!centroId) return (
+    <div style={{background:C.bg,minHeight:"100vh",paddingBottom:40}}>
+      <Header title="PLANIFICACIÓN" onBack={onBack} sub="Elige el centro de trabajo"/>
+      <div style={{padding:14,maxWidth:900,margin:"0 auto"}}>
+        {centros.length===0 && <Empty icon="🏭" text="No hay centros de trabajo. Créalos en Archivos maestros."/>}
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {centros.map(c=>{
+            const ls = lineas.filter(l=>l.centro===c.id && l.activo!==false);
+            const tt = parseInt(c.turnos_abiertos)||2;
+            const pers = ls.reduce((a,l)=>a+(parseInt(l.personas)||3),0) * tt;
+            const nProd = productos.filter(p=>p.centro===c.id).length;
+            return (
+              <button key={c.id} onClick={()=>setCentroId(c.id)}
+                style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:16,padding:"18px",
+                  display:"flex",alignItems:"center",gap:14,cursor:"pointer",textAlign:"left",width:"100%"}}>
+                <span style={{width:52,height:52,borderRadius:14,background:C.blueBg,display:"flex",alignItems:"center",justifyContent:"center",fontSize:26,flexShrink:0}}>🏭</span>
+                <span style={{flex:1,minWidth:0}}>
+                  <div style={{fontFamily:F.h,fontWeight:800,fontSize:17,color:C.text}}>{c.nombre}</div>
+                  <div style={{fontSize:13,color:C.mutedD,marginTop:3}}>
+                    {ls.length} línea{ls.length!==1?"s":""} · {tt} turno{tt!==1?"s":""} · {pers} personas/día
+                  </div>
+                  <div style={{fontSize:12,color:nProd?C.mutedD:C.red,marginTop:2,fontWeight:nProd?400:700}}>
+                    {nProd ? `${nProd} productos asignados` : "⚠️ sin productos asignados"}
+                  </div>
+                </span>
+                <span style={{color:C.muted,fontSize:20,flexShrink:0}}>›</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div style={{background:C.bg,minHeight:"100vh",paddingBottom:40}}>
-      <Header title="PLANIFICACIÓN" onBack={onBack} sub={`${centro?.nombre||"Sin centro"} · ${nombreMes(periodo)}`}/>
-      {centros.length>1 && (
-        <div style={{display:"flex",gap:6,overflowX:"auto",padding:"10px 12px 4px",background:C.navy}}>
-          {centros.map(c=>(
-            <button key={c.id} onClick={()=>setCentroId(c.id)}
-              style={{flexShrink:0,background:centroId===c.id?"#fff":"rgba(255,255,255,0.12)",color:centroId===c.id?C.navy:"#fff",
-                border:"none",borderRadius:10,padding:"9px 14px",fontFamily:F.h,fontWeight:800,fontSize:13,cursor:"pointer"}}>🏭 {c.nombre}</button>
-          ))}
-        </div>
-      )}
+      <Header title={(centro?.nombre||"PLANIFICACIÓN").toUpperCase()} onBack={()=>setCentroId("")}
+        sub={`Planificación · ${nombreMes(periodo)} · toca ‹ para cambiar de centro`}/>
       <div style={{position:"sticky",top:0,zIndex:16,boxShadow:"0 2px 10px rgba(15,23,42,0.10)"}}>
         <div style={{display:"flex",gap:6,padding:"10px 12px",background:C.navy}}>
           {TABS.map(([k,l])=>(
@@ -5181,25 +5207,31 @@ function Home({ perfil, onGo, onLogout, counts, ordenes=[], producciones=[], pro
   const fmtFecha = (f)=>{ try { return new Date(f+"T12:00:00").toLocaleDateString("es-ES",{weekday:"long",day:"numeric",month:"2-digit"}); } catch(e){ return f; } };
   const esGerencia = perfil.rol === "gerencia";
   const tiles = [
-    { id:"planificacion", icon:"📅", bg:"#EEF2FF", label:"Planificación", sub:"Mes · semana · cuadre · cierre",     roles:["gerencia","sup_fabrica"] },
-    { id:"moldes",    icon:"🔧", bg:"#F1F5F9", label:"Moldes",               sub:"Catálogo para agrupar producción", roles:["gerencia","sup_fabrica"] },
-    { id:"ordenes",   icon:"📋", bg:"#ECFDF5", label:"Órdenes de Producción", sub:"Planificar y registrar",           roles:["gerencia","sup_fabrica","sup_oficina"] },
-    { id:"diario",    icon:"📖", bg:"#EFF6FF", label:"Diario de Fabricación", sub:"El parte oficial del día",          roles:["gerencia","sup_fabrica","sup_oficina"] },
-    { id:"analitica", icon:"📊", bg:"#FDF2F8", label:"Analítica",         sub:"Evolución · costes · lotes · equipos", roles:["gerencia","sup_fabrica"] },
-    { id:"seed",      icon:"🚀", bg:"#FFF7ED", label:"Carga Inicial",     sub:"Catálogo completo en 1 clic",          roles:["gerencia"] },
-    { id:"synccat",   icon:"🔗", bg:"#F5F3FF", label:"Sincronizar Catálogo", sub:"Descripciones desde el CRM",         roles:["gerencia"] },
-    { id:"importhist",icon:"📥", bg:"#FFFBEB", label:"Importar Histórico", sub:"Excel maestro → Firebase",              roles:["gerencia"] },
-    { id:"centros",   icon:"🏭", bg:"#EFF6FF", label:"Centros de Trabajo", sub:`${counts.centros} centros`,           roles:["gerencia"] },
-    { id:"lineas",    icon:"⚙️", bg:"#F1F5F9", label:"Líneas de Producción", sub:`${counts.lineas} líneas`,            roles:["gerencia"] },
-    { id:"usuarios",  icon:"👥", bg:"#F5F3FF", label:"Usuarios",          sub:`${counts.usuarios} registrados`,      roles:["gerencia"] },
-    { id:"turnos",    icon:"🕐", bg:"#FFFBEB", label:"Turnos",            sub:`${counts.turnos} configurados`,        roles:["gerencia"] },
-    { id:"procesos",  icon:"⚙️", bg:"#F1F5F9", label:"Procesos",          sub:`${counts.procesos} en catálogo`,       roles:["gerencia","sup_fabrica"] },
-    { id:"mps",       icon:"📦", bg:"#F0FDF4", label:"Materias Primas",   sub:`${counts.mps} con objetivo`,           roles:["gerencia","sup_fabrica","sup_calidad"] },
-    { id:"provs",     icon:"🚚", bg:"#EFF6FF", label:"Proveedores",       sub:`${counts.provs} activos`,              roles:["gerencia","sup_calidad"] },
-    { id:"productos", icon:"🏷️", bg:"#FFFBEB", label:"Productos",         sub:`${counts.productos} con coste obj.`,   roles:["gerencia","sup_fabrica"] },
-    { id:"motivos",   icon:"⏸", bg:"#FEF2F2", label:"Motivos de Paro",   sub:`${counts.motivos} configurados`,       roles:["gerencia","sup_fabrica"] },
-    { id:"costes",    icon:"💰", bg:"#F0FDF4", label:"Costes Fijos",      sub:"Reparto por hora",                     roles:["gerencia"] },
+    { id:"planificacion", grupo:"proc", icon:"📅", bg:"#EEF2FF", label:"Planificación", sub:"Mes · semana · cuadre · cierre", roles:["gerencia","sup_fabrica"] },
+    { id:"ordenes",   grupo:"proc", icon:"📋", bg:"#ECFDF5", label:"Órdenes de Producción", sub:"Planificar y registrar",     roles:["gerencia","sup_fabrica","sup_oficina"] },
+    { id:"diario",    grupo:"proc", icon:"📖", bg:"#EFF6FF", label:"Diario de Fabricación", sub:"El parte oficial del día",          roles:["gerencia","sup_fabrica","sup_oficina"] },
+    { id:"analitica", grupo:"proc", icon:"📊", bg:"#FDF2F8", label:"Analítica",         sub:"Evolución · costes · lotes · equipos", roles:["gerencia","sup_fabrica"] },
+    { id:"seed", grupo:"herr",      icon:"🚀", bg:"#FFF7ED", label:"Carga Inicial",     sub:"Catálogo completo en 1 clic",          roles:["gerencia"] },
+    { id:"synccat", grupo:"herr",   icon:"🔗", bg:"#F5F3FF", label:"Sincronizar Catálogo", sub:"Descripciones desde el CRM",         roles:["gerencia"] },
+    { id:"importhist", grupo:"herr",icon:"📥", bg:"#FFFBEB", label:"Importar Histórico", sub:"Excel maestro → Firebase",              roles:["gerencia"] },
+    { id:"centros", grupo:"maestros",   icon:"🏭", bg:"#EFF6FF", label:"Centros de Trabajo", sub:`${counts.centros} centros`,           roles:["gerencia"] },
+    { id:"lineas", grupo:"maestros",    icon:"⚙️", bg:"#F1F5F9", label:"Líneas de Producción", sub:`${counts.lineas} líneas`,            roles:["gerencia"] },
+    { id:"usuarios", grupo:"maestros",  icon:"👥", bg:"#F5F3FF", label:"Usuarios",          sub:`${counts.usuarios} registrados`,      roles:["gerencia"] },
+    { id:"turnos", grupo:"maestros",    icon:"🕐", bg:"#FFFBEB", label:"Turnos",            sub:`${counts.turnos} configurados`,        roles:["gerencia"] },
+    { id:"procesos", grupo:"maestros",  icon:"⚙️", bg:"#F1F5F9", label:"Procesos",          sub:`${counts.procesos} en catálogo`,       roles:["gerencia","sup_fabrica"] },
+    { id:"mps", grupo:"maestros",       icon:"📦", bg:"#F0FDF4", label:"Materias Primas",   sub:`${counts.mps} con objetivo`,           roles:["gerencia","sup_fabrica","sup_calidad"] },
+    { id:"provs", grupo:"maestros",     icon:"🚚", bg:"#EFF6FF", label:"Proveedores",       sub:`${counts.provs} activos`,              roles:["gerencia","sup_calidad"] },
+    { id:"productos", grupo:"maestros", icon:"🏷️", bg:"#FFFBEB", label:"Productos",         sub:`${counts.productos} con coste obj.`,   roles:["gerencia","sup_fabrica"] },
+    { id:"motivos", grupo:"maestros",   icon:"⏸", bg:"#FEF2F2", label:"Motivos de Paro",   sub:`${counts.motivos} configurados`,       roles:["gerencia","sup_fabrica"] },
+    { id:"costes", grupo:"maestros",    icon:"💰", bg:"#F0FDF4", label:"Costes Fijos",      sub:"Reparto por hora",                     roles:["gerencia"] },
+    { id:"moldes", grupo:"maestros",    icon:"🔧", bg:"#F1F5F9", label:"Moldes",            sub:`${counts.moldes||0} en catálogo`,      roles:["gerencia","sup_fabrica"] },
   ].filter(t=>t.roles.includes(perfil.rol));
+
+  const SECCIONES = [
+    ["proc",     "🏭 Producción",        "El día a día: planificar, fabricar y medir"],
+    ["maestros", "🗂️ Archivos maestros", "Lo que se configura una vez"],
+    ["herr",     "🛠️ Herramientas",      "Cargas e importaciones"],
+  ];
 
   return (
     <div style={{background:C.bg,minHeight:"100vh"}}>
@@ -5266,7 +5298,17 @@ function Home({ perfil, onGo, onLogout, counts, ordenes=[], producciones=[], pro
         )}
         {!esGerencia && perfil.rol!=="operario" && tiles.length===0 && <Empty icon="⏳" text="Tu área estará disponible en la Fase 2"/>}
         <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(250px,1fr))",gap:10}}>
-          {tiles.map(t=>(
+          {SECCIONES.map(([g, titulo, desc]) => {
+            const grupo = tiles.filter(t => t.grupo === g);
+            if (!grupo.length) return null;
+            return (
+              <div key={g} style={{gridColumn:"1 / -1"}}>
+                <div style={{padding:"14px 2px 8px"}}>
+                  <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text,letterSpacing:0.2}}>{titulo}</div>
+                  <div style={{fontSize:12,color:C.mutedD,marginTop:1}}>{desc}</div>
+                </div>
+                <div style={{display:"grid",gap:10}}>
+                  {grupo.map(t=>(
             <button key={t.id} onClick={()=>onGo(t.id)}
               style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:16,padding:"16px",display:"flex",alignItems:"center",gap:14,cursor:"pointer",textAlign:"left",boxShadow:"0 1px 2px rgba(15,23,42,0.04)",animation:"fadeUp .3s ease"}}>
               <span style={{width:46,height:46,borderRadius:13,background:t.bg||C.blueBg,display:"flex",alignItems:"center",justifyContent:"center",fontSize:23,flexShrink:0}}>{t.icon}</span>
@@ -5276,7 +5318,11 @@ function Home({ perfil, onGo, onLogout, counts, ordenes=[], producciones=[], pro
               </span>
               <span style={{color:C.muted,fontSize:18}}>›</span>
             </button>
-          ))}
+                  ))}
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>
@@ -5392,7 +5438,7 @@ export default function App() {
   );
 
   const back = () => setView("home");
-  const counts = { centros:centros.length, lineas:lineas.length, motivos:motivos.length, usuarios:usuarios.length, turnos:turnos.length, procesos:procesos.length, mps:mps.length, provs:provs.length, productos:productos.length };
+  const counts = { centros:centros.length, lineas:lineas.length, motivos:motivos.length, usuarios:usuarios.length, turnos:turnos.length, procesos:procesos.length, mps:mps.length, provs:provs.length, productos:productos.length, moldes:moldes.length };
 
   return (
     <div style={{fontFamily:F.b}}>
