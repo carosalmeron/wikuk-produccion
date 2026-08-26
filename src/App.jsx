@@ -54,6 +54,9 @@ const P = {
   fh:"'Barlow Condensed','Arial Narrow',sans-serif",
 };
 const uid = () => Math.random().toString(36).slice(2, 10);
+// Los operarios entran con usuario y clave; por dentro se traduce a un correo interno
+const DOMINIO_OPERARIO = "operario.wikuk";
+const correoDeUsuario = (u) => `${(u||"").trim().toLowerCase().replace(/[^a-z0-9._-]/g,"")}@${DOMINIO_OPERARIO}`;
 // Acepta coma o punto como separador decimal (teclados móviles españoles)
 const toNum = (v) => {
   if (v === "" || v === null || v === undefined) return 0;
@@ -345,7 +348,7 @@ const WikukBrand = ({ size = "large" }) => {
 // LOGIN + BOOTSTRAP PRIMER ADMIN
 // ═══════════════════════════════════════════════════════════════════════════════
 function LoginScreen({ noUsers }) {
-  const [modo, setModo] = useState(noUsers ? "registro" : "login");
+  const [modo, setModo] = useState(noUsers ? "registro" : "operario");
   const [email, setEmail] = useState("");
   const [pass, setPass] = useState("");
   const [name, setName] = useState("");
@@ -358,6 +361,38 @@ function LoginScreen({ noUsers }) {
     setBusy(true); setErr("");
     try { await signInWithEmailAndPassword(auth, email.trim(), pass); }
     catch { setErr("Email o contraseña incorrectos"); }
+    setBusy(false);
+  };
+
+  // Operario: usuario y clave. La cuenta se crea sola la primera vez que entra.
+  const [usuario, setUsuario] = useState("");
+  const entrarOperario = async () => {
+    const u = usuario.trim().toLowerCase();
+    if (!u || !pass) { setErr("Pon tu usuario y tu clave"); return; }
+    setBusy(true); setErr("");
+    const correo = correoDeUsuario(u);
+    try {
+      await signInWithEmailAndPassword(auth, correo, pass);
+    } catch (e) {
+      if (e?.code === "auth/user-not-found") {
+        try {
+          const snap = await getDocs(collection(db, "usuarios"));
+          const doc0 = snap.docs.find(d => (d.data().usuario||"").toLowerCase() === u);
+          if (!doc0) { setErr("Ese usuario no existe. Pídeselo a tu responsable."); setBusy(false); return; }
+          const datos = doc0.data();
+          if ((datos.clave||"") !== pass) { setErr("Clave incorrecta"); setBusy(false); return; }
+          if (datos.activo === false) { setErr("Este usuario está dado de baja"); setBusy(false); return; }
+          const cred = await createUserWithEmailAndPassword(auth, correo, pass);
+          await save("usuarios", doc0.id, { uid: cred.user.uid });
+        } catch (e2) {
+          setErr(e2?.code === "auth/weak-password" ? "La clave debe tener 6 caracteres o más" : "No se ha podido entrar");
+        }
+      } else if (e?.code === "auth/wrong-password") {
+        setErr("Clave incorrecta");
+      } else {
+        setErr("No se ha podido entrar");
+      }
+    }
     setBusy(false);
   };
 
@@ -393,18 +428,43 @@ function LoginScreen({ noUsers }) {
             {modo==="registro" ? "Crear cuenta" : "Control de Producción"}
           </p>
         </div>
+        {modo!=="registro" && (
+          <div style={{display:"flex",gap:8,marginBottom:12}}>
+            {[["operario","🏭 Soy de fábrica"],["login","💼 Oficina"]].map(([k,t])=>(
+              <button key={k} onClick={()=>{setModo(k);setErr("");}}
+                style={{flex:1,minHeight:56,borderRadius:13,border:`2px solid ${modo===k?C.accent:C.border}`,
+                  background:modo===k?C.accent:"#fff",color:modo===k?"#fff":C.text,
+                  fontFamily:F.h,fontWeight:800,fontSize:15,cursor:"pointer"}}>{t}</button>
+            ))}
+          </div>
+        )}
+
         <Card>
           {err && <Toast msg={err} ok={false}/>}
-          {modo==="registro" && <Field label="Tu nombre" value={name} onChange={setName} placeholder="Ej: Antonio Caro"/>}
-          <Field label="Email" value={email} onChange={setEmail} type="email" placeholder="tu@empresa.com"/>
-          <Field label="Contraseña" value={pass} onChange={setPass} type="password" placeholder="••••••"/>
-          <Btn onClick={modo==="registro" ? registrar : login} disabled={busy}>
-            {busy ? "…" : modo==="registro" ? "Crear cuenta" : "Entrar"}
-          </Btn>
-          <button onClick={()=>{setModo(m=>m==="registro"?"login":"registro");setErr("");}}
-            style={{background:"none",border:"none",color:C.accent,fontFamily:F.b,fontSize:14,fontWeight:600,cursor:"pointer",width:"100%",marginTop:14,textAlign:"center"}}>
-            {modo==="registro" ? "¿Ya tienes cuenta? Entrar" : "¿Primera vez? Crear cuenta"}
-          </button>
+
+          {modo==="operario" ? (
+            <>
+              <Field label="Usuario" value={usuario} onChange={setUsuario} placeholder="Ej: ali"/>
+              <Field label="Clave" value={pass} onChange={setPass} type="password" placeholder="••••••"/>
+              <Btn onClick={entrarOperario} disabled={busy}>{busy ? "…" : "Entrar a fábrica"}</Btn>
+              <div style={{fontSize:12.5,color:C.mutedD,lineHeight:1.55,marginTop:12,textAlign:"center"}}>
+                Tu usuario y tu clave te los da tu responsable. No hace falta correo.
+              </div>
+            </>
+          ) : (
+            <>
+              {modo==="registro" && <Field label="Tu nombre" value={name} onChange={setName} placeholder="Ej: Antonio Caro"/>}
+              <Field label="Email" value={email} onChange={setEmail} type="email" placeholder="tu@empresa.com"/>
+              <Field label="Contraseña" value={pass} onChange={setPass} type="password" placeholder="••••••"/>
+              <Btn onClick={modo==="registro" ? registrar : login} disabled={busy}>
+                {busy ? "…" : modo==="registro" ? "Crear cuenta" : "Entrar"}
+              </Btn>
+              <button onClick={()=>{setModo(m=>m==="registro"?"login":"registro");setErr("");}}
+                style={{background:"none",border:"none",color:C.accent,fontFamily:F.b,fontSize:14,fontWeight:600,cursor:"pointer",width:"100%",marginTop:14,textAlign:"center"}}>
+                {modo==="registro" ? "¿Ya tienes cuenta? Entrar" : "¿Primera vez? Crear cuenta"}
+              </button>
+            </>
+          )}
         </Card>
       </div>
     </div>
@@ -471,6 +531,8 @@ function UsuarioForm({ onBack, ep, turnos, centros, onDone }) {
   const [centro, setCentro] = useState(ep?.centro||"");           // operario: un centro
   const [centrosSup, setCentrosSup] = useState(ep?.centros||[]);  // supervisores: varios
   const [costeHora, setCosteHora] = useState(ep?.coste_hora?.toString()||"");
+  const [usuarioLogin, setUsuarioLogin] = useState(ep?.usuario||"");
+  const [clave, setClave] = useState(ep?.clave||"");
   const [horasDia, setHorasDia]   = useState(ep?.horas_dia?.toString()||"8");
   const [activo, setActivo] = useState(ep?.activo!==false);
   const [err, setErr] = useState("");
@@ -481,6 +543,11 @@ function UsuarioForm({ onBack, ep, turnos, centros, onDone }) {
   const guardar = async () => {
     if (!nombre.trim()) { setErr("Falta el nombre"); return; }
     if (rol==="operario" && !centro) { setErr("Asigna un centro al operario"); return; }
+    if (rol==="operario") {
+      if (!usuarioLogin.trim()) { setErr("Ponle un usuario para entrar (sin correo)"); return; }
+      if ((clave||"").length < 6) { setErr("La clave debe tener 6 caracteres o más"); return; }
+      if (!turno) { setErr("Asigna un turno al operario"); return; }
+    }
     setBusy(true); setErr("");
     const data = {
       nombre: nombre.trim(), email: email.trim(), rol,
@@ -488,6 +555,8 @@ function UsuarioForm({ onBack, ep, turnos, centros, onDone }) {
       centros: (rol==="sup_fabrica"||rol==="sup_calidad") ? centrosSup : [],
       coste_hora: parseFloat(costeHora)||0,
       horas_dia: parseFloat(horasDia)||8, activo,
+      usuario: rol==="operario" ? usuarioLogin.trim().toLowerCase() : "",
+      clave:   rol==="operario" ? clave : "",
     };
     try {
       if (ep) {
@@ -518,11 +587,26 @@ function UsuarioForm({ onBack, ep, turnos, centros, onDone }) {
         {err && <Toast msg={err} ok={false}/>}
         <Card style={{marginBottom:14}}>
           <Field label="Nombre completo" value={nombre} onChange={setNombre} placeholder="Ej: Vanesa García"/>
-          <Field label="Email (para iniciar sesión)" value={email} onChange={ep?()=>{}:setEmail} type="email" placeholder="vanesa@wikuk.com"/>
-          {!ep && <Field label="Contraseña inicial" value={pass} onChange={setPass} type="password" placeholder="mín. 6 caracteres"/>}
           <Sel label="Rol" value={rol} onChange={setRol}
             options={Object.entries(ROLES).map(([v,r])=>({value:v,label:`${r.icon} ${r.label}`}))}/>
+          {rol!=="operario" && <>
+            <Field label="Email (para iniciar sesión)" value={email} onChange={ep?()=>{}:setEmail} type="email" placeholder="vanesa@wikuk.com"/>
+            {!ep && <Field label="Contraseña inicial" value={pass} onChange={setPass} type="password" placeholder="mín. 6 caracteres"/>}
+          </>}
           {rol==="operario" && <>
+            <div style={{background:C.blueBg,borderRadius:12,padding:"13px 14px",marginBottom:14}}>
+              <div style={{fontFamily:F.h,fontWeight:800,fontSize:13,color:C.blue,marginBottom:3}}>🔑 Cómo entra a la pantalla de fábrica</div>
+              <div style={{fontSize:12,color:C.mutedD,lineHeight:1.55,marginBottom:11}}>
+                Sin correo: un usuario corto y una clave. La cuenta se crea sola la primera vez que entre.
+              </div>
+              <Field label="Usuario" value={usuarioLogin} onChange={v=>setUsuarioLogin(v.toLowerCase().replace(/[^a-z0-9._-]/g,""))} placeholder="ali"/>
+              <Field label="Clave" value={clave} onChange={setClave} placeholder="mín. 6 caracteres"/>
+              {usuarioLogin && (clave||"").length>=6 && (
+                <div style={{background:"#fff",borderRadius:9,padding:"9px 11px",fontSize:12.5,color:C.mutedD,lineHeight:1.5}}>
+                  Entrará poniendo <b style={{color:C.text}}>{usuarioLogin}</b> y su clave, y le saldrá directamente el menú de fábrica.
+                </div>
+              )}
+            </div>
             <Sel label="Centro de trabajo" value={centro} onChange={setCentro} placeholder="Seleccionar centro…"
               options={centros.map(c=>({value:c.id,label:`🏭 ${c.nombre}`}))}/>
             <Sel label="Turno" value={turno} onChange={setTurno} placeholder="Seleccionar turno…"
@@ -1168,395 +1252,917 @@ function DiarioScreen({ onBack, productos, lineas, turnos, mps, motivos, usuario
 // ⏱️ TERMINAL OPERARIO — 3 toques: mi orden → mi proceso → tiempo y cantidad
 // ═══════════════════════════════════════════════════════════════════════════════
 // ═══════════════════════════════════════════════════════════════════════════════
-// TERMINAL DE PLANTA — pantalla táctil del obrador. Botones grandes, poco texto.
+// PANTALLA DE FÁBRICA — tres entradas, sin cronómetros. Se rellena al terminar.
 // ═══════════════════════════════════════════════════════════════════════════════
-const TT = {                       // medidas pensadas para dedo con guante
-  btn: 84, btnSm: 68, radio: 18,
-  txt: 22, txtSm: 17, num: 68,
+const FB = {                                   // medidas para pantalla táctil
+  btn: 104, radio: 18, txt: 21,
 };
-const BotonGrande = ({ children, sub, onClick, bg=C.card, color=C.text, borde, alto=TT.btn, disabled }) => (
+const BotonF = ({ children, sub, onClick, bg=C.card, color=C.text, borde=C.border, alto=FB.btn, disabled }) => (
   <button onClick={onClick} disabled={disabled}
     style={{minHeight:alto,width:"100%",background:disabled?C.card2:bg,color:disabled?C.muted:color,
-      border:borde?`3px solid ${borde}`:`2px solid ${C.border}`,borderRadius:TT.radio,
-      padding:"12px 16px",fontFamily:F.h,fontWeight:800,fontSize:TT.txt,cursor:disabled?"default":"pointer",
-      display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:3,
-      boxShadow:disabled?"none":"0 2px 6px rgba(15,23,42,0.10)",lineHeight:1.15}}>
+      border:`3px solid ${disabled?C.border:borde}`,borderRadius:FB.radio,padding:"12px 16px",
+      fontFamily:F.h,fontWeight:800,fontSize:FB.txt,cursor:disabled?"default":"pointer",
+      display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:4,
+      boxShadow:disabled?"none":"0 2px 6px rgba(15,23,42,0.10)",lineHeight:1.2}}>
     <span>{children}</span>
     {sub && <span style={{fontSize:14,fontWeight:600,opacity:0.75}}>{sub}</span>}
   </button>
 );
-
-function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mps, motivos, ordenes, moldes=[] }) {
-  const hoy = new Date().toISOString().slice(0,10);
-  const [lineaId, setLineaId] = useState("");
-  const [turnoId, setTurnoId] = useState("");
-  const [productoId, setProductoId] = useState("");
-  const [ordenId, setOrdenId] = useState("");
-  const [uds, setUds] = useState(0);
-  const [personas, setPersonas] = useState(0);
-  const [paroActivo, setParoActivo] = useState(null);   // {motivo_id, nombre, desde}
-  const [paros, setParos] = useState([]);
-  const [consumos, setConsumos] = useState([]);
-  const [vista, setVista] = useState("linea");          // linea·turno·producto·trabajo
-  const [modal, setModal] = useState(null);             // paro·lote·fin
-  const [ahora, setAhora] = useState(Date.now());
-  const [guardando, setGuardando] = useState(false);
-
-  useEffect(()=>{ const t=setInterval(()=>setAhora(Date.now()),1000); return ()=>clearInterval(t); },[]);
-
-  const linea = lineas.find(l=>l.id===lineaId);
-  const turno = turnos.find(t=>t.id===turnoId);
-  const prod  = productos.find(p=>p.id===productoId);
-  const ritmo = toNum(prod?.uds_turno_linea);
-  const molde = prod?.molde_id ? (moldes.find(m=>m.id===prod.molde_id)?.nombre) : prod?.molde;
-  const pct   = ritmo>0 ? uds/ritmo : 0;
-
-  const mmss = (ms) => { const s=Math.max(0,Math.floor(ms/1000));
-    return `${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`; };
-  const minParados = paros.reduce((a,p)=>a+(p.minutos||0),0) + (paroActivo ? (ahora-paroActivo.desde)/60000 : 0);
-
-  const guardar = async () => {
-    if (guardando) return;
-    setGuardando(true);
-    const parosFinal = paroActivo
-      ? [...paros, { motivo_id:paroActivo.motivo_id, motivo:paroActivo.nombre, minutos: Math.round((ahora-paroActivo.desde)/60000) }]
-      : paros;
-    await save("producciones", uid(), {
-      orden_id: ordenId || "", producto_id: productoId, fecha: hoy,
-      turno_id: turnoId, linea_id: lineaId, linea_nombre: linea?.nombre || "",
-      cantidad: uds, n_personas: personas || (parseInt(linea?.personas)||3), horas_equipo: 8,
-      consumos, paros: parosFinal, nota: "",
-      origen: "terminal",
-      registrado_por: perfil?.nombre || "terminal", registrado_at: new Date().toISOString(),
-    });
-    for (const cs of consumos) if (cs.lote && cs.materia_id) {
-      const lid = (cs.materia_id+"_"+cs.lote).replace(/[^a-zA-Z0-9_-]/g,"_");
-      await save("lotes", lid, { materia_id: cs.materia_id, codigo: cs.lote, ultima_fecha: hoy });
-    }
-    setModal({ tipo:"hecho", uds, pct });
-    setGuardando(false);
-  };
-
-  const reiniciar = () => {
-    setUds(0); setParos([]); setParoActivo(null); setConsumos([]);
-    setProductoId(""); setOrdenId(""); setModal(null); setVista("producto");
-  };
-
-  // ── Cabecera fija del terminal
-  const Cabecera = ({ titulo, atras }) => (
-    <div style={{background:C.navy,padding:"16px 20px",display:"flex",alignItems:"center",gap:16}}>
-      {atras && (
-        <button onClick={atras}
-          style={{width:64,height:64,borderRadius:16,background:"rgba(255,255,255,0.15)",border:"none",
-            color:"#fff",fontSize:30,cursor:"pointer",flexShrink:0}}>‹</button>
-      )}
-      <div style={{flex:1,minWidth:0}}>
-        <div style={{fontFamily:F.h,fontWeight:800,fontSize:26,color:"#fff",lineHeight:1.15}}>{titulo}</div>
-        <div style={{fontSize:15,color:"rgba(255,255,255,0.65)",marginTop:2}}>
-          {new Date().toLocaleDateString("es-ES",{weekday:"long",day:"numeric",month:"long"})}
-        </div>
-      </div>
-      <button onClick={onBack}
-        style={{height:56,padding:"0 20px",borderRadius:14,background:"rgba(255,255,255,0.15)",border:"none",
-          color:"#fff",fontFamily:F.h,fontWeight:700,fontSize:17,cursor:"pointer",flexShrink:0}}>Salir</button>
+const CabF = ({ titulo, sub, atras, onSalir, color=C.navy }) => (
+  <div style={{background:color,padding:"16px 20px",display:"flex",alignItems:"center",gap:16}}>
+    {atras && <button onClick={atras}
+      style={{width:66,height:66,borderRadius:16,background:"rgba(255,255,255,0.15)",border:"none",
+        color:"#fff",fontSize:30,cursor:"pointer",flexShrink:0}}>‹</button>}
+    <div style={{flex:1,minWidth:0}}>
+      <div style={{fontFamily:F.h,fontWeight:800,fontSize:25,color:"#fff",lineHeight:1.15}}>{titulo}</div>
+      {sub && <div style={{fontSize:15,color:"rgba(255,255,255,0.65)",marginTop:2}}>{sub}</div>}
     </div>
-  );
+    {onSalir && <button onClick={onSalir}
+      style={{height:56,padding:"0 20px",borderRadius:14,background:"rgba(255,255,255,0.15)",border:"none",
+        color:"#fff",fontFamily:F.h,fontWeight:700,fontSize:17,cursor:"pointer",flexShrink:0}}>Salir</button>}
+  </div>
+);
+const BloqueF = ({ titulo, sub, borde=C.border, children }) => (
+  <div style={{background:"#fff",border:`2px solid ${borde}`,borderRadius:18,padding:16,marginBottom:16}}>
+    <div style={{fontFamily:F.h,fontWeight:800,fontSize:16,color:C.text,marginBottom:3}}>{titulo}</div>
+    {sub && <div style={{fontSize:13,color:C.mutedD,lineHeight:1.5,marginBottom:12}}>{sub}</div>}
+    {children}
+  </div>
+);
+const CampoF = ({ value, onTocar, ancho=110, suf }) => (
+  <div style={{display:"flex",alignItems:"center",gap:6}}>
+    <button onClick={onTocar}
+      style={{width:ancho,height:64,borderRadius:12,border:`3px solid ${C.blue}`,background:"#fff",
+        fontFamily:F.h,fontWeight:900,fontSize:24,color:value?C.text:C.muted,cursor:"pointer"}}>
+      {value || "—"}
+    </button>
+    {suf && <span style={{fontSize:15,color:C.mutedD}}>{suf}</span>}
+  </div>
+);
+const TIPOS_INC = [
+  ["rompe","✂️","Se rompe"], ["calibre","📏","Calibre irregular"], ["rinde","📉","Rinde poco"],
+  ["sucio","🧼","Sucio"], ["humedo","💧","Húmedo"], ["rancia","🥀","Mercancía rancia"],
+  ["estrecha","↔️","Estrecha · no ensancha"], ["otra","❓","Otra cosa"],
+];
+const GRAVEDAD = [["madeja","🟡","Alguna madeja"],["media","🟠","Media parte"],["todo","🔴","Todo el lote"]];
 
-  // ═══ PASO 1 · LÍNEA ═══
-  if (vista === "linea") {
-    const lc = lineas.filter(l => l.activo !== false && (!perfil?.centro || l.centro === perfil.centro));
-    const lista = lc.length ? lc : lineas.filter(l=>l.activo!==false);
+function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mps, motivos, moldes=[], usuarios=[], procesos=[] }) {
+  const hoy = new Date().toISOString().slice(0,10);
+  const [vista, setVista] = useState("inicio");     // inicio·ordenes·ot·cerradas·incidencias·paradas·informe
+  const [turnoId, setTurnoId] = useState(turnos[0]?.id || "");
+  const [otSel, setOtSel] = useState(null);         // {linea, producto_id, cantidad, ...}
+  const [modal, setModal] = useState(null);
+
+  const [planesSem] = useCol("planes_semana");
+  const [prods]     = useCol("producciones");
+  const [incid]     = useCol("incidencias");
+
+  const semanaHoy = isoWeek(hoy);
+  const turno = turnos.find(t=>t.id===turnoId);
+  const iTurno = Math.max(0, turnos.findIndex(t=>t.id===turnoId));
+  const claveTurno = `T${iTurno+1}`;
+
+  // ── Las órdenes del día salen del calendario planificado
+  const otsHoy = planesSem
+    .filter(w => w.semana === semanaHoy)
+    .flatMap(w => (w.calendario||[])
+      .filter(x => x.fecha === hoy && x.turno === claveTurno)
+      .map(x => ({ ...x, semana: w.semana })));
+
+  const parteDe = (ot) => prods.find(p => p.fecha===hoy && p.linea_nombre===ot.linea
+    && p.turno_clave===claveTurno && p.producto_id===ot.producto_id);
+  const abiertas = otsHoy.filter(ot => !parteDe(ot));
+  const cerradasHoy = otsHoy.filter(ot => parteDe(ot));
+  const cerradasTodas = prods.filter(p => p.origen==="terminal").slice(0, 30);
+
+  const prodDe = (pid) => productos.find(p => p.id === pid);
+  const nombreMolde = (p) => p?.molde_id ? (moldes.find(m=>m.id===p.molde_id)?.nombre) : p?.molde;
+  const equipo = usuarios.filter(u => u.activo !== false && u.rol === "operario");
+  const gente = equipo.length ? equipo : usuarios;
+
+  // ═══ INICIO ═══
+  if (vista === "inicio") {
+    const nInc = incid.filter(i => (i.fecha||"") >= new Date(Date.now()-7*864e5).toISOString().slice(0,10)).length;
+    const parosHoy = prods.filter(p=>p.fecha===hoy).flatMap(p=>p.paros||[]);
+    const minHoy = parosHoy.reduce((a,x)=>a+(parseFloat(x.minutos)||0),0);
     return (
       <div style={{background:C.bg,minHeight:"100vh"}}>
-        <Cabecera titulo="¿En qué línea trabajas?"/>
-        <div style={{padding:24,display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:18}}>
-          {lista.map(l=>(
-            <BotonGrande key={l.id} alto={130} bg="#fff" borde={C.blue}
-              sub={`${parseInt(l.personas)||3} personas`}
-              onClick={()=>{ setLineaId(l.id); setPersonas(parseInt(l.personas)||3); setVista("turno"); }}>
-              ⚙️ {l.nombre}
-            </BotonGrande>
+        <CabF titulo={centros[0]?.nombre || "Fábrica"} onSalir={onBack}
+          sub={`${new Date().toLocaleDateString("es-ES",{weekday:"long",day:"numeric",month:"long"})} · ${turno?.nombre||""}`}/>
+        {turnos.length>1 && (
+          <div style={{display:"flex",gap:10,padding:"16px 22px 0"}}>
+            {turnos.map(t=>(
+              <button key={t.id} onClick={()=>setTurnoId(t.id)}
+                style={{flex:1,minHeight:64,borderRadius:14,border:`3px solid ${turnoId===t.id?C.navy:C.border}`,
+                  background:turnoId===t.id?C.navy:"#fff",color:turnoId===t.id?"#fff":C.text,
+                  fontFamily:F.h,fontWeight:800,fontSize:18,cursor:"pointer"}}>🕐 {t.nombre}</button>
+            ))}
+          </div>
+        )}
+        <div style={{padding:"24px 22px",display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:20}}>
+          {[["📋","Órdenes de trabajo","Lo que se fabrica hoy",
+             abiertas.length ? `${abiertas.length} sin cerrar` : "todo cerrado",
+             abiertas.length?C.amber:C.green, ()=>setVista("ordenes")],
+            ["⚠️","Incidencias","Problemas con la materia",
+             nInc ? `${nInc} esta semana` : "ninguna", nInc?C.red:C.mutedD, ()=>setVista("incidencias")],
+            ["⏸","Paradas","Motivo y minutos",
+             minHoy ? `${parosHoy.length} hoy · ${Math.round(minHoy)} min` : "ninguna hoy", C.mutedD, ()=>setVista("paradas")]
+          ].map(([ic,t,s2,n,col,fn],i)=>(
+            <button key={i} onClick={fn}
+              style={{minHeight:200,borderRadius:22,border:`4px solid ${C.border}`,background:"#fff",cursor:"pointer",
+                display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:10,
+                boxShadow:"0 3px 10px rgba(15,23,42,0.08)"}}>
+              <span style={{fontSize:56}}>{ic}</span>
+              <span style={{fontFamily:F.h,fontWeight:900,fontSize:26,color:C.text}}>{t}</span>
+              <span style={{fontSize:15,color:C.mutedD,fontWeight:600}}>{s2}</span>
+              <span style={{fontSize:14,fontWeight:800,borderRadius:20,padding:"5px 14px",color:col,
+                background:col===C.amber?C.amberBg:col===C.red?C.redBg:col===C.green?C.greenBg:C.card2}}>{n}</span>
+            </button>
           ))}
-          {lista.length===0 && <Empty icon="⚙️" text="No hay líneas dadas de alta"/>}
         </div>
       </div>
     );
   }
 
-  // ═══ PASO 2 · TURNO ═══
-  if (vista === "turno") {
-    return (
-      <div style={{background:C.bg,minHeight:"100vh"}}>
-        <Cabecera titulo="¿Qué turno?" atras={()=>setVista("linea")}/>
-        <div style={{padding:24,display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:18}}>
-          {turnos.map(t=>(
-            <BotonGrande key={t.id} alto={130} bg="#fff" borde={C.blue}
-              sub={t.hora_inicio ? `${t.hora_inicio} – ${t.hora_fin||""}` : null}
-              onClick={()=>{ setTurnoId(t.id); setVista("producto"); }}>
-              🕐 {t.nombre}
-            </BotonGrande>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  // ═══ PASO 3 · QUÉ SE FABRICA ═══
-  if (vista === "producto") {
-    const abiertas = ordenes.filter(o => !o.cerrada);
-    const deLinea  = abiertas.filter(o => !o.linea_id || o.linea_id === lineaId);
-    const lista = (deLinea.length ? deLinea : abiertas).slice(0, 12);
+  // ═══ LÍNEAS DEL TURNO ═══
+  if (vista === "ordenes") {
     return (
       <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
-        <Cabecera titulo="¿Qué vas a fabricar?" atras={()=>setVista("turno")}/>
-        <div style={{padding:24}}>
-          <div style={{fontSize:17,color:C.mutedD,marginBottom:16}}>
-            {linea?.nombre} · {turno?.nombre}
-          </div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(300px,1fr))",gap:18}}>
-            {lista.map(o=>{
-              const p = productos.find(x=>x.id===o.producto_id);
-              const m = p?.molde_id ? moldes.find(z=>z.id===p.molde_id)?.nombre : p?.molde;
+        <CabF titulo="Órdenes de trabajo" sub={`${turno?.nombre||""} · toca tu línea`}
+          atras={()=>setVista("inicio")} onSalir={onBack}/>
+        <div style={{padding:22}}>
+          {otsHoy.length===0 && <Empty icon="📋" text="No hay nada planificado para hoy en este turno"/>}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:16}}>
+            {otsHoy.map((ot,i)=>{
+              const p = prodDe(ot.producto_id);
+              const parte = parteDe(ot);
               return (
-                <BotonGrande key={o.id} alto={140} bg="#fff" borde={C.green}
-                  onClick={()=>{ setProductoId(o.producto_id); setOrdenId(o.id); setVista("trabajo"); }}>
-                  <span style={{fontSize:24}}>{p?.nombre || "?"}</span>
-                  <span style={{fontSize:15,fontWeight:600,color:C.mutedD}}>
-                    OT {o.numero || "—"} · {num(o.cantidad||0)} uds{m?` · 🔧 ${m}`:""}
-                  </span>
-                </BotonGrande>
+                <button key={i} onClick={()=>{ setOtSel({...ot, parte}); setVista("ot"); }}
+                  style={{background:parte?C.greenBg:"#fff",border:`3px solid ${parte?C.green:C.border}`,
+                    borderRadius:18,padding:18,cursor:"pointer",textAlign:"left",width:"100%"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:8}}>
+                    <span style={{fontFamily:F.h,fontWeight:800,fontSize:23,color:C.text}}>⚙️ {ot.linea}</span>
+                    <span style={{flexShrink:0,fontSize:13,fontWeight:800,borderRadius:20,padding:"6px 12px",
+                      background:parte?C.green:C.amberBg,color:parte?"#fff":C.amber}}>
+                      {parte?"✔ CERRADA":"SIN CERRAR"}
+                    </span>
+                  </div>
+                  <div style={{fontSize:19,fontWeight:700,color:C.text,marginBottom:4}}>{p?.nombre||"?"}</div>
+                  <div style={{fontSize:14,color:C.mutedD}}>
+                    {num(ot.cantidad)} uds{nombreMolde(p)?` · 🔧 ${nombreMolde(p)}`:""}
+                  </div>
+                  {parte && <div style={{fontSize:14,color:C.green,fontWeight:700,marginTop:4}}>
+                    {num(parte.cantidad)} hechas · cerró {parte.cerrado_por||"—"}
+                  </div>}
+                </button>
               );
             })}
           </div>
-          {lista.length===0 && (
-            <div style={{marginTop:20}}><Empty icon="📋" text="No hay órdenes abiertas. Créalas en Órdenes de Producción."/></div>
-          )}
+          <div style={{marginTop:20}}>
+            <BotonF alto={88} borde={C.border} onClick={()=>setVista("cerradas")}>🗂️ Ver órdenes cerradas</BotonF>
+          </div>
         </div>
       </div>
     );
   }
 
-  // ═══ PASO 4 · PANTALLA DE TRABAJO ═══
-  const colorPct = pct >= 1 ? C.green : pct >= 0.7 ? C.amber : C.red;
-  return (
-    <div style={{background: paroActivo ? "#FEF2F2" : C.bg, minHeight:"100vh", paddingBottom:24}}>
-      <Cabecera titulo={prod?.nombre || "Producción"} atras={()=>setVista("producto")}/>
+  // ═══ ÓRDENES CERRADAS ═══
+  if (vista === "cerradas") {
+    return (
+      <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
+        <CabF titulo="🗂️ Órdenes cerradas" sub="Se pueden reabrir si algo quedó mal"
+          atras={()=>setVista("ordenes")} onSalir={onBack}/>
+        <div style={{padding:22}}>
+          {cerradasTodas.length===0 && <Empty icon="🗂️" text="Todavía no hay órdenes cerradas"/>}
+          {cerradasTodas.map(p=>{
+            const prod = prodDe(p.producto_id);
+            const sinLote = !(p.consumos||[]).some(c=>c.lote);
+            const rend = (()=> {
+              const c = (p.consumos||[])[0];
+              if (!c || !toNum(c.metros_consumidos)) return null;
+              const teo = toNum(prod?.metros_finales) * (prod?.materias_asignadas||[]).reduce((a,m)=>a+toNum(m.capas),0) * toNum(p.cantidad);
+              return teo>0 ? Math.round(teo/toNum(c.metros_consumidos)*100) : null;
+            })();
+            return (
+              <div key={p.id} style={{background:"#fff",border:`2px solid ${sinLote?C.amber:C.border}`,borderRadius:18,padding:16,marginBottom:12}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap"}}>
+                  <div style={{flex:1,minWidth:200}}>
+                    <div style={{fontFamily:F.h,fontWeight:900,fontSize:20,color:C.text}}>{prod?.nombre||"?"} · {p.linea_nombre}</div>
+                    <div style={{fontSize:14,color:C.mutedD,marginTop:3}}>
+                      {p.fecha===hoy?"hoy":p.fecha} · cerró <b>{p.cerrado_por||"—"}</b>
+                      {p.reabierta_por && <> · ↺ reabierta por {p.reabierta_por}</>}
+                    </div>
+                    <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:10}}>
+                      <span style={{background:C.card2,borderRadius:10,padding:"7px 12px",fontSize:14}}><b>{num(p.cantidad)}</b> uds</span>
+                      {rend && <span style={{background:rend>=85?C.greenBg:C.redBg,color:rend>=85?C.green:C.red,
+                        borderRadius:10,padding:"7px 12px",fontSize:14,fontWeight:700}}>Rend. {rend}%</span>}
+                      {(p.paros||[]).length>0 && <span style={{background:C.card2,borderRadius:10,padding:"7px 12px",fontSize:14}}>
+                        {(p.paros||[]).length} parada(s) · {Math.round((p.paros||[]).reduce((a,x)=>a+toNum(x.minutos),0))} min</span>}
+                      {sinLote && <span style={{background:C.redBg,color:C.red,borderRadius:10,padding:"7px 12px",fontSize:14,fontWeight:700}}>Sin lote</span>}
+                    </div>
+                    {sinLote && (
+                      <div style={{background:C.amberBg,border:`2px solid ${C.amber}`,borderRadius:11,padding:"10px 12px",marginTop:10,
+                        fontSize:13.5,color:C.amber,fontWeight:700}}>
+                        ⚠️ Se cerró sin registrar el lote: no se puede calcular el rendimiento
+                      </div>
+                    )}
+                  </div>
+                  <button onClick={()=>setModal({tipo:"reabrir", parte:p})}
+                    style={{height:66,padding:"0 18px",background:C.amberBg,border:`2px solid ${C.amber}`,color:C.amber,
+                      borderRadius:12,fontFamily:F.h,fontWeight:800,fontSize:17,cursor:"pointer",flexShrink:0}}>↺ Reabrir</button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {modal?.tipo==="reabrir" && <HojaReabrir parte={modal.parte} perfil={perfil}
+          onCerrar={()=>setModal(null)}
+          onHecho={()=>{ setModal(null); setVista("ordenes"); }}/>}
+      </div>
+    );
+  }
 
-      <div style={{padding:"16px 20px",display:"flex",gap:14,flexWrap:"wrap",alignItems:"center",
-        background:"#fff",borderBottom:`2px solid ${C.border}`}}>
-        {[["⚙️", linea?.nombre], ["🕐", turno?.nombre], ["👥", `${personas} personas`], molde?["🔧", molde]:null]
-          .filter(Boolean).map(([i,t],k)=>(
-          <span key={k} style={{fontSize:18,fontFamily:F.h,fontWeight:700,color:C.text,
-            background:C.card2,borderRadius:12,padding:"10px 16px"}}>{i} {t}</span>
-        ))}
+  // ═══ INCIDENCIAS ═══
+  if (vista === "incidencias") {
+    return (
+      <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
+        <CabF titulo="⚠️ Incidencias" sub="Problemas con la materia prima"
+          atras={()=>setVista("inicio")} onSalir={onBack}/>
+        <div style={{padding:22}}>
+          <div style={{marginBottom:20}}>
+            <BotonF alto={96} borde={C.red} color={C.red} onClick={()=>setModal({tipo:"incidencia"})}>＋ Nueva incidencia</BotonF>
+          </div>
+          {incid.length===0 && <Empty icon="✔" text="Ninguna incidencia registrada"/>}
+          {incid.slice(0,25).map(i=>{
+            const g = GRAVEDAD.find(x=>x[0]===i.gravedad);
+            const t = TIPOS_INC.find(x=>x[0]===i.tipo);
+            const mp = mps.find(m=>m.id===i.materia_id);
+            return (
+              <div key={i.id} style={{background:"#fff",border:`2px solid ${i.gravedad==="todo"?C.red:C.border}`,
+                borderRadius:16,padding:15,marginBottom:11,display:"flex",justifyContent:"space-between",gap:12}}>
+                <div style={{minWidth:0}}>
+                  <div style={{fontFamily:F.h,fontWeight:800,fontSize:17,color:C.text}}>{i.lote||"sin lote"} · {mp?.nombre||""}</div>
+                  <div style={{fontSize:14,color:C.mutedD,marginTop:3}}>
+                    {t?t[2]:i.tipo} · {i.linea||""} · {i.fecha===hoy?"hoy":i.fecha} · anotó {i.registrado_por||"—"}
+                  </div>
+                  {i.nota && <div style={{fontSize:13.5,color:C.mutedD,marginTop:4,fontStyle:"italic"}}>“{i.nota}”</div>}
+                </div>
+                <div style={{textAlign:"right",flexShrink:0}}>
+                  <div style={{fontSize:26}}>{g?g[1]:"🟡"}</div>
+                  <div style={{fontSize:12.5,fontWeight:800,color:C.amber}}>{g?g[2]:""}</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {modal?.tipo==="incidencia" && <HojaIncidencia mps={mps} perfil={perfil} linea="" prods={prods}
+          onCerrar={()=>setModal(null)} onHecho={()=>setModal(null)}/>}
+      </div>
+    );
+  }
+
+  // ═══ PARADAS ═══
+  if (vista === "paradas") {
+    const filas = prods.filter(p=>p.fecha===hoy).flatMap(p=>(p.paros||[]).map(x=>({...x, linea:p.linea_nombre})));
+    const total = filas.reduce((a,x)=>a+toNum(x.minutos),0);
+    return (
+      <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
+        <CabF titulo="⏸ Paradas" sub={`Hoy · ${filas.length} paradas · ${Math.round(total)} min`}
+          atras={()=>setVista("inicio")} onSalir={onBack}/>
+        <div style={{padding:22}}>
+          <div style={{fontSize:15,color:C.mutedD,lineHeight:1.6,marginBottom:18}}>
+            Las paradas se anotan dentro de la orden de cada línea, junto a lo demás del turno.
+          </div>
+          {filas.length===0 && <Empty icon="✔" text="Ninguna parada hoy"/>}
+          {filas.map((x,i)=>(
+            <div key={i} style={{background:C.redBg,border:`2px solid ${C.red}`,borderRadius:13,padding:"14px 16px",
+              marginBottom:10,display:"flex",justifyContent:"space-between",alignItems:"center",gap:12}}>
+              <div><b style={{fontSize:17,color:C.text}}>{x.motivo}</b>
+                <div style={{fontSize:14,color:C.mutedD}}>{x.linea}</div></div>
+              <span style={{fontFamily:F.h,fontWeight:900,fontSize:24,color:C.red,flexShrink:0}}>{Math.round(toNum(x.minutos))} min</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // ═══ LA ORDEN ═══
+  return <OrdenTrabajo ot={otSel} perfil={perfil} productos={productos} mps={mps} motivos={motivos}
+    moldes={moldes} gente={gente} procesos={procesos} claveTurno={claveTurno} turno={turno} hoy={hoy}
+    onSalir={onBack} onVolver={()=>setVista("ordenes")}/>;
+}
+
+// ── LA ORDEN DE TRABAJO: todo el turno en una pantalla ─────────────────────────
+function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, procesos, claveTurno, turno, hoy, onSalir, onVolver }) {
+  const p = productos.find(x => x.id === ot?.producto_id);
+  const parte = ot?.parte;
+  const objetivo = toNum(ot?.cantidad);
+
+  const [total, setTotal] = useState(parte ? String(parte.cantidad) : "");
+  const [consumos, setConsumos] = useState(parte?.consumos || (p?.materias_asignadas||[]).map(m=>({
+    materia_id: m.mp_id, capas: toNum(m.capas), lote: "", metros_consumidos: 0 })));
+  const [tareas, setTareas] = useState(parte?.procesos_realizados || (p?.procesos_asignados||[]).map(x=>({
+    id: uid(), proceso_id: x.proceso_id, cantidad: 0, persona_id: "" })));
+  const [paros, setParos] = useState(parte?.paros || []);
+  const [nota, setNota] = useState(parte?.observacion || "");
+  const [modal, setModal] = useState(null);
+  const [guardando, setGuardando] = useState(false);
+
+  const nombreProc = (id) => procesos.find(z=>z.id===id)?.nombre || "?";
+  const objProc = (id) => { const c = procesos.find(z=>z.id===id);
+    const a = (p?.procesos_asignados||[]).find(z=>z.proceso_id===id);
+    return toNum(a?.min_real) || toNum(a?.min_obj) || toNum(c?.tiempo_proceso) || 0; };
+  const nombrePers = (id) => gente.find(u=>u.id===id)?.nombre || "";
+  const hecho = toNum(total);
+  const pct = objetivo>0 ? hecho/objetivo : 0;
+  const colPct = pct>=1 ? C.green : pct>=0.9 ? C.amber : C.red;
+
+  const teoricoDe = (c) => toNum(p?.metros_finales) * toNum(c.capas) * hecho;
+  const rendDe = (c) => { const t = teoricoDe(c), r = toNum(c.metros_consumidos);
+    return (t>0 && r>0) ? (t/r)*100 : null; };
+  const objRendDe = (c) => toNum(mps.find(m=>m.id===c.materia_id)?.rendimiento_objetivo) || 85;
+
+  const setCons = (i, campo, v) => setConsumos(cs => cs.map((c,k)=> k===i ? {...c,[campo]:v} : c));
+  const setTarea = (id, campo, v) => setTareas(ts => ts.map(t=> t.id===id ? {...t,[campo]:v} : t));
+
+  const guardar = async (quien) => {
+    if (guardando) return;
+    setGuardando(true);
+    const id = parte?.id || uid();
+    await save("producciones", id, {
+      producto_id: ot.producto_id, fecha: hoy, turno_id: turno?.id || "", turno_clave: claveTurno,
+      linea_nombre: ot.linea, cantidad: hecho, objetivo_ot: objetivo,
+      n_personas: [...new Set(tareas.map(t=>t.persona_id).filter(Boolean))].length || 3,
+      horas_equipo: 8,
+      consumos: consumos.filter(c=>c.lote || toNum(c.metros_consumidos)).map(c=>({
+        materia_id: c.materia_id, lote: c.lote||"", metros_consumidos: toNum(c.metros_consumidos) })),
+      procesos_realizados: tareas.filter(t=>toNum(t.cantidad)>0).map(t=>({
+        proceso_id: t.proceso_id, cantidad: toNum(t.cantidad), persona_id: t.persona_id||"" })),
+      paros, observacion: nota.trim(), origen: "terminal",
+      cerrado_por: quien, cerrado_at: new Date().toISOString(),
+      ...(parte ? { reabierta: false } : {}),
+    });
+    for (const c of consumos) if (c.lote) {
+      const lid = (c.materia_id+"_"+c.lote).replace(/[^a-zA-Z0-9_-]/g,"_");
+      await save("lotes", lid, { materia_id: c.materia_id, codigo: c.lote, ultima_fecha: hoy });
+    }
+    setGuardando(false);
+    setModal({ tipo:"hecho", quien });
+  };
+
+  if (!p) return (
+    <div style={{background:C.bg,minHeight:"100vh"}}>
+      <CabF titulo="Orden" atras={onVolver} onSalir={onSalir}/>
+      <div style={{padding:22}}><Empty icon="⚠️" text="El producto de esta orden ya no existe"/></div>
+    </div>
+  );
+
+  return (
+    <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
+      <CabF titulo={p.nombre} atras={onVolver} onSalir={onSalir}
+        sub={`${ot.linea} · ${turno?.nombre||""} · objetivo ${num(objetivo)} ${p.unidad||"uds"}`}/>
+      <div style={{padding:22}}>
+
+        {/* PRODUCCIÓN */}
+        <BloqueF titulo="✅ Producción de la línea" borde={C.blue}
+          sub="Lo que ha salido terminado. Es la cifra que cuenta como producción del día.">
+          <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
+            <CampoF value={total} onTocar={()=>setModal({tipo:"num",titulo:"Unidades fabricadas",valor:total,
+              onOk:v=>setTotal(v)})}/>
+            <span style={{fontSize:17,color:C.mutedD}}>de <b style={{color:C.text,fontSize:22}}>{num(objetivo)}</b> del objetivo</span>
+            {hecho>0 && <span style={{marginLeft:"auto",fontFamily:F.h,fontWeight:900,fontSize:30,color:colPct}}>{Math.round(pct*100)}%</span>}
+          </div>
+          {hecho>0 && (
+            <>
+              <div style={{height:16,background:C.card2,borderRadius:8,overflow:"hidden",marginTop:10}}>
+                <div style={{width:Math.min(100,pct*100)+"%",height:"100%",background:colPct,borderRadius:8}}/>
+              </div>
+              {objetivo-hecho > 0.5 && (
+                <div style={{background:C.amberBg,border:`2px solid ${C.amber}`,borderRadius:12,padding:"11px 13px",
+                  marginTop:10,fontSize:14,color:C.amber,fontWeight:700}}>
+                  Faltan <b>{num(objetivo-hecho)} uds</b> para el objetivo del turno.
+                </div>
+              )}
+            </>
+          )}
+        </BloqueF>
+
+        {/* MATERIA */}
+        <BloqueF titulo="📦 Materia prima usada" sub="Metros gastados y de qué lote. De aquí sale el rendimiento.">
+          {consumos.length===0 && <div style={{fontSize:14,color:C.muted}}>Este producto no tiene escandallo.</div>}
+          {consumos.map((c,i)=>{
+            const mp = mps.find(m=>m.id===c.materia_id);
+            const r = rendDe(c), obj = objRendDe(c);
+            const bien = r!=null && r >= obj;
+            return (
+              <div key={i} style={{borderBottom: i<consumos.length-1?`1px solid ${C.card2}`:"none",
+                paddingBottom:14, marginBottom: i<consumos.length-1?14:0}}>
+                <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap",marginBottom:10}}>
+                  <span style={{flex:1,minWidth:150}}>
+                    <b style={{fontSize:18,color:C.text}}>{mp?.nombre||"?"}</b>
+                    <div style={{fontSize:13,color:C.mutedD}}>
+                      {c.capas} capa{c.capas!==1?"s":""}{hecho>0 && ` · teórico ${num(teoricoDe(c))} m para ${num(hecho)} uds`}
+                    </div>
+                  </span>
+                  <CampoF value={c.metros_consumidos?num(c.metros_consumidos):""} suf="m"
+                    onTocar={()=>setModal({tipo:"num",titulo:`Metros de ${mp?.nombre||""}`,
+                      valor:String(c.metros_consumidos||""), onOk:v=>setCons(i,"metros_consumidos",toNum(v))})}/>
+                  <button onClick={()=>setModal({tipo:"lote",titulo:`Lote de ${mp?.nombre||""}`,
+                    valor:c.lote, onOk:v=>setCons(i,"lote",v)})}
+                    style={{height:64,padding:"0 16px",background:c.lote?C.blueBg:"#fff",
+                      border:`2px solid ${c.lote?C.blue:C.border}`,color:c.lote?C.blue:C.muted,
+                      borderRadius:12,fontFamily:F.h,fontWeight:800,fontSize:15,cursor:"pointer"}}>
+                    {c.lote ? `📦 ${c.lote}` : "＋ poner lote"}
+                  </button>
+                </div>
+                <div style={{borderRadius:12,padding:"11px 13px",fontSize:14,fontWeight:700,lineHeight:1.55,
+                  background: r==null?C.card2 : bien?C.greenBg:C.redBg,
+                  border: r==null?"none":`2px solid ${bien?C.green:C.red}`,
+                  color: r==null?C.mutedD : bien?C.green:C.red}}>
+                  {r==null
+                    ? "Sin metros o sin producción: no se puede calcular el rendimiento."
+                    : <>Rendimiento <b style={{fontSize:19}}>{Math.round(r)}%</b> · el objetivo es {obj}% —
+                        <span style={{fontWeight:600}}> gastados {num(c.metros_consumidos)} m para {num(teoricoDe(c))} m de producto</span></>}
+                </div>
+              </div>
+            );
+          })}
+        </BloqueF>
+
+        {/* TAREAS */}
+        <BloqueF titulo="🛠️ Tareas y cantidades"
+          sub="Pon lo que ha hecho cada uno. Quita las que no se hayan hecho y añade las que falten.">
+          {tareas.map(t=>{
+            const dif = hecho>0 && toNum(t.cantidad)>0 ? toNum(t.cantidad) - hecho : 0;
+            const corto = dif < -0.5;
+            return (
+              <div key={t.id} style={{border:`2px solid ${corto?C.amber:C.border}`,borderRadius:14,padding:"12px 13px",marginBottom:10}}>
+                <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                  <span style={{flex:1,minWidth:150}}>
+                    <b style={{fontSize:17,color:C.text}}>{nombreProc(t.proceso_id)}</b>
+                    <div style={{fontSize:12.5,color:C.mutedD}}>{objProc(t.proceso_id)} min/ud</div>
+                  </span>
+                  <CampoF value={t.cantidad?num(t.cantidad):""} ancho={96}
+                    onTocar={()=>setModal({tipo:"num",titulo:nombreProc(t.proceso_id),valor:String(t.cantidad||""),
+                      onOk:v=>setTarea(t.id,"cantidad",toNum(v))})}/>
+                  <button onClick={()=>setModal({tipo:"persona",titulo:`¿Quién ha hecho ${nombreProc(t.proceso_id)}?`,
+                    onOk:v=>setTarea(t.id,"persona_id",v)})}
+                    style={{height:64,padding:"0 14px",background:t.persona_id?C.blueBg:"#fff",
+                      border:`2px solid ${t.persona_id?C.blue:C.border}`,color:t.persona_id?C.blue:C.muted,
+                      borderRadius:12,fontFamily:F.h,fontWeight:800,fontSize:15,cursor:"pointer",whiteSpace:"nowrap"}}>
+                    👤 {t.persona_id?nombrePers(t.persona_id):"quién"}
+                  </button>
+                  <button onClick={()=>setTareas(ts=>ts.filter(z=>z.id!==t.id))}
+                    style={{width:52,height:64,borderRadius:12,border:`2px solid ${C.border}`,background:"#fff",
+                      color:C.red,fontSize:20,cursor:"pointer"}}>✕</button>
+                </div>
+                {corto && (
+                  <div style={{fontSize:13.5,color:C.amber,fontWeight:700,marginTop:8}}>
+                    {num(-dif)} menos que el total de la línea — ¿quedaron sin hacer?
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          <button onClick={()=>setModal({tipo:"proceso"})}
+            style={{width:"100%",minHeight:70,borderRadius:14,border:`3px dashed ${C.border}`,background:"#fff",
+              fontFamily:F.h,fontWeight:800,fontSize:17,color:C.mutedD,cursor:"pointer"}}>＋ Añadir otra tarea</button>
+        </BloqueF>
+
+        {/* PARADAS */}
+        <BloqueF titulo="⏸ Paradas de la línea" sub="Motivo y minutos. Sin cronómetro: se anotan cuando se puede.">
+          {paros.map((x,i)=>(
+            <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,
+              background:C.redBg,border:`2px solid ${C.red}`,borderRadius:13,padding:"12px 14px",marginBottom:9}}>
+              <b style={{fontSize:16,color:C.text}}>{x.motivo}</b>
+              <span style={{display:"flex",alignItems:"center",gap:10,flexShrink:0}}>
+                <span style={{fontFamily:F.h,fontWeight:900,fontSize:22,color:C.red}}>{Math.round(toNum(x.minutos))} min</span>
+                <button onClick={()=>setParos(ps=>ps.filter((_,k)=>k!==i))}
+                  style={{width:44,height:44,borderRadius:10,border:`2px solid ${C.border}`,background:"#fff",color:C.red,fontSize:18,cursor:"pointer"}}>✕</button>
+              </span>
+            </div>
+          ))}
+          <button onClick={()=>setModal({tipo:"parada"})}
+            style={{width:"100%",minHeight:70,borderRadius:14,border:`3px dashed ${C.border}`,background:"#fff",
+              fontFamily:F.h,fontWeight:800,fontSize:17,color:C.mutedD,cursor:"pointer"}}>＋ Añadir parada</button>
+        </BloqueF>
+
+        {nota && (
+          <div style={{background:C.card2,borderRadius:14,padding:"14px 16px",marginBottom:16,fontSize:15,color:C.mutedD,lineHeight:1.6}}>
+            📝 <i>“{nota}”</i>
+          </div>
+        )}
+
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(230px,1fr))",gap:14,marginBottom:16}}>
+          <BotonF alto={104} borde={C.border} sub="una nota del turno"
+            onClick={()=>setModal({tipo:"nota",valor:nota,onOk:v=>setNota(v)})}>📝 OBSERVACIÓN</BotonF>
+          <BotonF alto={104} borde={C.red} color={C.red} sub="problema con un lote"
+            onClick={()=>setModal({tipo:"incidencia"})}>⚠️ INCIDENCIA</BotonF>
+        </div>
+
+        <BotonF alto={118} bg={C.navy} color="#fff" borde={C.navy} disabled={hecho<=0}
+          onClick={()=>setModal({tipo:"cerrar"})}>✔ CERRAR LA LÍNEA</BotonF>
+        {hecho<=0 && <div style={{fontSize:14,color:C.mutedD,textAlign:"center",marginTop:10}}>
+          Pon primero las unidades fabricadas.
+        </div>}
       </div>
 
-      {paroActivo && (
-        <div style={{background:C.red,color:"#fff",padding:"20px",textAlign:"center"}}>
-          <div style={{fontFamily:F.h,fontWeight:800,fontSize:26}}>⏸ LÍNEA PARADA · {paroActivo.nombre}</div>
-          <div style={{fontFamily:F.h,fontWeight:900,fontSize:52,letterSpacing:1,marginTop:4}}>{mmss(ahora-paroActivo.desde)}</div>
+      {modal?.tipo==="num" && <HojaNumero titulo={modal.titulo} valor={modal.valor}
+        onOk={v=>{ modal.onOk(v); setModal(null); }} onCerrar={()=>setModal(null)}/>}
+      {modal?.tipo==="lote" && <HojaNumero titulo={modal.titulo} valor={modal.valor} texto
+        onOk={v=>{ modal.onOk(v); setModal(null); }} onCerrar={()=>setModal(null)}/>}
+      {modal?.tipo==="persona" && <HojaPersonas titulo={modal.titulo} gente={gente}
+        onOk={v=>{ modal.onOk(v); setModal(null); }} onCerrar={()=>setModal(null)}/>}
+      {modal?.tipo==="proceso" && <HojaProcesos procesos={procesos} puestos={tareas.map(t=>t.proceso_id)}
+        onOk={pid=>{ setTareas(ts=>[...ts,{id:uid(),proceso_id:pid,cantidad:0,persona_id:""}]); setModal(null); }}
+        onCerrar={()=>setModal(null)}/>}
+      {modal?.tipo==="parada" && <HojaParada motivos={motivos}
+        onOk={x=>{ setParos(ps=>[...ps,x]); setModal(null); }} onCerrar={()=>setModal(null)}/>}
+      {modal?.tipo==="nota" && <HojaTexto titulo="Observación del turno" valor={modal.valor}
+        onOk={v=>{ modal.onOk(v); setModal(null); }} onCerrar={()=>setModal(null)}/>}
+      {modal?.tipo==="incidencia" && <HojaIncidencia mps={mps} perfil={perfil} linea={ot.linea} consumos={consumos}
+        onCerrar={()=>setModal(null)} onHecho={()=>setModal(null)}/>}
+      {modal?.tipo==="cerrar" && <HojaCerrar ot={ot} p={p} hecho={hecho} objetivo={objetivo} tareas={tareas}
+        consumos={consumos} paros={paros} nota={nota} gente={gente} procesos={procesos} mps={mps}
+        rendDe={rendDe} objRendDe={objRendDe} teoricoDe={teoricoDe} guardando={guardando}
+        onCerrar={()=>setModal(null)} onConfirmar={guardar}/>}
+      {modal?.tipo==="hecho" && (
+        <div style={{position:"fixed",inset:0,background:C.green,zIndex:70,display:"flex",flexDirection:"column",
+          alignItems:"center",justifyContent:"center",padding:30,gap:20,color:"#fff"}}>
+          <div style={{fontSize:88}}>✔</div>
+          <div style={{fontFamily:F.h,fontWeight:900,fontSize:34,textAlign:"center"}}>{ot.linea} cerrada por {modal.quien}</div>
+          <div style={{fontFamily:F.h,fontWeight:900,fontSize:60}}>{num(hecho)} uds</div>
+          <div style={{width:"100%",maxWidth:420}}>
+            <BotonF alto={96} bg="#fff" color={C.green} borde="#fff" onClick={onVolver}>VOLVER A LAS ÓRDENES</BotonF>
+          </div>
         </div>
       )}
-
-      {/* CONTADOR */}
-      <div style={{padding:"24px 20px",textAlign:"center"}}>
-        <div style={{fontSize:17,color:C.mutedD,fontFamily:F.h,fontWeight:700,letterSpacing:1}}>UNIDADES FABRICADAS</div>
-        <div style={{fontFamily:F.h,fontWeight:900,fontSize:96,color:colorPct,lineHeight:1.05}}>{num(uds)}</div>
-        {ritmo>0 && (
-          <>
-            <div style={{fontSize:19,color:C.mutedD,marginBottom:10}}>de <b style={{color:C.text}}>{num(ritmo)}</b> del turno</div>
-            <div style={{height:22,background:C.card2,borderRadius:11,overflow:"hidden",maxWidth:620,margin:"0 auto"}}>
-              <div style={{width:Math.min(100,pct*100)+"%",height:"100%",background:colorPct,borderRadius:11,transition:"width .3s"}}/>
-            </div>
-            <div style={{fontFamily:F.h,fontWeight:800,fontSize:22,color:colorPct,marginTop:8}}>{Math.round(pct*100)}%</div>
-          </>
-        )}
-      </div>
-
-      {/* BOTONES DE CUENTA */}
-      <div style={{padding:"0 20px",display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:14,marginBottom:18}}>
-        <BotonGrande alto={100} bg="#fff" borde={C.border} onClick={()=>setUds(u=>Math.max(0,u-1))}>− 1</BotonGrande>
-        <BotonGrande alto={100} bg="#fff" borde={C.border} onClick={()=>setUds(u=>Math.max(0,u-10))}>− 10</BotonGrande>
-        <BotonGrande alto={100} bg={C.green} color="#fff" borde={C.green} onClick={()=>setUds(u=>u+1)}>+ 1</BotonGrande>
-        <BotonGrande alto={100} bg={C.green} color="#fff" borde={C.green} onClick={()=>setUds(u=>u+10)}>+ 10</BotonGrande>
-      </div>
-
-      {/* ACCIONES */}
-      <div style={{padding:"0 20px",display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(230px,1fr))",gap:14}}>
-        {paroActivo ? (
-          <BotonGrande alto={110} bg={C.green} color="#fff" borde={C.green}
-            onClick={()=>{ setParos([...paros,{ motivo_id:paroActivo.motivo_id, motivo:paroActivo.nombre,
-                minutos: Math.round((ahora-paroActivo.desde)/60000) }]); setParoActivo(null); }}>
-            ▶ REANUDAR
-          </BotonGrande>
-        ) : (
-          <BotonGrande alto={110} bg="#fff" color={C.red} borde={C.red}
-            sub={paros.length ? `${paros.length} paros · ${Math.round(minParados)} min` : null}
-            onClick={()=>setModal({tipo:"paro"})}>⏸ PARAR LÍNEA</BotonGrande>
-        )}
-        <BotonGrande alto={110} bg="#fff" color={C.blue} borde={C.blue}
-          sub={consumos.length ? `${consumos.length} registrados` : "lote y metros"}
-          onClick={()=>setModal({tipo:"lote"})}>📦 MATERIA</BotonGrande>
-        <BotonGrande alto={110} bg={C.navy} color="#fff" borde={C.navy}
-          disabled={uds<=0} onClick={()=>setModal({tipo:"fin"})}>✔ TERMINAR TURNO</BotonGrande>
-      </div>
-
-      {modal?.tipo==="paro"  && <ModalParo motivos={motivos} onCerrar={()=>setModal(null)}
-        onElegir={(m)=>{ setParoActivo({motivo_id:m.id, nombre:m.nombre, desde:Date.now()}); setModal(null); }}/>}
-      {modal?.tipo==="lote"  && <ModalLote mps={mps} prod={prod} onCerrar={()=>setModal(null)}
-        onGuardar={(c)=>{ setConsumos([...consumos,c]); setModal(null); }}/>}
-      {modal?.tipo==="fin"   && <ModalFin uds={uds} ritmo={ritmo} prod={prod} paros={paros} minParados={minParados}
-        consumos={consumos} guardando={guardando} onCerrar={()=>setModal(null)} onConfirmar={guardar}/>}
-      {modal?.tipo==="hecho" && <ModalHecho uds={modal.uds} pct={modal.pct} onSeguir={reiniciar} onSalir={onBack}/>}
     </div>
   );
 }
 
-// ── Capa a pantalla completa para los diálogos del terminal
-const CapaTerminal = ({ titulo, onCerrar, children, color=C.navy }) => (
+// ── HOJAS DEL TERMINAL ─────────────────────────────────────────────────────────
+const CapaF = ({ titulo, sub, onCerrar, children, color=C.navy }) => (
   <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.75)",zIndex:60,display:"flex",flexDirection:"column"}}>
     <div style={{background:color,padding:"18px 22px",display:"flex",alignItems:"center",gap:16}}>
-      <div style={{flex:1,fontFamily:F.h,fontWeight:800,fontSize:26,color:"#fff"}}>{titulo}</div>
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontFamily:F.h,fontWeight:800,fontSize:24,color:"#fff",lineHeight:1.2}}>{titulo}</div>
+        {sub && <div style={{fontSize:14,color:"rgba(255,255,255,0.7)",marginTop:2}}>{sub}</div>}
+      </div>
       <button onClick={onCerrar}
-        style={{width:64,height:64,borderRadius:16,background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",fontSize:30,cursor:"pointer"}}>✕</button>
+        style={{width:64,height:64,borderRadius:16,background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",fontSize:30,cursor:"pointer",flexShrink:0}}>✕</button>
     </div>
     <div style={{flex:1,overflowY:"auto",background:C.bg,padding:22}}>{children}</div>
   </div>
 );
 
-// ── Motivos de paro, en rejilla grande
-const ModalParo = ({ motivos, onElegir, onCerrar }) => (
-  <CapaTerminal titulo="¿Por qué para la línea?" onCerrar={onCerrar} color={C.red}>
-    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(250px,1fr))",gap:16}}>
-      {motivos.map(m=>(
-        <BotonGrande key={m.id} alto={120} bg="#fff" borde={C.red} onClick={()=>onElegir(m)}>
-          {m.nombre}
-        </BotonGrande>
-      ))}
-      {motivos.length===0 && <Empty icon="⏸" text="No hay motivos de paro configurados"/>}
-    </div>
-  </CapaTerminal>
-);
-
-// ── Teclado numérico grande
-const Teclado = ({ valor, onChange, sufijo }) => (
-  <>
-    <div style={{background:"#fff",border:`2px solid ${C.border}`,borderRadius:16,padding:"18px",
-      textAlign:"center",marginBottom:16}}>
-      <span style={{fontFamily:F.h,fontWeight:900,fontSize:52,color:C.text}}>{valor || "0"}</span>
-      {sufijo && <span style={{fontSize:22,color:C.mutedD,marginLeft:8}}>{sufijo}</span>}
-    </div>
-    <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12}}>
-      {["1","2","3","4","5","6","7","8","9",".","0","←"].map(k=>(
-        <button key={k} onClick={()=>{
-            if (k==="←") onChange(valor.slice(0,-1));
-            else if (k==="." && valor.includes(".")) return;
-            else onChange(valor + k);
-          }}
-          style={{height:86,background:k==="←"?C.card2:"#fff",border:`2px solid ${C.border}`,borderRadius:16,
-            fontFamily:F.h,fontWeight:800,fontSize:32,color:C.text,cursor:"pointer"}}>{k}</button>
-      ))}
-    </div>
-  </>
-);
-
-// ── Registro de materia y lote
-function ModalLote({ mps, prod, onGuardar, onCerrar }) {
-  const propias = (prod?.materias_asignadas||[]).map(m=>mps.find(x=>x.id===m.mp_id)).filter(Boolean);
-  const lista = propias.length ? propias : mps;
-  const [mpId, setMpId] = useState(lista.length===1 ? lista[0].id : "");
-  const [lote, setLote] = useState("");
-  const [metros, setMetros] = useState("");
-  const [campo, setCampo] = useState("lote");
-  const mp = mps.find(x=>x.id===mpId);
-
-  if (!mpId) return (
-    <CapaTerminal titulo="¿Qué materia estás usando?" onCerrar={onCerrar} color={C.blue}>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(250px,1fr))",gap:16}}>
-        {lista.map(m=>(
-          <BotonGrande key={m.id} alto={110} bg="#fff" borde={C.blue} onClick={()=>setMpId(m.id)}>{m.nombre}</BotonGrande>
+// Teclado numérico (o alfanumérico para lotes)
+function HojaNumero({ titulo, valor, texto, onOk, onCerrar }) {
+  const [v, setV] = useState(valor || "");
+  const teclas = texto
+    ? ["1","2","3","4","5","6","7","8","9",".","0","←"]
+    : ["1","2","3","4","5","6","7","8","9","0","00","←"];
+  return (
+    <CapaF titulo={titulo} onCerrar={onCerrar} color={C.blue}>
+      <div style={{background:"#fff",border:`2px solid ${C.border}`,borderRadius:16,padding:18,textAlign:"center",
+        marginBottom:16,maxWidth:520}}>
+        <span style={{fontFamily:F.h,fontWeight:900,fontSize:46,color:C.text}}>{v || "0"}</span>
+      </div>
+      {texto && (
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:12,maxWidth:520}}>
+          {["A","B","C","D","E","F","G","H","J","K","L","M","N","P","R","S","T","U","V","Z"].map(k=>(
+            <button key={k} onClick={()=>setV(v+k)}
+              style={{width:60,height:60,background:"#fff",border:`2px solid ${C.border}`,borderRadius:12,
+                fontFamily:F.h,fontWeight:800,fontSize:22,color:C.text,cursor:"pointer"}}>{k}</button>
+          ))}
+        </div>
+      )}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,maxWidth:480}}>
+        {teclas.map(k=>(
+          <button key={k} onClick={()=>setV(k==="←" ? v.slice(0,-1) : v+k)}
+            style={{height:80,background:k==="←"?C.card2:"#fff",border:`2px solid ${C.border}`,borderRadius:16,
+              fontFamily:F.h,fontWeight:800,fontSize:30,color:C.text,cursor:"pointer"}}>{k}</button>
         ))}
       </div>
-    </CapaTerminal>
-  );
-
-  return (
-    <CapaTerminal titulo={mp?.nombre || "Materia"} onCerrar={onCerrar} color={C.blue}>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
-        <BotonGrande alto={90} bg={campo==="lote"?C.blue:"#fff"} color={campo==="lote"?"#fff":C.text}
-          borde={C.blue} sub={lote||"sin poner"} onClick={()=>setCampo("lote")}>LOTE</BotonGrande>
-        <BotonGrande alto={90} bg={campo==="metros"?C.blue:"#fff"} color={campo==="metros"?"#fff":C.text}
-          borde={C.blue} sub={metros?`${metros} m`:"sin poner"} onClick={()=>setCampo("metros")}>METROS</BotonGrande>
+      <div style={{maxWidth:480,marginTop:16}}>
+        <BotonF alto={100} bg={C.green} color="#fff" borde={C.green} onClick={()=>onOk(v)}>✔ GUARDAR</BotonF>
       </div>
-      <Teclado valor={campo==="lote"?lote:metros}
-        onChange={v=>campo==="lote"?setLote(v):setMetros(v)}
-        sufijo={campo==="metros"?"m":null}/>
-      <div style={{marginTop:16}}>
-        <BotonGrande alto={96} bg={C.green} color="#fff" borde={C.green}
-          disabled={!lote && !metros}
-          onClick={()=>onGuardar({ materia_id:mpId, lote:lote.trim(), metros_consumidos: toNum(metros) })}>
-          ✔ GUARDAR
-        </BotonGrande>
-      </div>
-    </CapaTerminal>
+    </CapaF>
   );
 }
 
-// ── Confirmación antes de cerrar el turno
-const ModalFin = ({ uds, ritmo, prod, paros, minParados, consumos, guardando, onConfirmar, onCerrar }) => {
-  const pct = ritmo>0 ? uds/ritmo : 0;
-  const falta = ritmo>0 ? ritmo-uds : 0;
+// Teclado de texto
+function HojaTexto({ titulo, valor, onOk, onCerrar }) {
+  const [v, setV] = useState(valor || "");
+  const filas = [["Q","W","E","R","T","Y","U","I","O","P"],
+                 ["A","S","D","F","G","H","J","K","L","Ñ"],
+                 ["Z","X","C","V","B","N","M",",","←"]];
   return (
-    <CapaTerminal titulo="¿Cerramos el turno?" onCerrar={onCerrar} color={C.navy}>
-      <div style={{background:"#fff",border:`2px solid ${C.border}`,borderRadius:18,padding:22,marginBottom:18,textAlign:"center"}}>
-        <div style={{fontSize:19,color:C.mutedD}}>{prod?.nombre}</div>
-        <div style={{fontFamily:F.h,fontWeight:900,fontSize:76,color:pct>=1?C.green:C.amber,lineHeight:1.1}}>{num(uds)}</div>
-        <div style={{fontSize:19,color:C.mutedD}}>unidades{ritmo>0 && <> · {Math.round(pct*100)}% del turno</>}</div>
-        {falta > 0.5 && (
-          <div style={{background:C.amberBg,border:`2px solid ${C.amber}`,borderRadius:14,padding:"14px",marginTop:16,
-            fontFamily:F.h,fontWeight:800,fontSize:19,color:C.amber}}>
-            Faltan {num(falta)} para el objetivo
+    <CapaF titulo={titulo} sub="Opcional · dilo en pocas palabras" onCerrar={onCerrar} color={C.blue}>
+      <div style={{background:"#fff",border:`2px solid ${C.border}`,borderRadius:16,padding:18,minHeight:110,
+        marginBottom:16,maxWidth:820,fontSize:22,fontWeight:600,color:v?C.text:C.muted,lineHeight:1.5}}>
+        {v || "Escribe aquí…"}
+      </div>
+      <div style={{display:"grid",gap:8,maxWidth:820}}>
+        {filas.map((f,i)=>(
+          <div key={i} style={{display:"grid",gridTemplateColumns:`repeat(${f.length},1fr)`,gap:8}}>
+            {f.map(k=>(
+              <button key={k} onClick={()=>setV(k==="←" ? v.slice(0,-1) : v + k.toLowerCase())}
+                style={{height:64,background:k==="←"?C.card2:"#fff",border:`2px solid ${C.border}`,borderRadius:12,
+                  fontFamily:F.h,fontWeight:700,fontSize:20,color:C.text,cursor:"pointer"}}>{k}</button>
+            ))}
           </div>
-        )}
-      </div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:18}}>
-        <div style={{background:"#fff",border:`2px solid ${C.border}`,borderRadius:16,padding:"16px",textAlign:"center"}}>
-          <div style={{fontFamily:F.h,fontWeight:900,fontSize:34,color:paros.length?C.red:C.green}}>{Math.round(minParados)}</div>
-          <div style={{fontSize:15,color:C.mutedD}}>min parados · {paros.length} paros</div>
-        </div>
-        <div style={{background:"#fff",border:`2px solid ${C.border}`,borderRadius:16,padding:"16px",textAlign:"center"}}>
-          <div style={{fontFamily:F.h,fontWeight:900,fontSize:34,color:consumos.length?C.green:C.red}}>{consumos.length}</div>
-          <div style={{fontSize:15,color:C.mutedD}}>lotes registrados</div>
+        ))}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 4fr 1fr",gap:8}}>
+          <button onClick={()=>setV(v+"0")} style={{height:64,background:"#fff",border:`2px solid ${C.border}`,borderRadius:12,fontWeight:700,fontSize:18,color:C.text,cursor:"pointer"}}>0</button>
+          <button onClick={()=>setV(v+" ")} style={{height:64,background:"#fff",border:`2px solid ${C.border}`,borderRadius:12,fontWeight:700,fontSize:18,color:C.text,cursor:"pointer"}}>espacio</button>
+          <button onClick={()=>setV(v+".")} style={{height:64,background:"#fff",border:`2px solid ${C.border}`,borderRadius:12,fontWeight:700,fontSize:18,color:C.text,cursor:"pointer"}}>.</button>
         </div>
       </div>
-      {consumos.length===0 && (
-        <div style={{background:C.redBg,border:`2px solid ${C.red}`,borderRadius:14,padding:"16px",marginBottom:18,
-          fontSize:18,color:C.red,fontWeight:700,textAlign:"center",lineHeight:1.5}}>
-          ⚠️ No has registrado ningún lote de materia
+      <div style={{maxWidth:480,marginTop:16}}>
+        <BotonF alto={100} bg={C.green} color="#fff" borde={C.green} onClick={()=>onOk(v)}>✔ GUARDAR</BotonF>
+      </div>
+    </CapaF>
+  );
+}
+
+const HojaPersonas = ({ titulo, gente, onOk, onCerrar }) => (
+  <CapaF titulo={titulo} onCerrar={onCerrar} color={C.blue}>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:14}}>
+      {gente.map(u=>(
+        <button key={u.id} onClick={()=>onOk(u.id)}
+          style={{minHeight:110,borderRadius:16,border:`3px solid ${C.border}`,background:"#fff",cursor:"pointer",
+            display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:8,
+            fontFamily:F.h,fontWeight:800,fontSize:18,color:C.text}}>
+          <span style={{width:44,height:44,borderRadius:22,background:C.card2,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22}}>👤</span>
+          {u.nombre}
+        </button>
+      ))}
+      {gente.length===0 && <Empty icon="👥" text="No hay operarios dados de alta"/>}
+    </div>
+  </CapaF>
+);
+
+function HojaProcesos({ procesos, puestos, onOk, onCerrar }) {
+  const [q, setQ] = useState("");
+  const lista = procesos.filter(p => !puestos.includes(p.id) &&
+    (!q || (p.nombre||"").toLowerCase().includes(q.toLowerCase())));
+  return (
+    <CapaF titulo="¿Qué tarea añades?" sub="Escribe para buscar" onCerrar={onCerrar} color={C.blue}>
+      <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Buscar…" autoFocus
+        style={{width:"100%",height:72,borderRadius:16,border:`3px solid ${C.blue}`,padding:"0 18px",
+          fontSize:21,marginBottom:16,color:C.text,background:"#fff",boxSizing:"border-box"}}/>
+      {lista.slice(0,20).map(p=>(
+        <button key={p.id} onClick={()=>onOk(p.id)}
+          style={{width:"100%",minHeight:84,borderRadius:14,border:`2px solid ${C.border}`,background:"#fff",
+            padding:"14px 16px",marginBottom:10,textAlign:"left",cursor:"pointer"}}>
+          <div style={{fontFamily:F.h,fontWeight:800,fontSize:18,color:C.text}}>{p.nombre}</div>
+          <div style={{fontSize:13,color:C.mutedD,marginTop:2}}>
+            {toNum(p.tiempo_proceso)||"—"} min/{p.base_tiempo||"ud"}{p.apoyo?" · fuera de línea":""}
+          </div>
+        </button>
+      ))}
+      {lista.length===0 && <Empty icon="🔍" text="Ningún proceso con ese nombre"/>}
+    </CapaF>
+  );
+}
+
+function HojaParada({ motivos, onOk, onCerrar }) {
+  const [mot, setMot] = useState(null);
+  const [min, setMin] = useState("");
+  if (!mot) return (
+    <CapaF titulo="¿Qué parada hubo?" onCerrar={onCerrar} color={C.red}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(230px,1fr))",gap:14}}>
+        {motivos.map(m=>(
+          <BotonF key={m.id} alto={110} borde={C.red} onClick={()=>setMot(m)}>{m.nombre}</BotonF>
+        ))}
+        {motivos.length===0 && <Empty icon="⏸" text="No hay motivos de paro configurados"/>}
+      </div>
+    </CapaF>
+  );
+  return (
+    <CapaF titulo={mot.nombre} sub="¿Cuántos minutos?" onCerrar={onCerrar} color={C.red}>
+      <div style={{background:"#fff",border:`2px solid ${C.border}`,borderRadius:16,padding:18,textAlign:"center",
+        marginBottom:16,maxWidth:440}}>
+        <span style={{fontFamily:F.h,fontWeight:900,fontSize:46,color:C.text}}>{min||"0"}</span>
+        <span style={{fontSize:22,color:C.mutedD,marginLeft:8}}>min</span>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,maxWidth:440}}>
+        {["1","2","3","4","5","6","7","8","9","0","00","←"].map(k=>(
+          <button key={k} onClick={()=>setMin(k==="←"?min.slice(0,-1):min+k)}
+            style={{height:80,background:k==="←"?C.card2:"#fff",border:`2px solid ${C.border}`,borderRadius:16,
+              fontFamily:F.h,fontWeight:800,fontSize:30,color:C.text,cursor:"pointer"}}>{k}</button>
+        ))}
+      </div>
+      <div style={{maxWidth:440,marginTop:16,display:"grid",gap:10}}>
+        <BotonF alto={100} bg={C.green} color="#fff" borde={C.green} disabled={!(toNum(min)>0)}
+          onClick={()=>onOk({ motivo_id:mot.id, motivo:mot.nombre, minutos: toNum(min) })}>✔ GUARDAR PARADA</BotonF>
+        <BotonF alto={80} borde={C.border} onClick={()=>setMot(null)}>← Otro motivo</BotonF>
+      </div>
+    </CapaF>
+  );
+}
+
+function HojaIncidencia({ mps, perfil, linea, consumos=[], prods=[], onCerrar, onHecho }) {
+  const [mpId, setMpId] = useState("");
+  const [lote, setLote] = useState("");
+  const [tipo, setTipo] = useState("");
+  const [grav, setGrav] = useState("");
+  const [nota, setNota] = useState("");
+  const [modal, setModal] = useState(null);
+  const [guardando, setGuardando] = useState(false);
+
+  const conLote = consumos.filter(c=>c.lote);
+  const sugeridos = conLote.length ? conLote
+    : [...new Map(prods.flatMap(p=>(p.consumos||[])).filter(c=>c.lote)
+        .map(c=>[c.materia_id+c.lote, c])).values()].slice(0,6);
+
+  const guardar = async () => {
+    if (!tipo || !grav) { window.alert("Di qué le pasa y cuánto afecta"); return; }
+    setGuardando(true);
+    await save("incidencias", uid(), {
+      fecha: new Date().toISOString().slice(0,10), materia_id: mpId, lote: lote.trim(),
+      tipo, gravedad: grav, nota: nota.trim(), linea,
+      registrado_por: perfil?.nombre || "terminal", registrado_at: new Date().toISOString(),
+    });
+    setGuardando(false);
+    window.alert("Incidencia guardada");
+    onHecho();
+  };
+
+  return (
+    <CapaF titulo="Incidencia de materia" sub="Lote · qué pasa · cuánto afecta" onCerrar={onCerrar} color={C.red}>
+      <div style={{fontFamily:F.h,fontWeight:800,fontSize:17,color:C.text,marginBottom:10}}>¿Qué lote?</div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:14,marginBottom:22}}>
+        {sugeridos.map((c,i)=>{
+          const mp = mps.find(m=>m.id===c.materia_id);
+          const on = mpId===c.materia_id && lote===c.lote;
+          return (
+            <BotonF key={i} alto={100} borde={on?C.blue:C.border} bg={on?C.blueBg:"#fff"}
+              sub={mp?.nombre||""} onClick={()=>{ setMpId(c.materia_id); setLote(c.lote); }}>📦 {c.lote}</BotonF>
+          );
+        })}
+        <BotonF alto={100} borde={C.border} onClick={()=>setModal({tipo:"otro"})}>Otro lote</BotonF>
+      </div>
+
+      <div style={{fontFamily:F.h,fontWeight:800,fontSize:17,color:C.text,marginBottom:10}}>¿Qué le pasa?</div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(210px,1fr))",gap:14,marginBottom:22}}>
+        {TIPOS_INC.map(([k,ic,t])=>(
+          <BotonF key={k} alto={100} borde={tipo===k?C.amber:C.border} bg={tipo===k?C.amberBg:"#fff"}
+            onClick={()=>setTipo(k)}>{ic} {t}</BotonF>
+        ))}
+      </div>
+
+      <div style={{fontFamily:F.h,fontWeight:800,fontSize:17,color:C.text,marginBottom:10}}>¿Cuánto afecta?</div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:14,marginBottom:22}}>
+        {GRAVEDAD.map(([k,ic,t])=>(
+          <BotonF key={k} alto={96} borde={grav===k?(k==="todo"?C.red:C.amber):C.border}
+            bg={grav===k?(k==="todo"?C.redBg:C.amberBg):"#fff"} onClick={()=>setGrav(k)}>{ic} {t}</BotonF>
+        ))}
+      </div>
+
+      <div style={{display:"grid",gap:12}}>
+        <BotonF alto={90} borde={C.border} sub={nota||"opcional"}
+          onClick={()=>setModal({tipo:"nota"})}>📝 Añadir nota</BotonF>
+        <BotonF alto={104} bg={C.green} color="#fff" borde={C.green} disabled={guardando}
+          onClick={guardar}>{guardando?"Guardando…":"✔ GUARDAR INCIDENCIA"}</BotonF>
+      </div>
+
+      {modal?.tipo==="otro" && <HojaNumero titulo="Código del lote" valor={lote} texto
+        onOk={v=>{ setLote(v); setModal(null); }} onCerrar={()=>setModal(null)}/>}
+      {modal?.tipo==="nota" && <HojaTexto titulo="Nota de la incidencia" valor={nota}
+        onOk={v=>{ setNota(v); setModal(null); }} onCerrar={()=>setModal(null)}/>}
+    </CapaF>
+  );
+}
+
+function HojaCerrar({ ot, p, hecho, objetivo, tareas, consumos, paros, nota, gente, procesos, mps,
+                      rendDe, objRendDe, teoricoDe, guardando, onConfirmar, onCerrar }) {
+  const [quien, setQuien] = useState("");
+  const nombreProc = (id) => procesos.find(z=>z.id===id)?.nombre || "?";
+  const nombrePers = (id) => gente.find(u=>u.id===id)?.nombre || "—";
+  const minParados = paros.reduce((a,x)=>a+toNum(x.minutos),0);
+  const conLote = consumos.filter(c=>c.lote).length;
+  const pct = objetivo>0 ? hecho/objetivo : 0;
+  const rends = consumos.map(c=>({ c, r: rendDe(c) })).filter(x=>x.r!=null);
+  const sinPersona = tareas.filter(t=>toNum(t.cantidad)>0 && !t.persona_id).length;
+
+  return (
+    <CapaF titulo={`¿Cerramos la ${ot.linea}?`} sub={`${p.nombre} · ${num(hecho)} de ${num(objetivo)} uds`} onCerrar={onCerrar}>
+      <div style={{background:"#fff",border:`2px solid ${C.border}`,borderRadius:18,padding:16,marginBottom:16}}>
+        <div style={{fontFamily:F.h,fontWeight:800,fontSize:16,color:C.text,marginBottom:10}}>Esto es lo que se guarda</div>
+        {tareas.filter(t=>toNum(t.cantidad)>0).map(t=>(
+          <div key={t.id} style={{display:"flex",justifyContent:"space-between",padding:"9px 0",
+            borderBottom:`1px solid ${C.card2}`,fontSize:15.5}}>
+            <span style={{color:C.text}}>{nombreProc(t.proceso_id)} · {nombrePers(t.persona_id)}</span>
+            <b style={{color: toNum(t.cantidad)<hecho ? C.amber : C.text}}>{num(t.cantidad)} uds</b>
+          </div>
+        ))}
+        {tareas.filter(t=>toNum(t.cantidad)>0).length===0 &&
+          <div style={{fontSize:14,color:C.muted}}>Ninguna tarea con cantidad.</div>}
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
+        <div style={{background:"#fff",border:`2px solid ${C.border}`,borderRadius:16,padding:16,textAlign:"center"}}>
+          <b style={{display:"block",fontFamily:F.h,fontWeight:900,fontSize:30,color:pct>=1?C.green:C.amber}}>{num(hecho)}/{num(objetivo)}</b>
+          <span style={{fontSize:14,color:C.mutedD}}>producción · {Math.round(pct*100)}%</span>
+        </div>
+        <div style={{background:"#fff",border:`2px solid ${C.border}`,borderRadius:16,padding:16,textAlign:"center"}}>
+          {rends.length ? (
+            <>
+              <b style={{display:"block",fontFamily:F.h,fontWeight:900,fontSize:30,
+                color: rends[0].r >= objRendDe(rends[0].c) ? C.green : C.red}}>{Math.round(rends[0].r)}%</b>
+              <span style={{fontSize:14,color:C.mutedD}}>rendimiento · obj {objRendDe(rends[0].c)}%</span>
+            </>
+          ) : (
+            <><b style={{display:"block",fontFamily:F.h,fontWeight:900,fontSize:30,color:C.red}}>—</b>
+              <span style={{fontSize:14,color:C.mutedD}}>sin rendimiento</span></>
+          )}
+        </div>
+        <div style={{background:"#fff",border:`2px solid ${C.border}`,borderRadius:16,padding:16,textAlign:"center"}}>
+          <b style={{display:"block",fontFamily:F.h,fontWeight:900,fontSize:30,color:paros.length?C.red:C.green}}>{Math.round(minParados)}</b>
+          <span style={{fontSize:14,color:C.mutedD}}>min parados · {paros.length} parada(s)</span>
+        </div>
+        <div style={{background:"#fff",border:`2px solid ${C.border}`,borderRadius:16,padding:16,textAlign:"center"}}>
+          <b style={{display:"block",fontFamily:F.h,fontWeight:900,fontSize:30,color:conLote?C.green:C.red}}>{conLote}</b>
+          <span style={{fontSize:14,color:C.mutedD}}>lotes registrados</span>
+        </div>
+      </div>
+
+      {conLote===0 && (
+        <div style={{background:C.redBg,border:`2px solid ${C.red}`,borderRadius:14,padding:15,marginBottom:16,
+          fontSize:16,color:C.red,fontWeight:700,lineHeight:1.5}}>
+          ⚠️ No has registrado ningún lote: no se podrá calcular el rendimiento.
         </div>
       )}
-      <div style={{display:"grid",gap:12}}>
-        <BotonGrande alto={104} bg={C.green} color="#fff" borde={C.green} disabled={guardando}
-          onClick={onConfirmar}>{guardando ? "Guardando…" : "✔ SÍ, CERRAR TURNO"}</BotonGrande>
-        <BotonGrande alto={88} bg="#fff" borde={C.border} onClick={onCerrar}>← Seguir trabajando</BotonGrande>
-      </div>
-    </CapaTerminal>
-  );
-};
+      {sinPersona>0 && (
+        <div style={{background:C.amberBg,border:`2px solid ${C.amber}`,borderRadius:14,padding:15,marginBottom:16,
+          fontSize:16,color:C.amber,fontWeight:700,lineHeight:1.5}}>
+          ⚠️ {sinPersona} tarea(s) sin decir quién las hizo.
+        </div>
+      )}
+      {nota && (
+        <div style={{background:C.card2,borderRadius:14,padding:14,marginBottom:16,fontSize:15,color:C.mutedD,lineHeight:1.6}}>
+          📝 <i>“{nota}”</i>
+        </div>
+      )}
 
-// ── Confirmación final
-const ModalHecho = ({ uds, pct, onSeguir, onSalir }) => (
-  <div style={{position:"fixed",inset:0,background:C.green,zIndex:70,display:"flex",flexDirection:"column",
-    alignItems:"center",justifyContent:"center",padding:30,gap:22}}>
-    <div style={{fontSize:96}}>✔</div>
-    <div style={{fontFamily:F.h,fontWeight:900,fontSize:40,color:"#fff",textAlign:"center"}}>Parte guardado</div>
-    <div style={{fontFamily:F.h,fontWeight:900,fontSize:72,color:"#fff"}}>{num(uds)} uds</div>
-    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,width:"100%",maxWidth:620,marginTop:10}}>
-      <BotonGrande alto={100} bg="#fff" color={C.green} borde="#fff" onClick={onSeguir}>▶ OTRO PRODUCTO</BotonGrande>
-      <BotonGrande alto={100} bg="rgba(255,255,255,0.2)" color="#fff" borde="#fff" onClick={onSalir}>SALIR</BotonGrande>
-    </div>
-  </div>
-);
+      <div style={{fontFamily:F.h,fontWeight:800,fontSize:17,color:C.text,marginBottom:10}}>¿Quién cierra?</div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:12,marginBottom:18}}>
+        {gente.map(u=>(
+          <button key={u.id} onClick={()=>setQuien(u.nombre)}
+            style={{minHeight:100,borderRadius:16,border:`3px solid ${quien===u.nombre?C.green:C.border}`,
+              background:quien===u.nombre?C.greenBg:"#fff",cursor:"pointer",
+              display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:6,
+              fontFamily:F.h,fontWeight:800,fontSize:17,color:C.text}}>
+            <span style={{width:40,height:40,borderRadius:20,background:C.card2,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20}}>👤</span>
+            {u.nombre}
+          </button>
+        ))}
+      </div>
+
+      <BotonF alto={110} bg={C.green} color="#fff" borde={C.green} disabled={!quien || guardando}
+        onClick={()=>onConfirmar(quien)}>{guardando ? "Guardando…" : "✔ SÍ, CERRAR LA LÍNEA"}</BotonF>
+      {!quien && <div style={{fontSize:14,color:C.mutedD,textAlign:"center",marginTop:10}}>Toca tu nombre para poder cerrar.</div>}
+    </CapaF>
+  );
+}
+
+function HojaReabrir({ parte, perfil, onCerrar, onHecho }) {
+  const MOTIVOS_RE = ["Falta el lote","Cantidad mal puesta","Falta una parada","Falta una tarea","Persona equivocada","Otra cosa"];
+  const [motivo, setMotivo] = useState("");
+  const reabrir = async () => {
+    if (!motivo) return;
+    await save("producciones", parte.id, {
+      reabierta: true, reabierta_por: perfil?.nombre || "terminal",
+      reabierta_motivo: motivo, reabierta_at: new Date().toISOString(),
+      cerrado_por: "", cerrado_at: "",
+    });
+    window.alert("Orden reabierta. Vuelve a Órdenes de trabajo para editarla.");
+    onHecho();
+  };
+  return (
+    <CapaF titulo="¿Reabrir esta orden?" sub={`${parte.linea_nombre} · ${parte.fecha}`} onCerrar={onCerrar} color={C.amber}>
+      <div style={{background:C.amberBg,border:`2px solid ${C.amber}`,borderRadius:14,padding:15,marginBottom:18,
+        fontSize:15.5,color:C.amber,fontWeight:700,lineHeight:1.55}}>
+        El informe de ese turno ya se generó. Al volver a cerrarla, los números del cierre semanal se recalcularán.
+      </div>
+      <div style={{fontFamily:F.h,fontWeight:800,fontSize:17,color:C.text,marginBottom:10}}>¿Por qué se reabre?</div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(210px,1fr))",gap:14,marginBottom:20}}>
+        {MOTIVOS_RE.map(m=>(
+          <BotonF key={m} alto={96} borde={motivo===m?C.amber:C.border} bg={motivo===m?C.amberBg:"#fff"}
+            onClick={()=>setMotivo(m)}>{m}</BotonF>
+        ))}
+      </div>
+      <div style={{fontSize:14,color:C.mutedD,lineHeight:1.6,marginBottom:18}}>
+        Queda registrado quién la reabre y por qué.
+      </div>
+      <BotonF alto={104} bg={C.amber} color="#fff" borde={C.amber} disabled={!motivo}
+        onClick={reabrir}>↺ REABRIR Y EDITAR</BotonF>
+    </CapaF>
+  );
+}
 
 function TerminalOperario({ perfil, productos }) {
   const [lineas] = useCol("lineas");
@@ -3861,6 +4467,7 @@ function PlanificacionScreen({ onBack, perfil, productos, mps, producciones, cen
   const nombresLinea = cfgLineas.map(l=>l.nombre);
   const nLineas = cfgLineas.length;
   const turnosCentro = parseInt(centro?.turnos_abiertos) || 2;
+  const TURNOS_ID = Array.from({length: turnosCentro}, (_,i)=>`T${i+1}`);
   const slotsDia = nLineas * turnosCentro;
   const persPorTurno = cfgLineas.reduce((a,l)=>a+l.personas, 0);
   const persDia = persPorTurno * turnosCentro;
@@ -3881,6 +4488,13 @@ function PlanificacionScreen({ onBack, perfil, productos, mps, producciones, cen
   const idSem = `${semana}__${centroId}`;
   const planesSem = planesSemAll.filter(p => p.centro === centroId);
   const planMes = planesMesAll.find(p => p.id === idMes) || { items: [] };
+  // Personal que hay en cada turno este mes: lo pone el usuario al empezar el mes
+  const persTurnoPleno = cfgLineas.reduce((a,l)=>a+l.personas, 0);
+  const persTurno = {};
+  TURNOS_ID.forEach(t => { persTurno[t] = (planMes.personas_turno||{})[t] ?? persTurnoPleno; });
+  const lineasDeTurno = (t) => Math.max(0, Math.min(nLineas, Math.floor((persTurno[t]||0) / (cfgLineas[0]?.personas || 3))));
+  const slotsEfectDia = TURNOS_ID.reduce((a,t)=>a+lineasDeTurno(t), 0);
+  const persDiaReal = TURNOS_ID.reduce((a,t)=>a+(persTurno[t]||0), 0);
   const planSem = planesSemAll.find(p => p.id === idSem) || { items: [], slots_disponibles: slotsDia*5 };
 
   const guardarMes = (data) => save("planes_mes", idMes, { periodo, centro: centroId, ...data });
@@ -4023,10 +4637,12 @@ function PlanificacionScreen({ onBack, perfil, productos, mps, producciones, cen
           </div>
         )}
         {tab==="mes" && <PlanMesTab periodo={periodo} plan={planMes} guardar={guardarMes}
-          productos={prodCentro} mps={mps} semanas={semanas} planesSem={planesSem} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} turnosCentro={turnosCentro} centroNombre={centro?.nombre||""} perfil={perfil} ggMes={ggMes} procesos={procesos} irReparto={()=>setTab("semana")}/>}
+          productos={prodCentro} mps={mps} semanas={semanas} planesSem={planesSem} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} turnosCentro={turnosCentro} centroNombre={centro?.nombre||""} perfil={perfil} ggMes={ggMes} procesos={procesos} persTurno={persTurno} turnosId={TURNOS_ID} persDiaReal={persDiaReal}
+          slotsEfectDia={slotsEfectDia} lineasDeTurno={lineasDeTurno} irReparto={()=>setTab("semana")}/>}
         {tab==="semana" && <PlanSemanaTab semana={semana} setSemana={setSemana} semanas={semanas} plan={planSem}
           guardar={guardarSem} productos={prodCentro} mps={mps} perfil={perfil} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} turnosCentro={turnosCentro} cfgLineas={cfgLineas} centroNombre={centro?.nombre||""} replicarEnMes={replicarEnMes} nSemanasMes={semanas.length} moldes={moldes}
-          planMes={planMes} semanasMes={planesSem}/>}
+          planMes={planMes} semanasMes={planesSem} persTurno={persTurno} lineasDeTurno={lineasDeTurno}
+          persDiaReal={persDiaReal} slotsEfectDia={slotsEfectDia}/>}
         {tab==="resumen" && <ResumenMesTab periodo={periodo} semanas={semanas} planMes={planMes} planesSem={planesSem}
           productos={prodCentro} mps={mps} moldes={moldes} procesos={procesos} slotsDia={slotsDia}
           persLinea={persLinea} persDia={persDia} turnosCentro={turnosCentro} ggMes={ggMes}
@@ -4388,14 +5004,54 @@ function ResumenMesTab({ periodo, semanas, planMes, planesSem, productos, mps, m
       {/* PLAN FRENTE A LO COLOCADO */}
       {sinColocar.length>0 && (
         <Card style={{marginBottom:12}} color={C.amber+"66"}>
-          <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.amber,marginBottom:8}}>⚠️ Sin terminar de planificar</div>
+          <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.amber,marginBottom:3}}>⚠️ Sin terminar de planificar</div>
+          <div style={{fontSize:11.5,color:C.mutedD,lineHeight:1.55,marginBottom:10}}>
+            Dónde está colocado cada uno, para que sepas de qué día quitar o en cuál meter.
+          </div>
           {sinColocar.map(x=>{
             const p = productos.find(z=>z.id===x.producto_id);
             const d = toNum(x.cantidad) - x.col;
+            const sobra = d < 0;
+            // dónde está puesto, semana a semana y día a día
+            const detalle = semanas.map(sm => {
+              const dd = {};
+              calDe(sm).filter(e=>e.producto_id===x.producto_id).forEach(e=>{
+                dd[e.fecha] = (dd[e.fecha]||0) + toNum(e.cantidad);
+              });
+              const uds = Object.values(dd).reduce((a,b)=>a+b,0);
+              return { sm, dd, uds, cerrada: !!docDe(sm)?.cerrado_plan };
+            }).filter(w => w.uds > 0);
             return (
-              <div key={x.id} style={{display:"flex",justifyContent:"space-between",fontSize:13,padding:"5px 0"}}>
-                <span style={{color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p?.nombre||"?"}</span>
-                <b style={{color:C.amber,flexShrink:0,marginLeft:8}}>{d>0?`faltan ${num(d)}`:`sobran ${num(-d)}`}</b>
+              <div key={x.id} style={{background:C.card2,borderRadius:11,padding:"11px 12px",marginBottom:8}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8,marginBottom:7}}>
+                  <span style={{minWidth:0}}>
+                    <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p?.nombre||"?"}</div>
+                    <div style={{fontSize:11.5,color:C.mutedD}}>plan {num(x.cantidad)} · colocado {num(x.col)}</div>
+                  </span>
+                  <b style={{color:sobra?C.red:C.amber,flexShrink:0,fontSize:14}}>{sobra?`sobran ${num(-d)}`:`faltan ${num(d)}`}</b>
+                </div>
+                {detalle.length===0 && <div style={{fontSize:12,color:C.mutedD}}>No está puesto en ninguna semana.</div>}
+                {detalle.map(w=>(
+                  <div key={w.sm} style={{borderTop:`1px solid ${C.border}`,paddingTop:6,marginTop:6}}>
+                    <div style={{display:"flex",justifyContent:"space-between",fontSize:12.5,marginBottom:3}}>
+                      <b style={{color:C.text}}>{w.cerrada?"🔒 ":""}Semana {w.sm.split("-W")[1]}</b>
+                      <b style={{color:C.text}}>{num(w.uds)} uds</b>
+                    </div>
+                    <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+                      {Object.entries(w.dd).sort().map(([f,q])=>(
+                        <span key={f} style={{background:"#fff",border:`1px solid ${C.border}`,borderRadius:8,
+                          padding:"4px 8px",fontSize:11.5,color:C.mutedD}}>
+                          {DIA_CORTO(f)} · <b style={{color:C.text}}>{num(q)}</b>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+                {sobra && (
+                  <div style={{fontSize:11.5,color:C.red,fontWeight:700,marginTop:8,lineHeight:1.5}}>
+                    Quita {num(-d)} uds de alguno de esos días, o sube el plan del mes a {num(x.col)}.
+                  </div>
+                )}
               </div>
             );
           })}
@@ -4422,7 +5078,7 @@ function ResumenMesTab({ periodo, semanas, planMes, planesSem, productos, mps, m
 }
 
 // ── TAB 1: PLAN MENSUAL ────────────────────────────────────────────────────────
-function PlanMesTab({ periodo, plan, guardar, productos, mps, semanas, planesSem, slotsDia=SLOTS_DIA, persLinea=3, persDia=12, turnosCentro=TURNOS_ABIERTOS, centroNombre="", perfil, ggMes=0, procesos=[], irReparto }) {
+function PlanMesTab({ periodo, plan, guardar, productos, mps, semanas, planesSem, slotsDia=SLOTS_DIA, persLinea=3, persDia=12, turnosCentro=TURNOS_ABIERTOS, centroNombre="", perfil, ggMes=0, procesos=[], persTurno={}, turnosId=[], persDiaReal=0, slotsEfectDia=0, lineasDeTurno=()=>0, irReparto }) {
   const items = plan.items || [];
   const setItems = (v) => guardar({ items: v });
   const dias = diasLaborablesMes(periodo).length;
@@ -4655,9 +5311,37 @@ function PlanMesTab({ periodo, plan, guardar, productos, mps, semanas, planesSem
           </div>
         </div>
 
+        <div style={{background:"#fff",border:`1.5px solid ${C.border}`,borderRadius:12,padding:"12px 13px",marginBottom:11}}>
+          <div style={{fontFamily:F.h,fontWeight:800,fontSize:12.5,color:C.text,marginBottom:3}}>
+            👥 PERSONAL QUE HAY ESTE MES
+          </div>
+          <div style={{fontSize:11.5,color:C.mutedD,lineHeight:1.55,marginBottom:10}}>
+            Cuánta gente entra en cada turno. De aquí sale cuántas líneas se pueden abrir.
+          </div>
+          {turnosId.map(t=>{
+            const n = persTurno[t]||0, ls = lineasDeTurno(t);
+            return (
+              <div key={t} style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+                <span style={{width:34,fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text,flexShrink:0}}>{t}</span>
+                <button onClick={()=>guardar({personas_turno:{...(plan.personas_turno||{}), [t]: Math.max(0, n-persLinea)}})}
+                  style={{width:46,height:46,borderRadius:11,border:`1.5px solid ${C.border}`,background:"#fff",fontSize:20,color:C.text,cursor:"pointer",flexShrink:0}}>−</button>
+                <div style={{flex:1,textAlign:"center",background:C.card2,borderRadius:11,padding:"8px 4px"}}>
+                  <div style={{fontFamily:F.h,fontWeight:900,fontSize:19,color:C.text,lineHeight:1.1}}>{n}</div>
+                  <div style={{fontSize:10.5,color:C.mutedD}}>personas · {ls} línea{ls!==1?"s":""}</div>
+                </div>
+                <button onClick={()=>guardar({personas_turno:{...(plan.personas_turno||{}), [t]: n+persLinea}})}
+                  style={{width:46,height:46,borderRadius:11,border:`1.5px solid ${C.border}`,background:"#fff",fontSize:20,color:C.text,cursor:"pointer",flexShrink:0}}>+</button>
+              </div>
+            );
+          })}
+          <div style={{fontSize:11.5,color:C.mutedD,lineHeight:1.55,borderTop:`1px solid ${C.border}`,paddingTop:8}}>
+            Total <b style={{color:C.text}}>{persDiaReal} personas al día</b> · se pueden abrir <b style={{color:C.text}}>{slotsEfectDia} de {slotsDia}</b> huecos línea-turno.
+          </div>
+        </div>
+
         <div style={{background:C.blueBg,borderRadius:12,padding:"12px 13px",marginBottom:11}}>
           <div style={{fontFamily:F.h,fontWeight:800,fontSize:12.5,color:C.blue,marginBottom:6}}>
-            👥 PERSONAL QUE NECESITA ESTE PLAN
+            👥 LO QUE PIDE ESTE PLAN
           </div>
           <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:6}}>
             <span style={{fontFamily:F.h,fontWeight:900,fontSize:32,color:C.text,lineHeight:1}}>{persProg}</span>
@@ -4700,7 +5384,7 @@ const DIA_CORTO = (f) => {
 };
 const codigoCorto = (n="") => n.split(" ")[0].slice(0,13);
 
-function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLineas, turnosCentro=2, replicarEnMes, nSemanasMes=4, moldes=[], itemsMes=[], colocadoEnMes=()=>0 }) {
+function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLineas, turnosCentro=2, replicarEnMes, nSemanasMes=4, moldes=[], itemsMes=[], colocadoEnMes=()=>0, lineasDeTurno=()=>99, persTurno={} }) {
   const moldeDe = (p) => p?.molde_id || (p?.molde ? `txt:${(p.molde||"").trim().toLowerCase()}` : "");
   const nombreMolde = (k) => !k ? "Sin molde"
     : (k.startsWith("txt:") ? k.slice(4) : (moldes.find(m=>m.id===k)?.nombre || "Molde"));
@@ -5012,6 +5696,23 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
   items.forEach(it=>{ objetivo[it.producto_id] = (objetivo[it.producto_id]||0) + (parseFloat(it.cantidad)||0); });
   const asignar = (slot, pid, cantidad) => {
     const prod = productos.find(p=>p.id===pid);
+    // Sin gente en ese turno no hay línea que abrir
+    const iL = LINEAS_CAL.indexOf(slot.linea);
+    if (iL >= lineasDeTurno(slot.turno)) {
+      window.alert(
+        `En el ${slot.turno} solo hay ${persTurno[slot.turno]||0} personas: dan para ${lineasDeTurno(slot.turno)} línea(s).\n\n` +
+        `Para abrir la ${slot.linea} en ese turno, sube el personal en la pestaña 📅 Mes.`);
+      return;
+    }
+    // Un hueco es UN turno de esa línea: no caben más unidades que su ritmo
+    const rit = ritmoDe(prod);
+    if (rit > 0 && cantidad > rit + 0.5) {
+      window.alert(
+        `No cabe en un turno: de ${prod?.nombre} salen ${num(rit)} ${prod?.unidad||"uds"} por turno.\n\n` +
+        `Estás poniendo ${num(cantidad)}, que son ${(cantidad/rit).toFixed(1)} turnos.\n\n` +
+        `Ponlo en varios huecos.`);
+      return;
+    }
     // El calendario no puede fabricar más de lo planificado: eso se cambia en la pestaña Mes
     const obj = objetivo[pid] || 0;
     if (obj > 0) {
@@ -5272,25 +5973,42 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
               </div>
             </div>
             {TURNOS_CAL.map(t=>(
-              <div key={t} style={{display:"flex",alignItems:"stretch",gap:6,marginBottom:6}}>
-                <div style={{width:34,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:3,background:C.card2,borderRadius:9,padding:"4px 0"}}>
-                  <span style={{fontFamily:F.h,fontWeight:800,fontSize:12,color:C.mutedD}}>{t}</span>
-                  {!bloqueado && cal.some(x=>x.fecha===f && x.turno===t) && TURNOS_CAL.length>1 && (
-                    <button onClick={()=>repetirTurnoEnDia(f,t)} title="Repetir en los demás turnos del día"
-                      style={{background:"none",border:"none",color:C.blue,fontSize:13,cursor:"pointer",padding:0,lineHeight:1}}>⧉</button>
-                  )}
-                </div>
+              <div key={t} style={{marginBottom:8}}>
+              {(() => {
+                const delT = cal.filter(x=>x.fecha===f && x.turno===t);
+                const persT = delT.reduce((a,x)=>a+persDeLinea(x.linea),0);
+                const udsT  = delT.reduce((a,x)=>a+toNum(x.cantidad),0);
+                const objT  = delT.reduce((a,x)=>a+objetivoSlot(x),0);
+                const lleno = delT.length >= lineasDeTurno(t);
+                return (
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",
+                    padding:"2px 2px 5px",fontSize:11.5,color:C.mutedD}}>
+                    <b style={{color:C.text,fontSize:12.5}}>{t}</b>
+                    <span>
+                      <b style={{color:lleno?C.green:C.amber}}>{delT.length}/{lineasDeTurno(t)}</b> líneas ·
+                      {" "}{persT} de {persTurno[t]||0} personas ·
+                      {" "}<b style={{color:C.text}}>{num(udsT)}</b>{objT>0 && `/${num(objT)}`} uds
+                    </span>
+                  </div>
+                );
+              })()}
+              <div style={{display:"flex",alignItems:"stretch",gap:6}}>
+                {!bloqueado && cal.some(x=>x.fecha===f && x.turno===t) && TURNOS_CAL.length>1 && (
+                  <button onClick={()=>repetirTurnoEnDia(f,t)} title="Repetir en los demás turnos del día"
+                    style={{width:26,flexShrink:0,background:C.card2,border:"none",borderRadius:9,color:C.blue,fontSize:13,cursor:"pointer"}}>⧉</button>
+                )}
                 {LINEAS_CAL.map(l=>{
                   const e = enSlot(f,t,l);
+                  const sinGente = LINEAS_CAL.indexOf(l) >= lineasDeTurno(t);
                   const prod = e && productos.find(p=>p.id===e.producto_id);
                   const c = e ? colorDe(e.producto_id) : null;
                   const cambio = e && hayCambioMolde(f,t,l);
                   return (
                     <button key={l} onClick={()=>{ if(bloqueado) return;
                         if (cogido && !e) soltarEn(f,t,l); else setEdit({fecha:f,turno:t,linea:l}); }}
-                      style={{flex:1,minWidth:0,minHeight:60,
-                        background:e?c.bg:(cogido?"#F0F9FF":"#fff"),
-                        border:e?`1.5px solid ${c.bd}`:`1.5px dashed ${cogido?C.blue:C.border}`,
+                      style={{flex:1,minWidth:0,minHeight:60,opacity:sinGente&&!e?0.45:1,
+                        background:e?c.bg:(sinGente?C.card2:(cogido?"#F0F9FF":"#fff")),
+                        border:e?`1.5px solid ${c.bd}`:`1.5px dashed ${sinGente?C.border:(cogido?C.blue:C.border)}`,
                         borderRadius:11,padding:"8px 7px",cursor:bloqueado?"default":"pointer",textAlign:"left",overflow:"hidden"}}>
                       {e ? (
                         <>
@@ -5322,12 +6040,13 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
                         </>
                       ) : (
                         <div style={{color:cogido?C.blue:C.muted,fontSize:11.5,fontWeight:cogido?800:400,textAlign:"center",paddingTop:16,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                          {bloqueado ? "—" : (cogido ? "soltar aquí" : `+ ${l} · ${persDeLinea(l)}p`)}
+                          {bloqueado ? "—" : sinGente ? "sin personal" : (cogido ? "soltar aquí" : `+ ${l} · ${persDeLinea(l)}p`)}
                         </div>
                       )}
                     </button>
                   );
                 })}
+              </div>
               </div>
             ))}
           </Card>
@@ -5651,7 +6370,7 @@ function SlotEditor({ slot, entrada, productos, items, colocado, objetivo, persL
 }
 
 // ── TAB 2: PLAN SEMANAL + CUADRE ───────────────────────────────────────────────
-function PlanSemanaTab({ semana, setSemana, semanas, plan, guardar, productos, mps, perfil, slotsDia=SLOTS_DIA, persLinea=3, persDia=12, turnosCentro=TURNOS_ABIERTOS, cfgLineas, centroNombre="", replicarEnMes, nSemanasMes=4, moldes=[], planMes={}, semanasMes=[] }) {
+function PlanSemanaTab({ semana, setSemana, semanas, plan, guardar, productos, mps, perfil, slotsDia=SLOTS_DIA, persLinea=3, persDia=12, turnosCentro=TURNOS_ABIERTOS, cfgLineas, centroNombre="", replicarEnMes, nSemanasMes=4, moldes=[], planMes={}, semanasMes=[], persTurno={}, lineasDeTurno=()=>99, persDiaReal=0, slotsEfectDia=0 }) {
   // Sin Reparto: el objetivo es el plan del MES y se va gastando al colocar en cualquier semana
   const itemsMes = planMes.items || [];
   const colocadoEnMes = (pid) => semanasMes.reduce((a,w) =>
@@ -5800,7 +6519,7 @@ function PlanSemanaTab({ semana, setSemana, semanas, plan, guardar, productos, m
       )}
 
       <CalendarioSemana semana={semana} plan={plan} guardar={guardar} productos={productos} bloqueado={bloqueado} cfgLineas={cfgLineas} turnosCentro={turnosCentro} replicarEnMes={replicarEnMes} nSemanasMes={nSemanasMes} moldes={moldes}
-        itemsMes={itemsMes} colocadoEnMes={colocadoEnMes}/>
+        itemsMes={itemsMes} colocadoEnMes={colocadoEnMes} lineasDeTurno={lineasDeTurno} persTurno={persTurno}/>
 
       <button onClick={()=>setVerObjetivo(v=>!v)}
         style={{width:"100%",background:"#fff",border:`1.5px solid ${C.border}`,color:C.mutedD,borderRadius:12,padding:"13px",fontFamily:F.h,fontWeight:800,fontSize:13.5,cursor:"pointer",marginBottom:12}}>
@@ -6282,7 +7001,9 @@ export default function App() {
     getDocs(collection(db, "usuarios")).then(s => setNoUsers(s.empty)).catch(()=>{});
   }, [authUser]);
 
-  const perfil = authUser ? usuarios.find(u => u.id === authUser.uid) : null;
+  const perfil = authUser ? usuarios.find(u => u.id === authUser.uid || u.uid === authUser.uid) : null;
+  // Al operario no le sale el menú de oficina: entra directo a la pantalla de fábrica
+  useEffect(()=>{ if (perfil?.rol === "operario") setView("terminal"); }, [perfil?.rol]);
 
   const STYLES = `
     @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@700;800;900&display=swap');
@@ -6346,7 +7067,8 @@ export default function App() {
       {view==="home"      && <Home perfil={perfil} onGo={setView} onLogout={()=>signOut(auth)} counts={counts} ordenes={ordenesRoot} producciones={produccionesRoot} productos={productos}/>}
       {view==="moldes"    && <MoldesScreen onBack={back} productos={productos}/>}
       {view==="terminal"  && <TerminalPlanta onBack={back} perfil={perfil} productos={productos} lineas={lineas}
-        turnos={turnos} centros={centros} mps={mps} motivos={motivos} ordenes={ordenesRoot} moldes={moldes}/>}
+        turnos={turnos} centros={centros} mps={mps} motivos={motivos} moldes={moldes}
+        usuarios={usuarios} procesos={procesos}/>}
       {view==="planificacion" && <PlanificacionScreen onBack={back} perfil={perfil} productos={productos} mps={mps} producciones={produccionesRoot} centros={centros} lineas={lineas} moldes={moldes} procesos={procesos}/>}
       {view==="ordenes"   && <OrdenesScreen onBack={back} perfil={perfil} productos={productos} lineas={lineas} turnos={turnos} centros={centros} mps={mps} motivos={motivos} usuarios={usuarios}/>}
       {view==="diario"    && <DiarioScreen onBack={back} productos={productos} lineas={lineas} turnos={turnos} mps={mps} motivos={motivos} usuarios={usuarios} centros={centros}/>}
