@@ -2727,7 +2727,8 @@ function ProcesosScreen({ onBack }) {
           <div style={{background:C.blueBg,borderRadius:11,padding:"12px 13px",marginBottom:14}}>
             <div style={{fontFamily:F.h,fontWeight:800,fontSize:13,color:C.blue,marginBottom:3}}>⏱️ Tiempos</div>
             <div style={{fontSize:12,color:C.mutedD,marginBottom:10,lineHeight:1.5}}>
-              El <b>objetivo</b> se precarga al meter este proceso en un producto, donde se puede cambiar.
+              Los dos se precargan al meter este proceso en un producto, donde se pueden cambiar.
+              El <b>tiempo de proceso</b> es el que calcula el coste; el <b>objetivo</b> es la meta.
             </div>
             <div style={{fontSize:11,color:C.mutedD,fontWeight:800,marginBottom:6}}>¿CÓMO SE MIDE ESTE PROCESO?</div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
@@ -3133,13 +3134,17 @@ function ProductoForm({ onBack, ep, procesos, mps, centros, moldes = [] }) {
   const [pa, setPa]         = useState(ep?.procesos_asignados||[]); // [{proceso_id,min_obj,define_cantidad}]
   const [ma, setMa]         = useState(ep?.materias_asignadas||[]); // [{mp_id,capas,precio_ud,rendimiento}]
   const [selProc, setSelProc] = useState("");
+  const [minReal, setMinReal] = useState("");
   const [minObj, setMinObj]   = useState("");
+  const [capasProc, setCapasProc] = useState("");
   // el tiempo objetivo del catálogo se precarga, pero se puede cambiar aquí
   useEffect(()=>{
-    if (!selProc) { setMinObj(""); return; }
+    if (!selProc) { setMinReal(""); setMinObj(""); return; }
     const c = procesos.find(p=>p.id===selProc);
-    const t = toNum(c?.tiempo_objetivo) || toNum(c?.tiempo_proceso);
-    setMinObj(t>0 ? String(t) : "");
+    const tr = toNum(c?.tiempo_proceso), to = toNum(c?.tiempo_objetivo);
+    setMinReal(tr>0 ? String(tr) : (to>0 ? String(to) : ""));
+    setMinObj(to>0 ? String(to) : (tr>0 ? String(tr) : ""));
+    setCapasProc(c?.base_tiempo === "m" ? "1" : "");
   },[selProc]);
   const [selMp, setSelMp]     = useState("");
   const [capas, setCapas]     = useState("");
@@ -3164,25 +3169,35 @@ function ProductoForm({ onBack, ep, procesos, mps, centros, moldes = [] }) {
   const costeMPTotal = ma.reduce((s,x)=>s+costeMatLinea(toNum(x.capas), toNum(x.precio_ud), toNum(x.rendimiento)||100), 0);
   // Coste de mano de obra objetivo por proceso: minutos/ud ÷ 60 × tarifa del centro
   const costeProcLinea = (minObjN) => (minObjN/60)*tarifaMO;
-  // Un proceso medido por metro se convierte con los metros del producto
-  const minPorUd = (x) => {
+  // Un proceso por metro trata los metros de las capas que él toca
+  const metrosUd  = toNum(mFinales);
+  const capasProcDe = (x) => toNum(x.capas) || 1;
+  const metrosDe  = (x) => metrosUd * capasProcDe(x);
+  // campo="real" es lo que cuesta hoy · campo="obj" es la meta
+  const minPorUd = (x, campo="real") => {
     const cat = procesos.find(p=>p.id===x.proceso_id);
     const b = x.base_tiempo || cat?.base_tiempo || "ud";
-    return b === "m" ? toNum(x.min_obj) * toNum(mFinales) : toNum(x.min_obj);
+    const t = campo==="obj" ? toNum(x.min_obj) : (toNum(x.min_real) || toNum(x.min_obj));
+    return b === "m" ? t * metrosDe(x) : t;
   };
-  const costeMOTotal = pa.reduce((s,x)=>s+costeProcLinea(minPorUd(x)), 0);
+  const costeMOTotal = pa.reduce((s,x)=>s+costeProcLinea(minPorUd(x,"real")), 0);
+  const costeMOMeta  = pa.reduce((s,x)=>s+costeProcLinea(minPorUd(x,"obj")), 0);
   const costeCalculado = costeMPTotal + costeMOTotal;
   const costeFinal = toNum(coste);
   const pv = toNum(precioVenta);
   const margenPct = pv>0 ? ((pv-costeFinal)/pv*100) : null;
 
   const addProc = () => {
-    if (!selProc || !minObj) return;
+    if (!selProc) return;
+    if (!(toNum(minReal) > 0) && !(toNum(minObj) > 0)) { window.alert("Pon al menos el tiempo real"); return; }
     if (pa.find(x=>x.proceso_id===selProc)) return;
-    setPa(prev=>[...prev,{proceso_id:selProc,min_obj:toNum(minObj),
-      base_tiempo: procesos.find(p=>p.id===selProc)?.base_tiempo||"ud",
+    const catSel = procesos.find(p=>p.id===selProc);
+    if (catSel?.base_tiempo === "m" && !(toNum(capasProc) > 0)) { window.alert("Pon cuántas capas trata este proceso"); return; }
+    setPa(prev=>[...prev,{proceso_id:selProc,min_real:toNum(minReal)||toNum(minObj),min_obj:toNum(minObj),
+      base_tiempo: catSel?.base_tiempo||"ud",
+      capas: catSel?.base_tiempo==="m" ? (toNum(capasProc)||1) : null,
       define_cantidad:prev.length===0}]);
-    setSelProc(""); setMinObj("");
+    setSelProc(""); setMinReal(""); setMinObj(""); setCapasProc("");
   };
   const addMp = () => {
     if (!selMp) { window.alert("Elige una materia prima"); return; }
@@ -3200,7 +3215,7 @@ function ProductoForm({ onBack, ep, procesos, mps, centros, moldes = [] }) {
     await save("productos", ep?.id||uid(), {
       nombre: nombre.trim(), centro, unidad: unidad.trim()||"ud",
       coste_objetivo: toNum(coste),
-      coste_mp_objetivo: costeMPTotal, coste_mo_objetivo: costeMOTotal,
+      coste_mp_objetivo: costeMPTotal, coste_mo_objetivo: costeMOTotal, coste_mo_meta: costeMOMeta,
       precio_venta: pv||null,
       metros_finales: toNum(mFinales),
       objetivo_diario: toNum(objDiario),
@@ -3208,7 +3223,7 @@ function ProductoForm({ onBack, ep, procesos, mps, centros, moldes = [] }) {
       personas_linea: parseInt(persLinea)||3,
       molde_id: moldeId,
       molde: moldes.find(m=>m.id===moldeId)?.nombre || "",
-      procesos_asignados: pa.map(x=>({...x, min_obj: toNum(x.min_obj)})),
+      procesos_asignados: pa.map(x=>({...x, min_real: toNum(x.min_real)||toNum(x.min_obj), min_obj: toNum(x.min_obj), capas: x.capas==null?null:(toNum(x.capas)||1)})),
       materias_asignadas: ma.map(x=>({...x, capas: toNum(x.capas), precio_ud: toNum(x.precio_ud), rendimiento: toNum(x.rendimiento)||85 })),
     });
     onBack();
@@ -3274,7 +3289,7 @@ function ProductoForm({ onBack, ep, procesos, mps, centros, moldes = [] }) {
           )}
           {pa.map(x=>{
             const pr = procesos.find(z=>z.id===x.proceso_id);
-            const cst = costeProcLinea(minPorUd(x));
+            const cst = costeProcLinea(minPorUd(x,"real"));
             return (
               <div key={x.proceso_id} style={{padding:"9px 0",borderBottom:`1px solid ${C.border}`}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10}}>
@@ -3291,17 +3306,37 @@ function ProductoForm({ onBack, ep, procesos, mps, centros, moldes = [] }) {
                       style={{background:"none",border:"none",color:C.red,fontSize:18,cursor:"pointer"}}>✕</button>
                   </div>
                 </div>
-                <div style={{display:"flex",alignItems:"center",gap:10,marginTop:6}}>
-                  <NumIn value={x.min_obj} step="0.01" suf={`min/${(x.base_tiempo||pr?.base_tiempo)==="m" ? "m" : (unidad||"ud")}`}
-                    onChange={v=>setPa(prev=>prev.map(z=>z.proceso_id===x.proceso_id?{...z,min_obj:v}:z))}/>
+                <div style={{display:"flex",alignItems:"center",gap:10,marginTop:6,flexWrap:"wrap"}}>
+                  <div>
+                    <div style={{fontSize:10.5,color:C.mutedD,fontWeight:800,marginBottom:3}}>REAL</div>
+                    <NumIn value={x.min_real ?? x.min_obj} step="0.01" suf={`min/${(x.base_tiempo||pr?.base_tiempo)==="m" ? "m" : (unidad||"ud")}`}
+                      onChange={v=>setPa(prev=>prev.map(z=>z.proceso_id===x.proceso_id?{...z,min_real:v}:z))}/>
+                  </div>
+                  <div>
+                    <div style={{fontSize:10.5,color:C.blue,fontWeight:800,marginBottom:3}}>OBJETIVO</div>
+                    <NumIn value={x.min_obj} step="0.01" suf={`min/${(x.base_tiempo||pr?.base_tiempo)==="m" ? "m" : (unidad||"ud")}`}
+                      onChange={v=>setPa(prev=>prev.map(z=>z.proceso_id===x.proceso_id?{...z,min_obj:v}:z))}/>
+                  </div>
                   <span style={{fontSize:12.5,color:cst>0?C.green:C.red,fontWeight:800}}>
                     {cst>0 ? `→ ${cst.toFixed(3)} €/${unidad||"ud"} de mano de obra` : "⚠️ falta el tiempo"}
                   </span>
+                  {(()=>{ const co = costeProcLinea(minPorUd(x,"obj"));
+                    if (!(cst>0) || Math.abs(cst-co) < 0.0005) return null;
+                    return <span style={{fontSize:11.5,color:C.blue,fontWeight:700}}>
+                      (al objetivo {co.toFixed(3)} €)
+                    </span>; })()}
                   {(()=>{ const b = x.base_tiempo||pr?.base_tiempo||"ud";
                     if (b!=="m") return null;
-                    return <span style={{fontSize:11.5,color:C.blue,fontWeight:700}}>
-                      × {toNum(mFinales)||0} m/ud = {minPorUd(x).toFixed(2)} min/{unidad||"ud"}
-                    </span>; })()}
+                    return (
+                      <span style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                        <span style={{fontSize:11.5,color:C.mutedD,fontWeight:700}}>×</span>
+                        <NumIn value={x.capas ?? 1} step="1" w={56} suf="capas"
+                          onChange={v=>setPa(prev=>prev.map(z=>z.proceso_id===x.proceso_id?{...z,capas:v}:z))}/>
+                        <span style={{fontSize:11.5,color:C.blue,fontWeight:700}}>
+                          = {metrosDe(x)} m/ud → {minPorUd(x).toFixed(2)} min/{unidad||"ud"}
+                        </span>
+                      </span>
+                    ); })()}
                   {(()=>{ const tc = toNum(pr?.tiempo_objetivo), b = x.base_tiempo||pr?.base_tiempo||"ud";
                     if (!tc || Math.abs(tc - toNum(x.min_obj)) < 0.005) return null;
                     return <span style={{fontSize:11.5,color:C.amber,fontWeight:700}}>
@@ -3315,7 +3350,7 @@ function ProductoForm({ onBack, ep, procesos, mps, centros, moldes = [] }) {
             <Sel label="Añadir proceso" value={selProc} onChange={setSelProc} placeholder="Elegir del catálogo…"
               options={procesos.filter(p=>!pa.find(x=>x.proceso_id===p.id)).map(p=>({
                 value:p.id,
-                label:`${p.nombre}${toNum(p.tiempo_objetivo)>0?`  ·  obj ${toNum(p.tiempo_objetivo)} min/ud`:""}` }))}/>
+                label:`${p.nombre}${toNum(p.tiempo_proceso)>0?`  ·  ${toNum(p.tiempo_proceso)} min/${p.base_tiempo||"ud"}`:""}` }))}/>
             {selProc && (()=>{
               const c = procesos.find(p=>p.id===selProc);
               const tObj = toNum(c?.tiempo_objetivo), tAct = toNum(c?.tiempo_proceso);
@@ -3323,24 +3358,50 @@ function ProductoForm({ onBack, ep, procesos, mps, centros, moldes = [] }) {
                 <div style={{background:tObj||tAct?C.blueBg:C.amberBg,borderRadius:10,padding:"10px 12px",marginBottom:12,
                   fontSize:12.5,color:tObj||tAct?C.text:C.amber,fontWeight:tObj||tAct?400:700,lineHeight:1.6}}>
                   {tObj||tAct
-                    ? <>Del catálogo: actual <b>{tAct||"—"}</b> · objetivo <b>{tObj||"—"}</b> min/{c?.base_tiempo||"ud"}. Se ha puesto el objetivo; cámbialo si este producto tarda distinto.
+                    ? <>Del catálogo: proceso <b>{tAct||"—"}</b> · objetivo <b>{tObj||"—"}</b> min/{c?.base_tiempo||"ud"}. Se han puesto los dos; cámbialos si este producto tarda distinto.
                         {c?.base_tiempo==="m" && <div style={{marginTop:4,color:C.blue,fontWeight:700}}>
-                          Se mide por metro: {tObj||0} × {toNum(mFinales)||0} m/ud = <b>{((tObj||0)*toNum(mFinales)).toFixed(2)} min/{unidad||"ud"}</b>
+                          Se mide por metro: dime cuántas capas trata en este producto.
                         </div>}</>
                     : <>⚠️ Este proceso no tiene tiempos en el catálogo. Escríbelo aquí o defínelos en Procesos.</>}
                 </div>
               );
             })()}
-            <div style={{display:"flex",gap:8,alignItems:"flex-end"}}>
-              <div style={{flex:1}}>
-                <Field dec label={`Tiempo para este producto (min/${procesos.find(p=>p.id===selProc)?.base_tiempo==="m" ? "m" : (unidad||"ud")})`} value={minObj} onChange={setMinObj} placeholder="1.20" min="0.01" step="0.01"/>
-              </div>
-              <button onClick={addProc} style={{background:C.accent,border:"none",color:"#fff",borderRadius:12,padding:"14px 22px",fontFamily:F.h,fontWeight:800,fontSize:16,cursor:"pointer",marginBottom:14}}>＋</button>
-            </div>
+            {(() => {
+              const porM = procesos.find(p=>p.id===selProc)?.base_tiempo === "m";
+              const mReales = toNum(mFinales) * (toNum(capasProc)||0);
+              return (
+                <>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr", gap:10}}>
+                    <Field dec label={`Tiempo REAL (min/${porM ? "m" : (unidad||"ud")})`} value={minReal} onChange={setMinReal} placeholder="1.40" min="0.01" step="0.01"/>
+                    <Field dec label={`Objetivo (min/${porM ? "m" : (unidad||"ud")})`} value={minObj} onChange={setMinObj} placeholder="1.20" min="0.01" step="0.01"/>
+                  </div>
+                  {porM && <Field dec label="¿Cuántas capas trata?" value={capasProc} onChange={setCapasProc} placeholder="2" min="1" step="1"/>}
+                  <div style={{fontSize:11.5,color:C.mutedD,lineHeight:1.55,marginBottom:10}}>
+                    El coste del producto se calcula con el <b>tiempo real</b>. El objetivo sirve para ver cuánto se ganaría alcanzándolo.
+                  </div>
+                  {porM && (
+                    <div style={{background: mReales>0 ? C.blueBg : C.amberBg, borderRadius:10,padding:"10px 12px",marginBottom:12,
+                      fontSize:12.5,color: mReales>0 ? C.text : C.amber, fontWeight: mReales>0 ? 400 : 700, lineHeight:1.6}}>
+                      {mReales>0
+                        ? <>Metros reales: <b>{toNum(mFinales)} m × {toNum(capasProc)} capa{toNum(capasProc)!==1?"s":""} = {mReales} m/ud</b>
+                            <div style={{color:C.blue,fontWeight:700,marginTop:2}}>{toNum(minObj)||0} × {mReales} = {((toNum(minObj)||0)*mReales).toFixed(2)} min/{unidad||"ud"}</div></>
+                        : <>⚠️ Pon cuántas capas trata este proceso. El MX3xx lleva 3, el MX2xx y el Especta 2.</>}
+                    </div>
+                  )}
+                  <button onClick={addProc} style={{width:"100%",background:C.accent,border:"none",color:"#fff",borderRadius:12,padding:"15px",fontFamily:F.h,fontWeight:800,fontSize:15,cursor:"pointer",marginBottom:14}}>＋ Añadir proceso</button>
+                </>
+              );
+            })()}
           </div>
+          {pa.length>0 && costeMOMeta>0 && Math.abs(costeMOTotal-costeMOMeta)>0.005 && (
+            <div style={{background:C.blueBg,borderRadius:10,padding:"10px 12px",marginTop:10,fontSize:12.5,color:C.text,lineHeight:1.6}}>
+              Si se alcanzaran los objetivos: <b>{costeMOMeta.toFixed(2)} €/{unidad||"ud"}</b>
+              <b style={{color:C.green}}> · {(costeMOTotal-costeMOMeta).toFixed(2)} € menos por unidad</b>
+            </div>
+          )}
           {pa.length>0 && (
             <div style={{marginTop:10,paddingTop:10,borderTop:`1.5px solid ${C.border}`,display:"flex",justifyContent:"space-between"}}>
-              <span style={{fontFamily:F.h,fontWeight:700,fontSize:14,color:C.text}}>COSTE OBJETIVO MANO DE OBRA</span>
+              <span style={{fontFamily:F.h,fontWeight:700,fontSize:14,color:C.text}}>MANO DE OBRA (tiempos reales)</span>
               <span style={{fontFamily:F.h,fontWeight:800,fontSize:16,color:C.green}}>{costeMOTotal.toFixed(2)} €/{unidad||"ud"}</span>
             </div>
           )}
