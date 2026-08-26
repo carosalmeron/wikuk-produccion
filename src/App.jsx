@@ -119,8 +119,8 @@ const sumaPeriodo = (periodo, delta) => {
 };
 
 // Recursos necesarios para una lista de {producto_id, cantidad}
-const calcRecursos = (items, productos, persLinea = 3) => {
-  let uds=0, slots=0, personaTurnos=0, costeMP=0, costeMO=0, ventas=0, costeFicha=0;
+const calcRecursos = (items, productos, persLinea = 3, procesos = []) => {
+  let uds=0, slots=0, personaTurnos=0, costeMP=0, costeMO=0, ventas=0, costeFicha=0, minApoyo=0;
   const materias = {};
   const sinRitmo = [];
   (items||[]).forEach(it => {
@@ -138,14 +138,25 @@ const calcRecursos = (items, productos, persLinea = 3) => {
     ventas  += (parseFloat(p.precio_venta)||0) * q;
     costeFicha += (parseFloat(p.coste_objetivo)||0) * q;
     costeMO += turnos * pers * 8 * TARIFA_MO;
+    // procesos fuera de línea: cuentan en horas y coste, pero no ocupan hueco
+    (p.procesos_asignados||[]).forEach(pa => {
+      const cat = procesos.find(z => z.id === pa.proceso_id);
+      if (!cat?.apoyo) return;
+      const base = pa.base_tiempo || cat.base_tiempo || "ud";
+      const minUd = base === "m"
+        ? (parseFloat(pa.min_obj)||0) * (parseFloat(p.metros_finales)||0)
+        : (parseFloat(pa.min_obj)||0);
+      minApoyo += minUd * q;
+    });
     (p.materias_asignadas||[]).forEach(m => {
       const rend = (parseFloat(m.rendimiento)||100)/100;
       const metros = (parseFloat(p.metros_finales)||0) * (parseFloat(m.capas)||0) / (rend||1) * q;
       materias[m.mp_id] = (materias[m.mp_id]||0) + metros;
     });
   });
+  const horasApoyo = minApoyo/60;
   return { uds, slots, personaTurnos, costeMP, costeMO, coste: costeMP+costeMO,
-           ventas, costeFicha, materias, sinRitmo };
+           ventas, costeFicha, horasApoyo, materias, sinRitmo };
 };
 
 // ── IMPRESIÓN ──────────────────────────────────────────────────────────────────
@@ -2694,16 +2705,18 @@ function ProcesosScreen({ onBack }) {
   const [apoyo, setApoyo] = useState(false);
   const [tProc, setTProc] = useState("");
   const [tObj, setTObj]   = useState("");
+  const [base, setBase]   = useState("ud");   // ud · m
   const [editId, setEditId] = useState(null);
   const [nuevoAbierto, setNuevoAbierto] = useState(false);
   const startEdit = (p)=>{ setNuevoAbierto(false); setEditId(p.id); setNombre(p.nombre||""); setDiferido(!!p.diferido); setApoyo(!!p.apoyo);
-    setTProc(p.tiempo_proceso?.toString()||""); setTObj(p.tiempo_objetivo?.toString()||""); window.scrollTo(0,0); };
+    setTProc(p.tiempo_proceso?.toString()||""); setTObj(p.tiempo_objetivo?.toString()||"");
+    setBase(p.base_tiempo||"ud"); window.scrollTo(0,0); };
 
   const add = async () => {
     if (!nombre.trim()) return;
     await save("procesos", editId||uid(), { nombre: nombre.trim(), diferido, apoyo,
-      tiempo_proceso: toNum(tProc), tiempo_objetivo: toNum(tObj) });
-    setNombre(""); setDiferido(false); setApoyo(false); setTProc(""); setTObj(""); setEditId(null); setNuevoAbierto(false);
+      tiempo_proceso: toNum(tProc), tiempo_objetivo: toNum(tObj), base_tiempo: base });
+    setNombre(""); setDiferido(false); setApoyo(false); setTProc(""); setTObj(""); setBase("ud"); setEditId(null); setNuevoAbierto(false);
   };
   return (
     <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
@@ -2712,14 +2725,31 @@ function ProcesosScreen({ onBack }) {
         <FormPlegable abierto={nuevoAbierto} setAbierto={setNuevoAbierto} editando={!!editId} etiqueta="Proceso" onCancelar={()=>{setEditId(null);}}>
           <Field label="Nombre del proceso" value={nombre} onChange={setNombre} placeholder="Ej: Plisado"/>
           <div style={{background:C.blueBg,borderRadius:11,padding:"12px 13px",marginBottom:14}}>
-            <div style={{fontFamily:F.h,fontWeight:800,fontSize:13,color:C.blue,marginBottom:3}}>⏱️ Tiempos por unidad</div>
-            <div style={{fontSize:12,color:C.mutedD,marginBottom:11,lineHeight:1.5}}>
-              El <b>objetivo</b> es el que se precarga al meter este proceso en un producto. Ahí se puede cambiar si ese producto tarda distinto.
+            <div style={{fontFamily:F.h,fontWeight:800,fontSize:13,color:C.blue,marginBottom:3}}>⏱️ Tiempos</div>
+            <div style={{fontSize:12,color:C.mutedD,marginBottom:10,lineHeight:1.5}}>
+              El <b>objetivo</b> se precarga al meter este proceso en un producto, donde se puede cambiar.
+            </div>
+            <div style={{fontSize:11,color:C.mutedD,fontWeight:800,marginBottom:6}}>¿CÓMO SE MIDE ESTE PROCESO?</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
+              {[["ud","Por unidad","cada stick"],["m","Por metro","desalado, estirado…"]].map(([k,t,d])=>(
+                <button key={k} onClick={()=>setBase(k)}
+                  style={{background:base===k?C.blue:"#fff",color:base===k?"#fff":C.text,
+                    border:`1.5px solid ${base===k?C.blue:C.border}`,borderRadius:11,padding:"11px 6px",
+                    fontFamily:F.h,fontWeight:800,fontSize:13.5,cursor:"pointer",textAlign:"center"}}>
+                  <div>{t}</div>
+                  <div style={{fontSize:10,fontWeight:600,opacity:0.75,marginTop:2}}>{d}</div>
+                </button>
+              ))}
             </div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-              <Field dec label="Tiempo de proceso (min/ud)" value={tProc} onChange={setTProc} placeholder="1.40" min="0" step="0.01"/>
-              <Field dec label="Tiempo objetivo (min/ud)" value={tObj} onChange={setTObj} placeholder="1.20" min="0" step="0.01"/>
+              <Field dec label={`Tiempo de proceso (min/${base})`} value={tProc} onChange={setTProc} placeholder={base==="m"?"0.14":"1.40"} min="0" step="0.01"/>
+              <Field dec label={`Tiempo objetivo (min/${base})`} value={tObj} onChange={setTObj} placeholder={base==="m"?"0.07":"1.20"} min="0" step="0.01"/>
             </div>
+            {base==="m" && (
+              <div style={{background:"#fff",borderRadius:9,padding:"9px 11px",marginBottom:10,fontSize:12,color:C.mutedD,lineHeight:1.55}}>
+                En cada producto se convertirá a minutos por unidad multiplicando por sus metros: <b>min/m × metros por ud</b>.
+              </div>
+            )}
             {toNum(tProc)>0 && toNum(tObj)>0 && (
               <div style={{fontSize:12.5,color:toNum(tObj)<toNum(tProc)?C.green:C.mutedD,fontWeight:700,lineHeight:1.5}}>
                 {toNum(tObj)<toNum(tProc)
@@ -2734,8 +2764,12 @@ function ProcesosScreen({ onBack }) {
           </button>
           <button onClick={()=>setApoyo(a=>!a)}
             style={{background:"#fff",border:`1px solid ${apoyo?C.blue:C.border}`,color:apoyo?C.blue:C.muted,borderRadius:20,padding:"6px 16px",fontSize:14,fontFamily:F.h,fontWeight:600,cursor:"pointer",marginBottom:12,marginLeft:8}}>
-            {apoyo?"🤝 Apoyo compartido (se reparte entre líneas)":"◯ Apoyo compartido"}
+            {apoyo?"🤝 Fuera de línea (lo hace un operario de apoyo)":"◯ Fuera de línea (apoyo)"}
           </button>
+          <div style={{fontSize:12,color:C.mutedD,lineHeight:1.55,marginBottom:12}}>
+            <b>Fuera de línea</b>: lo hace alguien que no está en el equipo de la línea, como el desalado.
+            Su tiempo cuenta en el coste y en la plantilla, pero no ocupa hueco de línea en la planificación.
+          </div>
           <Btn v="ghost" onClick={add}>{editId?"💾 Guardar cambios":"＋ Añadir Proceso"}</Btn>
         </FormPlegable>
         {procesos.length===0 && <Empty icon="⚙️" text="Sin procesos. Ej: Estirar, Ensanchar, Plisar…"/>}
@@ -2747,13 +2781,14 @@ function ProcesosScreen({ onBack }) {
                   <div style={{fontFamily:F.h,fontWeight:700,fontSize:16.5,color:C.text,lineHeight:1.35,wordBreak:"break-word"}}>{p.nombre}</div>
                   <div style={{fontSize:12.5,color:C.mutedD,marginTop:3}}>
                     {toNum(p.tiempo_proceso)>0 || toNum(p.tiempo_objetivo)>0
-                      ? <>⏱️ actual <b style={{color:C.text}}>{toNum(p.tiempo_proceso)||"—"}</b> · objetivo <b style={{color:C.blue}}>{toNum(p.tiempo_objetivo)||"—"}</b> min/ud</>
+                      ? <>⏱️ actual <b style={{color:C.text}}>{toNum(p.tiempo_proceso)||"—"}</b> · objetivo <b style={{color:C.blue}}>{toNum(p.tiempo_objetivo)||"—"}</b> min/{p.base_tiempo||"ud"}
+                          {(p.base_tiempo==="m") && <span style={{color:C.blue,fontWeight:700}}> · por metro</span>}</>
                       : <span style={{color:C.amber,fontWeight:700}}>⚠️ sin tiempos definidos</span>}
                   </div>
                   {(p.diferido || p.apoyo) && (
                     <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:5}}>
                       {p.diferido && <Pill color={C.amber} bg={C.amberBg}>⏭ DIFERIDO</Pill>}
-                      {p.apoyo && <Pill color={C.blue} bg={C.blueBg}>🤝 APOYO</Pill>}
+                      {p.apoyo && <Pill color={C.blue} bg={C.blueBg}>🤝 FUERA DE LÍNEA</Pill>}
                     </div>
                   )}
                 </div>
@@ -3129,7 +3164,13 @@ function ProductoForm({ onBack, ep, procesos, mps, centros, moldes = [] }) {
   const costeMPTotal = ma.reduce((s,x)=>s+costeMatLinea(toNum(x.capas), toNum(x.precio_ud), toNum(x.rendimiento)||100), 0);
   // Coste de mano de obra objetivo por proceso: minutos/ud ÷ 60 × tarifa del centro
   const costeProcLinea = (minObjN) => (minObjN/60)*tarifaMO;
-  const costeMOTotal = pa.reduce((s,x)=>s+costeProcLinea(toNum(x.min_obj)), 0);
+  // Un proceso medido por metro se convierte con los metros del producto
+  const minPorUd = (x) => {
+    const cat = procesos.find(p=>p.id===x.proceso_id);
+    const b = x.base_tiempo || cat?.base_tiempo || "ud";
+    return b === "m" ? toNum(x.min_obj) * toNum(mFinales) : toNum(x.min_obj);
+  };
+  const costeMOTotal = pa.reduce((s,x)=>s+costeProcLinea(minPorUd(x)), 0);
   const costeCalculado = costeMPTotal + costeMOTotal;
   const costeFinal = toNum(coste);
   const pv = toNum(precioVenta);
@@ -3138,7 +3179,9 @@ function ProductoForm({ onBack, ep, procesos, mps, centros, moldes = [] }) {
   const addProc = () => {
     if (!selProc || !minObj) return;
     if (pa.find(x=>x.proceso_id===selProc)) return;
-    setPa(prev=>[...prev,{proceso_id:selProc,min_obj:toNum(minObj),define_cantidad:prev.length===0}]);
+    setPa(prev=>[...prev,{proceso_id:selProc,min_obj:toNum(minObj),
+      base_tiempo: procesos.find(p=>p.id===selProc)?.base_tiempo||"ud",
+      define_cantidad:prev.length===0}]);
     setSelProc(""); setMinObj("");
   };
   const addMp = () => {
@@ -3231,7 +3274,7 @@ function ProductoForm({ onBack, ep, procesos, mps, centros, moldes = [] }) {
           )}
           {pa.map(x=>{
             const pr = procesos.find(z=>z.id===x.proceso_id);
-            const cst = costeProcLinea(toNum(x.min_obj));
+            const cst = costeProcLinea(minPorUd(x));
             return (
               <div key={x.proceso_id} style={{padding:"9px 0",borderBottom:`1px solid ${C.border}`}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10}}>
@@ -3249,15 +3292,20 @@ function ProductoForm({ onBack, ep, procesos, mps, centros, moldes = [] }) {
                   </div>
                 </div>
                 <div style={{display:"flex",alignItems:"center",gap:10,marginTop:6}}>
-                  <NumIn value={x.min_obj} step="0.01" suf={`min/${unidad||"ud"}`}
+                  <NumIn value={x.min_obj} step="0.01" suf={`min/${(x.base_tiempo||pr?.base_tiempo)==="m" ? "m" : (unidad||"ud")}`}
                     onChange={v=>setPa(prev=>prev.map(z=>z.proceso_id===x.proceso_id?{...z,min_obj:v}:z))}/>
                   <span style={{fontSize:12.5,color:cst>0?C.green:C.red,fontWeight:800}}>
                     {cst>0 ? `→ ${cst.toFixed(3)} €/${unidad||"ud"} de mano de obra` : "⚠️ falta el tiempo"}
                   </span>
-                  {(()=>{ const tc = toNum(pr?.tiempo_objetivo);
+                  {(()=>{ const b = x.base_tiempo||pr?.base_tiempo||"ud";
+                    if (b!=="m") return null;
+                    return <span style={{fontSize:11.5,color:C.blue,fontWeight:700}}>
+                      × {toNum(mFinales)||0} m/ud = {minPorUd(x).toFixed(2)} min/{unidad||"ud"}
+                    </span>; })()}
+                  {(()=>{ const tc = toNum(pr?.tiempo_objetivo), b = x.base_tiempo||pr?.base_tiempo||"ud";
                     if (!tc || Math.abs(tc - toNum(x.min_obj)) < 0.005) return null;
                     return <span style={{fontSize:11.5,color:C.amber,fontWeight:700}}>
-                      (catálogo: {tc} min/ud)
+                      (catálogo: {tc} min/{b})
                     </span>; })()}
                 </div>
               </div>
@@ -3275,14 +3323,17 @@ function ProductoForm({ onBack, ep, procesos, mps, centros, moldes = [] }) {
                 <div style={{background:tObj||tAct?C.blueBg:C.amberBg,borderRadius:10,padding:"10px 12px",marginBottom:12,
                   fontSize:12.5,color:tObj||tAct?C.text:C.amber,fontWeight:tObj||tAct?400:700,lineHeight:1.6}}>
                   {tObj||tAct
-                    ? <>Del catálogo: actual <b>{tAct||"—"}</b> · objetivo <b>{tObj||"—"}</b> min/ud. Se ha puesto el objetivo; cámbialo si este producto tarda distinto.</>
+                    ? <>Del catálogo: actual <b>{tAct||"—"}</b> · objetivo <b>{tObj||"—"}</b> min/{c?.base_tiempo||"ud"}. Se ha puesto el objetivo; cámbialo si este producto tarda distinto.
+                        {c?.base_tiempo==="m" && <div style={{marginTop:4,color:C.blue,fontWeight:700}}>
+                          Se mide por metro: {tObj||0} × {toNum(mFinales)||0} m/ud = <b>{((tObj||0)*toNum(mFinales)).toFixed(2)} min/{unidad||"ud"}</b>
+                        </div>}</>
                     : <>⚠️ Este proceso no tiene tiempos en el catálogo. Escríbelo aquí o defínelos en Procesos.</>}
                 </div>
               );
             })()}
             <div style={{display:"flex",gap:8,alignItems:"flex-end"}}>
               <div style={{flex:1}}>
-                <Field dec label={`Tiempo para este producto (min/${unidad||"ud"})`} value={minObj} onChange={setMinObj} placeholder="1.20" min="0.01" step="0.01"/>
+                <Field dec label={`Tiempo para este producto (min/${procesos.find(p=>p.id===selProc)?.base_tiempo==="m" ? "m" : (unidad||"ud")})`} value={minObj} onChange={setMinObj} placeholder="1.20" min="0.01" step="0.01"/>
               </div>
               <button onClick={addProc} style={{background:C.accent,border:"none",color:"#fff",borderRadius:12,padding:"14px 22px",fontFamily:F.h,fontWeight:800,fontSize:16,cursor:"pointer",marginBottom:14}}>＋</button>
             </div>
@@ -3531,7 +3582,7 @@ function CostesScreen({ onBack, centros }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // PLANIFICACIÓN — plan mensual → recursos → organizador → cuadre → cierre semanal
 // ═══════════════════════════════════════════════════════════════════════════════
-function PlanificacionScreen({ onBack, perfil, productos, mps, producciones, centros, lineas, moldes=[] }) {
+function PlanificacionScreen({ onBack, perfil, productos, mps, producciones, centros, lineas, moldes=[], procesos=[] }) {
   const [tab, setTab] = useState("mes");
   const [centroId, setCentroId] = useState("");
   const centro = centros.find(c=>c.id===centroId);
@@ -3648,7 +3699,20 @@ function PlanificacionScreen({ onBack, perfil, productos, mps, producciones, cen
       <Header title={(centro?.nombre||"PLANIFICACIÓN").toUpperCase()} onBack={()=>setCentroId("")}
         sub="Planificación · toca ‹ para cambiar de centro"/>
       <div style={{position:"sticky",top:0,zIndex:16,boxShadow:"0 2px 10px rgba(15,23,42,0.10)"}}>
-        <div style={{display:"flex",gap:6,padding:"10px 12px",background:C.navy}}>
+        {/* EL MES, siempre arriba y visible desde cualquier pestaña */}
+        <div style={{background:C.navy,padding:"8px 12px 10px",display:"flex",alignItems:"center",gap:8}}>
+          <button onClick={()=>setPeriodo(sumaPeriodo(periodo,-1))}
+            style={{width:50,height:50,borderRadius:13,background:"rgba(255,255,255,0.15)",border:"none",
+              color:"#fff",fontSize:24,fontWeight:800,cursor:"pointer",flexShrink:0}}>‹</button>
+          <div style={{flex:1,textAlign:"center",minWidth:0}}>
+            <div style={{fontFamily:F.h,fontWeight:800,fontSize:20,color:"#fff",textTransform:"capitalize",lineHeight:1.15}}>{nombreMes(periodo)}</div>
+            <div style={{fontSize:11.5,color:"rgba(255,255,255,0.6)"}}>{diasLaborablesMes(periodo).length} días laborables · {semanas.length} semanas</div>
+          </div>
+          <button onClick={()=>setPeriodo(sumaPeriodo(periodo,1))}
+            style={{width:50,height:50,borderRadius:13,background:"rgba(255,255,255,0.15)",border:"none",
+              color:"#fff",fontSize:24,fontWeight:800,cursor:"pointer",flexShrink:0}}>›</button>
+        </div>
+        <div style={{display:"flex",gap:6,padding:"0 12px 10px",background:C.navy}}>
           {TABS.map(([k,l])=>(
             <button key={k} onClick={()=>setTab(k)}
               style={{flex:1,background:tab===k?"#fff":"rgba(255,255,255,0.12)",color:tab===k?C.navy:"#fff",
@@ -3690,7 +3754,7 @@ function PlanificacionScreen({ onBack, perfil, productos, mps, producciones, cen
           </div>
         )}
         {tab==="mes" && <PlanMesTab periodo={periodo} plan={planMes} guardar={guardarMes}
-          productos={prodCentro} mps={mps} semanas={semanas} planesSem={planesSem} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} turnosCentro={turnosCentro} centroNombre={centro?.nombre||""} perfil={perfil} ggMes={ggMes} irReparto={()=>setTab("reparto")}/>}
+          productos={prodCentro} mps={mps} semanas={semanas} planesSem={planesSem} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} turnosCentro={turnosCentro} centroNombre={centro?.nombre||""} perfil={perfil} ggMes={ggMes} procesos={procesos} irReparto={()=>setTab("reparto")}/>}
         {tab==="reparto" && <RepartoTab periodo={periodo} semanas={semanas} planMes={planMes} planesSem={planesSem}
           productos={prodCentro} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} centroId={centroId} moldes={moldes} irASemana={(s)=>{ setSemana(s); setTab("semana"); }} irAlMes={()=>setTab("mes")}/>}
         {tab==="semana" && <PlanSemanaTab semana={semana} setSemana={setSemana} semanas={semanas} plan={planSem}
@@ -3868,16 +3932,17 @@ function LineaEditor({ it, productos, otros, onGuardar, onQuitar, onCerrar }) {
 }
 
 // ── TAB 1: PLAN MENSUAL ────────────────────────────────────────────────────────
-function PlanMesTab({ periodo, plan, guardar, productos, mps, semanas, planesSem, slotsDia=SLOTS_DIA, persLinea=3, persDia=12, turnosCentro=TURNOS_ABIERTOS, centroNombre="", perfil, ggMes=0, irReparto }) {
+function PlanMesTab({ periodo, plan, guardar, productos, mps, semanas, planesSem, slotsDia=SLOTS_DIA, persLinea=3, persDia=12, turnosCentro=TURNOS_ABIERTOS, centroNombre="", perfil, ggMes=0, procesos=[], irReparto }) {
   const items = plan.items || [];
   const setItems = (v) => guardar({ items: v });
   const dias = diasLaborablesMes(periodo).length;
-  const r = calcRecursos(items, productos, persLinea);
+  const r = calcRecursos(items, productos, persLinea, procesos);
   // El plan manda: la plantilla sale de lo que hace falta para fabricarlo
-  const persNecesarias = Math.min(persDia,
-    Math.ceil(Math.ceil(r.personaTurnos/(dias||1)) / persLinea) * persLinea);
+  const persLineaDia = Math.ceil(Math.ceil(r.personaTurnos/(dias||1)) / persLinea) * persLinea;
+  const persApoyoDia = Math.ceil((r.horasApoyo||0) / (dias||1) / 8);
+  const persNecesarias = Math.min(persDia, persLineaDia) + persApoyoDia;
   const persProg = persNecesarias;   // siempre lo que pide el plan
-  const slotsEfect = Math.max(1, Math.min(slotsDia, Math.floor(persProg / persLinea)));
+  const slotsEfect = Math.max(1, Math.min(slotsDia, Math.floor(Math.min(persDia, persLineaDia) / persLinea)));
   const capacidad = dias * slotsEfect;
   const ocupacion = capacidad>0 ? r.slots/capacidad : 0;
   const nLineasTxt = `${slotsDia/turnosCentro} línea${slotsDia/turnosCentro!==1?"s":""}`;
@@ -4109,7 +4174,8 @@ function PlanMesTab({ periodo, plan, guardar, productos, mps, semanas, planesSem
             <span style={{fontSize:13,color:C.mutedD}}>personas al día</span>
           </div>
           <div style={{fontSize:12,color:C.mutedD,lineHeight:1.6}}>
-            Son <b>{Math.floor(slotsEfect/turnosCentro)} línea{Math.floor(slotsEfect/turnosCentro)!==1?"s":""} × {turnosCentro} turno{turnosCentro!==1?"s":""}</b> ({slotsEfect} de los {slotsDia} huecos del centro).
+            <b>{Math.min(persDia, persLineaDia)} en línea</b> ({Math.floor(slotsEfect/turnosCentro)} línea{Math.floor(slotsEfect/turnosCentro)!==1?"s":""} × {turnosCentro} turno{turnosCentro!==1?"s":""}, {slotsEfect} de {slotsDia} huecos)
+            {persApoyoDia>0 && <> + <b style={{color:C.blue}}>{persApoyoDia} de apoyo</b> fuera de línea ({Math.round(r.horasApoyo)} h al mes: desalado y similares)</>}.
  Sale solo de lo que has puesto a fabricar: cambia el plan y cambia esta cifra.
           </div>
           {persNecesarias >= persDia && r.slots > capacidad && (
@@ -5897,7 +5963,7 @@ export default function App() {
       {view==="moldes"    && <MoldesScreen onBack={back} productos={productos}/>}
       {view==="terminal"  && <TerminalPlanta onBack={back} perfil={perfil} productos={productos} lineas={lineas}
         turnos={turnos} centros={centros} mps={mps} motivos={motivos} ordenes={ordenesRoot} moldes={moldes}/>}
-      {view==="planificacion" && <PlanificacionScreen onBack={back} perfil={perfil} productos={productos} mps={mps} producciones={produccionesRoot} centros={centros} lineas={lineas} moldes={moldes}/>}
+      {view==="planificacion" && <PlanificacionScreen onBack={back} perfil={perfil} productos={productos} mps={mps} producciones={produccionesRoot} centros={centros} lineas={lineas} moldes={moldes} procesos={procesos}/>}
       {view==="ordenes"   && <OrdenesScreen onBack={back} perfil={perfil} productos={productos} lineas={lineas} turnos={turnos} centros={centros} mps={mps} motivos={motivos} usuarios={usuarios}/>}
       {view==="diario"    && <DiarioScreen onBack={back} productos={productos} lineas={lineas} turnos={turnos} mps={mps} motivos={motivos} usuarios={usuarios} centros={centros}/>}
       {view==="analitica" && <AnaliticaScreen onBack={back} productos={productos} mps={mps} lineas={lineas} turnos={turnos} usuarios={usuarios} centros={centros}/>}
