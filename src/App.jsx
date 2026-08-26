@@ -3500,6 +3500,39 @@ function ProductoForm({ onBack, ep, procesos, mps, centros, moldes = [] }) {
             <span style={{fontFamily:F.h,fontWeight:800,fontSize:15,color:C.blue}}>TOTAL CALCULADO</span>
             <span style={{fontFamily:F.h,fontWeight:800,fontSize:18,color:C.blue}}>{costeCalculado.toFixed(2)} €/{unidad||"ud"}</span>
           </div>
+
+          {pa.length>0 && costeMOMeta>0 && (() => {
+            const ahorro = costeMOTotal - costeMOMeta;
+            const totalMeta = costeMPTotal + costeMOMeta;
+            if (Math.abs(ahorro) < 0.005) return (
+              <div style={{background:"#fff",borderRadius:10,padding:"10px 12px",marginTop:8,fontSize:12.5,color:C.mutedD,lineHeight:1.6}}>
+                Los tiempos reales ya están en el objetivo: no hay margen de mejora por aquí.
+              </div>
+            );
+            return (
+              <div style={{background:"#fff",borderRadius:10,padding:"11px 13px",marginTop:8,fontSize:12.5,color:C.text,lineHeight:1.7}}>
+                <div style={{fontFamily:F.h,fontWeight:800,fontSize:12.5,color:C.mutedD,marginBottom:4}}>SI SE ALCANZARAN LOS OBJETIVOS</div>
+                <div style={{display:"flex",justifyContent:"space-between"}}>
+                  <span>Mano de obra al objetivo</span>
+                  <b>{costeMOMeta.toFixed(2)} €</b>
+                </div>
+                <div style={{display:"flex",justifyContent:"space-between"}}>
+                  <span>Total del producto</span>
+                  <b>{totalMeta.toFixed(2)} €/{unidad||"ud"}</b>
+                </div>
+                <div style={{display:"flex",justifyContent:"space-between",color:ahorro>0?C.green:C.red,fontWeight:800,borderTop:`1px solid ${C.border}`,marginTop:4,paddingTop:4}}>
+                  <span>{ahorro>0?"Se ahorraría":"Costaría más"}</span>
+                  <span>{Math.abs(ahorro).toFixed(2)} €/{unidad||"ud"}
+                    {costeCalculado>0 && <span style={{fontWeight:600}}> · {Math.round(Math.abs(ahorro)/costeCalculado*100)}%</span>}</span>
+                </div>
+                {toNum(objDiario)>0 && ahorro>0 && (
+                  <div style={{fontSize:11.5,color:C.mutedD,marginTop:4}}>
+                    A {num(toNum(objDiario))} uds/día son <b style={{color:C.green}}>{eur(ahorro*toNum(objDiario)*21)}</b> al mes.
+                  </div>
+                )}
+              </div>
+            );
+          })()}
           <div style={{display:"grid",gridTemplateColumns:"1fr auto",gap:8,alignItems:"end",marginTop:10}}>
             <Field dec label="Coste objetivo a guardar (€/ud)" value={coste} onChange={setCoste} type="number" placeholder="3.50" min="0" step="0.01"/>
             {costeCalculado>0 && <button onClick={()=>setCoste(costeCalculado.toFixed(2))}
