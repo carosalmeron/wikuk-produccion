@@ -3871,6 +3871,7 @@ function PlanificacionScreen({ onBack, perfil, productos, mps, producciones, cen
   const semanaHoy = isoWeek(new Date().toISOString().slice(0,10));
   const [semana, setSemana] = useState(semanas.includes(semanaHoy) ? semanaHoy : semanas[0]);
   useEffect(()=>{ const ss = semanasDeMes(periodo); if(!ss.includes(semana)) setSemana(ss[0]); },[periodo]);
+  useEffect(()=>{ if(tab==="reparto") setTab("semana"); },[tab]);
 
   const [costesCfg] = useCol("config_costes");
   const ggMes = toNum(costesCfg.find(c => c.id === centroId)?.fijos_mensuales);
@@ -3925,7 +3926,7 @@ function PlanificacionScreen({ onBack, perfil, productos, mps, producciones, cen
     return destino.length;
   };
 
-  const TABS = [["mes","📅 Mes"],["reparto","✂️ Reparto"],["semana","🗓️ Semana"],["cierre","🔒 Cierre"]];
+  const TABS = [["mes","📅 Mes"],["semana","🗓️ Planificar"],["cierre","🔒 Cierre"]];
 
   // ── Primero se elige el centro: no se carga nada hasta entonces
   if (!centroId) return (
@@ -4022,11 +4023,10 @@ function PlanificacionScreen({ onBack, perfil, productos, mps, producciones, cen
           </div>
         )}
         {tab==="mes" && <PlanMesTab periodo={periodo} plan={planMes} guardar={guardarMes}
-          productos={prodCentro} mps={mps} semanas={semanas} planesSem={planesSem} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} turnosCentro={turnosCentro} centroNombre={centro?.nombre||""} perfil={perfil} ggMes={ggMes} procesos={procesos} irReparto={()=>setTab("reparto")}/>}
-        {tab==="reparto" && <RepartoTab periodo={periodo} semanas={semanas} planMes={planMes} planesSem={planesSem}
-          productos={prodCentro} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} centroId={centroId} moldes={moldes} irASemana={(s)=>{ setSemana(s); setTab("semana"); }} irAlMes={()=>setTab("mes")}/>}
+          productos={prodCentro} mps={mps} semanas={semanas} planesSem={planesSem} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} turnosCentro={turnosCentro} centroNombre={centro?.nombre||""} perfil={perfil} ggMes={ggMes} procesos={procesos} irReparto={()=>setTab("semana")}/>}
         {tab==="semana" && <PlanSemanaTab semana={semana} setSemana={setSemana} semanas={semanas} plan={planSem}
-          guardar={guardarSem} productos={prodCentro} mps={mps} perfil={perfil} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} turnosCentro={turnosCentro} cfgLineas={cfgLineas} centroNombre={centro?.nombre||""} replicarEnMes={replicarEnMes} nSemanasMes={semanas.length} moldes={moldes}/>}
+          guardar={guardarSem} productos={prodCentro} mps={mps} perfil={perfil} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} turnosCentro={turnosCentro} cfgLineas={cfgLineas} centroNombre={centro?.nombre||""} replicarEnMes={replicarEnMes} nSemanasMes={semanas.length} moldes={moldes}
+          planMes={planMes} semanasMes={planesSem}/>}
         {tab==="cierre" && <CierreSemanaTab semana={semana} setSemana={setSemana} semanas={semanas} plan={planSem}
           guardar={guardarSem} productos={prodCentro} mps={mps} producciones={producciones} perfil={perfil}/>}
       </div>
@@ -4463,260 +4463,13 @@ function PlanMesTab({ periodo, plan, guardar, productos, mps, semanas, planesSem
       </Card>
 
       <div style={{display:"grid",gap:9}}>
-        <Btn onClick={irReparto} v="ghost">✂️ Repartir en las {semanas.length} semanas del mes →</Btn>
+        <Btn onClick={irReparto} v="ghost">🗓️ Planificar estas unidades en el calendario →</Btn>
         <Btn onClick={imprimir} v="secondary">🖨️ Imprimir la planificación del mes</Btn>
       </div>
     </>
   );
 }
 
-
-// ── TAB: REPARTO DEL PLAN MENSUAL EN SEMANAS ───────────────────────────────────
-// Tabla: una fila por producto, una casilla por semana.
-function RepartoTab({ periodo, semanas, planMes, planesSem, productos, moldes=[],
-                      slotsDia=SLOTS_DIA, persLinea=3, centroId="", irASemana, irAlMes }) {
-  const items = planMes.items || [];
-  const [draft, setDraft] = useState({});
-  const [guardado, setGuardado] = useState(false);
-
-  const cerradas = (s) => !!planesSem.find(p => p.semana === s)?.cerrado_plan;
-  const abiertas = semanas.filter(s => !cerradas(s));
-  const capSemana = slotsDia * 5;
-
-  useEffect(() => {
-    const d = {};
-    semanas.forEach(s => {
-      d[s] = {};
-      (planesSem.find(p => p.semana === s)?.items || []).forEach(it => {
-        d[s][it.producto_id] = (d[s][it.producto_id]||0) + toNum(it.cantidad);
-      });
-    });
-    setDraft(d); setGuardado(false);
-  }, [periodo, planesSem.length]);
-
-  const prodDe  = (pid) => productos.find(x => x.id === pid);
-  const ritmoDe = (pid) => toNum(prodDe(pid)?.uds_turno_linea);
-  const anchoDe = (pid) => Math.max(1, Math.ceil((parseInt(prodDe(pid)?.personas_linea)||3) / persLinea));
-  const slotsDe = (pid, uds) => ritmoDe(pid) > 0 ? (uds / ritmoDe(pid)) * anchoDe(pid) : 0;
-  const udsQueCaben = (pid, sl) => ritmoDe(pid) > 0 ? (sl / anchoDe(pid)) * ritmoDe(pid) : 0;
-  const moldeKey = (pid) => { const p = prodDe(pid); return p?.molde_id || (p?.molde ? `txt:${p.molde}` : ""); };
-  const moldeNom = (k) => !k ? "Sin molde" : (k.startsWith("txt:") ? k.slice(4) : (moldes.find(m=>m.id===k)?.nombre || "Molde"));
-
-  const enSemana  = (s, pid) => toNum(draft[s]?.[pid]);
-  const repartido = (pid) => semanas.reduce((a,s) => a + enSemana(s,pid), 0);
-  const pendiente = (it)  => toNum(it.cantidad) - repartido(it.producto_id);
-  const cargaSemana = (s) => items.reduce((a,it) => a + slotsDe(it.producto_id, enSemana(s, it.producto_id)), 0);
-  const sinRepartir = items.filter(it => Math.abs(pendiente(it)) > 0.5);
-
-  const setQ = (s, pid, v) => { setGuardado(false);
-    setDraft(p => ({ ...p, [s]: { ...(p[s]||{}), [pid]: v==="" ? "" : Math.max(0, toNum(v)) } })); };
-
-  // reparte a partes iguales lo que falte de un producto
-  const autoUno = (it) => {
-    if (!abiertas.length) return;
-    const falta = pendiente(it);
-    if (Math.abs(falta) < 0.5) return;
-    const trozo = Math.round(falta/abiertas.length);
-    setGuardado(false);
-    setDraft(p => {
-      const n = { ...p };
-      abiertas.forEach((s,i) => {
-        const base = toNum(n[s]?.[it.producto_id]);
-        const add = i === abiertas.length-1 ? falta - trozo*(abiertas.length-1) : trozo;
-        n[s] = { ...(n[s]||{}), [it.producto_id]: Math.max(0, Math.round(base + add)) };
-      });
-      return n;
-    });
-  };
-  const autoTodo = () => items.forEach(autoUno);
-
-  // propuesta completa: carga pareja y moldes juntos
-  const proponer = () => {
-    if (!items.length) return;
-    if (!abiertas.length) { window.alert("Todas las semanas del mes están cerradas."); return; }
-    if (items.every(it => ritmoDe(it.producto_id) <= 0)) {
-      window.alert("Ningún producto tiene ritmo definido. Ponlo en su ficha."); return; }
-    if (!window.confirm("Reparto el mes solo: carga pareja entre semanas, sin pasarme de la capacidad y juntando los del mismo molde.\n\nSe sobrescribe el reparto de las semanas abiertas. ¿Seguir?")) return;
-
-    const claves = [...new Set(items.map(it => moldeKey(it.producto_id)))];
-    const cola = [...items].filter(it => ritmoDe(it.producto_id) > 0)
-      .sort((a,b) => {
-        const ka = moldeKey(a.producto_id), kb = moldeKey(b.producto_id);
-        if (ka !== kb) return claves.indexOf(ka) - claves.indexOf(kb);
-        return toNum(b.cantidad) - toNum(a.cantidad);
-      }).map(it => ({ pid: it.producto_id, pend: toNum(it.cantidad) }));
-
-    const d = {}; semanas.forEach(s => { d[s] = cerradas(s) ? { ...(draft[s]||{}) } : {}; });
-    const cargaDe = (s) => items.reduce((a,it) => a + slotsDe(it.producto_id, d[s][it.producto_id]||0), 0);
-    const total = cola.reduce((a,x) => a + slotsDe(x.pid, x.pend), 0);
-    const objetivo = Math.min(capSemana, total / abiertas.length);
-
-    let i = 0;
-    for (const paso of [objetivo, capSemana]) {
-      for (const s of abiertas) {
-        let cap = paso - cargaDe(s);
-        while (i < cola.length && cap > 0.05) {
-          const x = cola[i];
-          if (x.pend <= 0.5) { i++; continue; }
-          const nec = slotsDe(x.pid, x.pend);
-          if (nec <= cap + 0.05) { d[s][x.pid] = (d[s][x.pid]||0) + Math.round(x.pend); cap -= nec; x.pend = 0; i++; }
-          else { const u = Math.floor(udsQueCaben(x.pid, cap)); if (u >= 1) { d[s][x.pid] = (d[s][x.pid]||0) + u; x.pend -= u; } cap = 0; }
-        }
-      }
-      i = 0;
-    }
-    setDraft(d); setGuardado(false);
-    const fuera = cola.filter(x => x.pend > 0.5);
-    if (fuera.length) window.alert("No cabe todo en el mes:\n\n" +
-      fuera.map(x => `· ${prodDe(x.pid)?.nombre}: ${num(x.pend)} uds sin colocar`).join("\n"));
-  };
-
-  const vaciar = () => {
-    if (!window.confirm("¿Poner a cero todo el reparto?")) return;
-    setGuardado(false);
-    setDraft(p => { const n = {}; semanas.forEach(s => { n[s] = cerradas(s) ? (p[s]||{}) : {}; }); return n; });
-  };
-
-  const semanaItems = (s) => items
-    .map(it => ({ producto_id: it.producto_id, cantidad: enSemana(s, it.producto_id) }))
-    .filter(x => x.cantidad > 0);
-
-  const guardar = async () => {
-    for (const s of abiertas) {
-      const prev = planesSem.find(p => p.semana === s)?.items || [];
-      const extras = prev.filter(x => !items.some(it => it.producto_id === x.producto_id));
-      const nuevos = semanaItems(s).map(x => ({ id: uid(), producto_id: x.producto_id, cantidad: x.cantidad }));
-      await save("planes_semana", `${s}__${centroId}`, { semana: s, periodo, centro: centroId, items: [...extras, ...nuevos], desde_plan_mes: true });
-    }
-    setGuardado(true);
-  };
-
-  if (items.length === 0) return (
-    <Card color={C.amber+"66"}>
-      <div style={{fontFamily:F.h,fontWeight:800,fontSize:15,color:C.text,marginBottom:5}}>📭 Nada que repartir</div>
-      <div style={{fontSize:12.5,color:C.mutedD,lineHeight:1.6,marginBottom:11}}>
-        El plan de {nombreMes(periodo)} está vacío para este centro. Ve a <b>📅 Mes</b>, añade productos y vuelve aquí.
-      </div>
-      <Btn v="secondary" onClick={()=>irAlMes && irAlMes()}>📅 Ir al plan del mes</Btn>
-    </Card>
-  );
-
-  return (
-    <>
-      <Card style={{marginBottom:12}}>
-        <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text,marginBottom:3}}>✂️ Reparto en semanas</div>
-        <div style={{fontSize:12.5,color:C.mutedD,lineHeight:1.6,marginBottom:11}}>
-          Escribe cuánto va en cada semana. El chip de la derecha te dice lo que falta por repartir de cada producto.
-        </div>
-        <button onClick={proponer}
-          style={{width:"100%",background:C.accent,border:"none",color:"#fff",borderRadius:12,padding:"15px",
-            fontFamily:F.h,fontWeight:800,fontSize:15,cursor:"pointer",marginBottom:8}}>⚡ Repartir el mes solo</button>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-          <button onClick={autoTodo} style={{background:C.blueBg,border:`1.5px solid ${C.blue}55`,color:C.blue,borderRadius:11,padding:"12px",fontFamily:F.h,fontWeight:800,fontSize:13,cursor:"pointer"}}>⚖️ A partes iguales</button>
-          <button onClick={vaciar} style={{background:"#fff",border:`1.5px solid ${C.border}`,color:C.mutedD,borderRadius:11,padding:"12px",fontFamily:F.h,fontWeight:800,fontSize:13,cursor:"pointer"}}>↺ Empezar de cero</button>
-        </div>
-      </Card>
-
-      {items.map(it => {
-        const p = prodDe(it.producto_id);
-        const falta = pendiente(it);
-        const ok = Math.abs(falta) < 0.5;
-        return (
-          <Card key={it.id} style={{marginBottom:10}} color={ok?C.green+"55":C.amber+"66"}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:9}}>
-              <div style={{minWidth:0}}>
-                <div style={{fontFamily:F.h,fontWeight:800,fontSize:15,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p?.nombre||"?"}</div>
-                {prodSub(p) && <div style={{fontSize:12,color:C.blue,fontWeight:600,marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{prodSub(p)}</div>}
-                <div style={{fontSize:11.5,color:C.mutedD,marginTop:2}}>
-                  {ritmoDe(it.producto_id)>0
-                    ? <>⏱️ {num(ritmoDe(it.producto_id))} uds/turno</>
-                    : <span style={{color:C.red,fontWeight:700}}>⚠️ sin ritmo</span>}
-                  {" · 🔧 "}{moldeNom(moldeKey(it.producto_id))}
-                </div>
-                <div style={{fontSize:11.5,color:C.mutedD,marginTop:1}}>Plan del mes: {num(it.cantidad)} uds</div>
-              </div>
-              <span style={{flexShrink:0,background:ok?C.greenBg:C.amberBg,border:`1.5px solid ${ok?C.green:C.amber}`,color:ok?C.green:C.amber,
-                borderRadius:20,padding:"5px 12px",fontFamily:F.h,fontWeight:800,fontSize:12.5}}>
-                {ok ? "✔ repartido" : (falta>0 ? `faltan ${num(falta)}` : `sobran ${num(-falta)}`)}
-              </span>
-            </div>
-
-            <div style={{display:"grid",gridTemplateColumns:`repeat(${Math.min(semanas.length,5)},1fr)`,gap:6}}>
-              {semanas.map(s => {
-                const bloq = cerradas(s);
-                return (
-                  <div key={s}>
-                    <div style={{fontSize:10.5,color:bloq?C.muted:C.mutedD,fontWeight:800,textAlign:"center",marginBottom:3}}>
-                      {bloq?"🔒 ":""}S{s.split("-W")[1]}
-                    </div>
-                    <input type="text" inputMode="numeric" disabled={bloq}
-                      value={draft[s]?.[it.producto_id] ?? ""}
-                      onChange={e=>setQ(s, it.producto_id, e.target.value.replace(/[^0-9]/g,""))}
-                      style={{width:"100%",padding:"12px 4px",borderRadius:10,border:`1.5px solid ${C.border}`,
-                        background:bloq?C.card2:"#fff",color:bloq?C.muted:C.text,fontSize:16,fontFamily:F.h,fontWeight:700,
-                        textAlign:"center",boxSizing:"border-box"}}/>
-                  </div>
-                );
-              })}
-            </div>
-
-            {!ok && (
-              <button onClick={()=>autoUno(it)}
-                style={{width:"100%",marginTop:9,background:"#fff",border:`1.5px solid ${C.blue}55`,color:C.blue,borderRadius:10,padding:"9px",fontFamily:F.h,fontWeight:800,fontSize:12.5,cursor:"pointer"}}>
-                ⚖️ Repartir {falta>0?`estas ${num(falta)} uds`:`quitar ${num(-falta)} uds de más`}
-              </button>
-            )}
-          </Card>
-        );
-      })}
-
-      <Card style={{marginBottom:12}}>
-        <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text,marginBottom:10}}>👥 Cómo queda cada semana</div>
-        {semanas.map(s => {
-          const carga = cargaSemana(s);
-          const pct = capSemana>0 ? carga/capSemana : 0;
-          const col = pct>1.001 ? C.red : pct<0.6 ? C.amber : C.green;
-          const ms = [...new Set(items.filter(it => enSemana(s,it.producto_id)>0).map(it => moldeKey(it.producto_id)))];
-          return (
-            <div key={s} onClick={()=>irASemana(s)} style={{padding:"10px 0",borderBottom:`1px solid ${C.card2}`,cursor:"pointer"}}>
-              <div style={{display:"flex",alignItems:"center",gap:10}}>
-                <div style={{minWidth:0,flex:1}}>
-                  <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text}}>{cerradas(s)?"🔒 ":""}Semana {s.split("-W")[1]}</div>
-                  <div style={{fontSize:11.5,color:C.mutedD}}>{rotuloSemana(s)}{ms.length?` · 🔧 ${ms.map(moldeNom).join(" · ")}`:""}</div>
-                </div>
-                <div style={{textAlign:"right",flexShrink:0}}>
-                  <div style={{fontFamily:F.h,fontWeight:900,fontSize:17,color:col}}>{Math.round(pct*100)}%</div>
-                  <div style={{fontSize:10,color:C.mutedD}}>{Math.ceil(carga/5*persLinea)} pers./día</div>
-                </div>
-                <span style={{color:C.muted,fontSize:17,flexShrink:0}}>›</span>
-              </div>
-              <div style={{height:7,background:C.card2,borderRadius:4,overflow:"hidden",marginTop:6}}>
-                <div style={{width:Math.min(100,pct*100)+"%",height:"100%",background:col,borderRadius:4}}/>
-              </div>
-            </div>
-          );
-        })}
-      </Card>
-
-      <div style={{height:78}}/>
-      <div style={{position:"fixed",left:0,right:0,bottom:0,zIndex:20,background:"rgba(255,255,255,0.97)",
-        borderTop:`1px solid ${C.border}`,padding:"10px 12px calc(10px + env(safe-area-inset-bottom))",
-        boxShadow:"0 -4px 14px rgba(15,23,42,0.08)"}}>
-        <div style={{maxWidth:900,margin:"0 auto",display:"flex",gap:8,alignItems:"center"}}>
-          <div style={{flex:"0 0 auto",fontSize:11.5,color:sinRepartir.length?C.amber:C.green,fontFamily:F.h,fontWeight:800,lineHeight:1.3,maxWidth:96}}>
-            {sinRepartir.length ? `${sinRepartir.length} sin cuadrar` : "✔ Todo repartido"}
-          </div>
-          <button onClick={guardar}
-            style={{flex:1,background:guardado?C.greenBg:C.accent,color:guardado?C.green:"#fff",
-              border:guardado?`1.5px solid ${C.green}`:"none",borderRadius:12,padding:"15px 10px",
-              fontFamily:F.h,fontWeight:800,fontSize:15,cursor:"pointer"}}>
-            {guardado?"✔ Guardado":"💾 Guardar reparto"}
-          </button>
-        </div>
-      </div>
-    </>
-  );
-}
 
 // ── CALENDARIO INTERACTIVO DE LA SEMANA ────────────────────────────────────────
 const DIA_CORTO = (f) => {
@@ -4725,7 +4478,7 @@ const DIA_CORTO = (f) => {
 };
 const codigoCorto = (n="") => n.split(" ")[0].slice(0,13);
 
-function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLineas, turnosCentro=2, replicarEnMes, nSemanasMes=4, moldes=[] }) {
+function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLineas, turnosCentro=2, replicarEnMes, nSemanasMes=4, moldes=[], itemsMes=[], colocadoEnMes=()=>0 }) {
   const moldeDe = (p) => p?.molde_id || (p?.molde ? `txt:${(p.molde||"").trim().toLowerCase()}` : "");
   const nombreMolde = (k) => !k ? "Sin molde"
     : (k.startsWith("txt:") ? k.slice(4) : (moldes.find(m=>m.id===k)?.nombre || "Molde"));
@@ -4752,9 +4505,13 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
       return { ...x, grupo: mapa[k] };
     });
   })();
-  const items = plan.items || [];
+  const items = itemsMes;                  // el plan del mes manda
+  const moldesLinea = plan.moldes_linea || {};      // { nombreLinea: moldeId }
+  const montarMolde = (l, mid) => guardar({ moldes_linea: { ...moldesLinea, [l]: mid } });
   const [edit, setEdit] = useState(null);   // {fecha,turno,linea} o null
-  const [cogido, setCogido] = useState(null); // producto seleccionado en la bandeja
+  const [cogido, setCogido] = useState(null);       // producto seleccionado en la bandeja
+  const [lineaSel, setLineaSel] = useState(null);   // línea sobre la que se trabaja
+  const [pideMolde, setPideMolde] = useState(null); // línea a la que montar molde
 
   const ritmoDe = (p) => parseFloat(p?.uds_turno_linea)||0;
   const persDe  = (p) => parseInt(p?.personas_linea)||3;
@@ -4996,13 +4753,22 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
     return { bg: paleta[i%paleta.length], bd: bordes[i%bordes.length] }; };
   const colorDe = (pid) => colorMoldeK(moldeDe(productos.find(p=>p.id===pid)));
 
+  // Lo colocado esta semana
+  const colocadoSem = {};
+  cal.forEach(x=>{ colocadoSem[x.producto_id] = (colocadoSem[x.producto_id]||0) + (parseFloat(x.cantidad)||0); });
+  // Lo colocado en TODO el mes: otras semanas (guardado) + esta (en curso)
   const colocado = {};
-  cal.forEach(x=>{ colocado[x.producto_id] = (colocado[x.producto_id]||0) + (parseFloat(x.cantidad)||0); });
+  items.forEach(it => {
+    const pid = it.producto_id;
+    const guardadoSem = (plan.calendario||[]).filter(x=>x.producto_id===pid).reduce((a,x)=>a+toNum(x.cantidad),0);
+    colocado[pid] = colocadoEnMes(pid) - guardadoSem + (colocadoSem[pid]||0);
+  });
+  Object.keys(colocadoSem).forEach(pid => { if (!(pid in colocado)) colocado[pid] = colocadoSem[pid]; });
   const objetivo = {};
   items.forEach(it=>{ objetivo[it.producto_id] = (objetivo[it.producto_id]||0) + (parseFloat(it.cantidad)||0); });
   const asignar = (slot, pid, cantidad) => {
     const prod = productos.find(p=>p.id===pid);
-    // El calendario NO puede fabricar más de lo repartido: eso se cambia en Mes y Reparto
+    // El calendario no puede fabricar más de lo planificado: eso se cambia en la pestaña Mes
     const obj = objetivo[pid] || 0;
     if (obj > 0) {
       const eActual = enSlot(slot.fecha, slot.turno, slot.linea);
@@ -5015,7 +4781,7 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
         window.alert(
           `No cabe: de ${prod?.nombre} el reparto de esta semana son ${num(obj)} uds.\n\n` +
           `Ya hay ${num(resto)} colocadas en otros huecos, así que aquí caben ${num(Math.max(0,libre))} como mucho.\n\n` +
-          `Si de verdad quieres fabricar más, súbelo primero en 📅 Mes y ✂️ Reparto.`);
+          `Si de verdad quieres fabricar más, súbelo primero en 📅 Mes.`);
         return;
       }
     }
@@ -5044,13 +4810,13 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
     const falta = (objetivo[cogido]||0) - (colocado[cogido]||0);
     if (falta <= 0.5) {
       window.alert(
-        `${p.nombre} ya está entero en el calendario: ${num(colocado[cogido]||0)} de ${num(objetivo[cogido]||0)} uds.\n\n` +
-        `Para fabricar más, súbelo primero en 📅 Mes y repártelo en ✂️ Reparto.`);
+        `${p.nombre} ya está entero en el mes: ${num(colocado[cogido]||0)} de ${num(objetivo[cogido]||0)} uds.\n\n` +
+        `Para fabricar más, súbelo en 📅 Mes.`);
       setCogido(null);
       return;
     }
 
-    const montado = moldeMontado(f, t, l);
+    const montado = moldesLinea[l] || moldeMontado(f, t, l);
     const mio = moldeDe(p);
     if (montado && montado !== mio) {
       const min = minutosMolde(mio);
@@ -5081,11 +4847,44 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
         </button>
       )}
 
-      {!bloqueado && items.length>0 && (
+      {/* MOLDE MONTADO EN CADA LÍNEA */}
+      {!bloqueado && (
+        <Card style={{marginBottom:10}}>
+          <div style={{fontFamily:F.h,fontWeight:800,fontSize:13.5,color:C.text,marginBottom:3}}>🔧 Qué molde lleva cada línea</div>
+          <div style={{fontSize:11.5,color:C.mutedD,lineHeight:1.55,marginBottom:10}}>
+            Monta un molde y abajo saldrán solo los productos que se hacen con él.
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:8}}>
+            {CFG.map(l=>{
+              const mid = moldesLinea[l.nombre] || "";
+              const m = moldes.find(z=>z.id===mid);
+              const c = mid ? colorMoldeK(mid) : null;
+              const sel = lineaSel === l.nombre;
+              return (
+                <div key={l.nombre} onClick={()=>{ setLineaSel(l.nombre); setCogido(null); if(!mid) setPideMolde(l.nombre); }}
+                  style={{cursor:"pointer",borderRadius:12,padding:"10px 11px",
+                    background: mid ? c.bg : "#fff",
+                    border: `${sel?3:1.5}px solid ${sel ? C.accent : (mid ? c.bd : C.border)}`}}>
+                  <div style={{fontFamily:F.h,fontWeight:800,fontSize:13.5,color:C.text}}>⚙️ {l.nombre}</div>
+                  <div style={{fontSize:11,color:C.mutedD,marginBottom:6}}>{l.personas} personas</div>
+                  <div onClick={(e)=>{ e.stopPropagation(); setLineaSel(l.nombre); setPideMolde(l.nombre); }}
+                    style={{fontFamily:F.h,fontWeight:800,fontSize:12.5,color: mid?C.text:C.muted,
+                      background:"#fff",border:`1.5px ${mid?"solid":"dashed"} ${mid?c.bd:C.border}`,
+                      borderRadius:9,padding:"8px",textAlign:"center"}}>
+                    {m ? `🔧 ${m.nombre}` : "＋ montar molde"}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+
+      {!bloqueado && items.length>0 && lineaSel && moldesLinea[lineaSel] && (
         <div style={{position:"sticky",top:96,zIndex:12,background:C.bg,paddingBottom:8,marginBottom:6}}>
           <Card style={{padding:"11px 12px",marginBottom:0}} color={cogido?C.blue+"88":undefined}>
             <div style={{fontFamily:F.h,fontWeight:800,fontSize:13,color:C.text,marginBottom:3}}>
-              {cogido ? "Ahora toca un hueco libre" : "1 · Coge un producto"}
+              {cogido ? `Ahora toca un hueco de ${lineaSel}` : `${lineaSel} · molde ${nombreMolde(moldesLinea[lineaSel])}`}
             </div>
             {(() => {
               if (!cogido) return (
@@ -5130,7 +4929,7 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
             })()}
 
             <div style={{display:"flex",gap:7,overflowX:"auto",paddingBottom:3}}>
-              {items.map(it=>{
+              {items.filter(it=>moldeDe(productos.find(z=>z.id===it.producto_id))===moldesLinea[lineaSel]).map(it=>{
                 const p = productos.find(z=>z.id===it.producto_id);
                 const falta = (objetivo[it.producto_id]||0) - (colocado[it.producto_id]||0);
                 const justo = Math.abs(falta) <= 0.5;
@@ -5425,6 +5224,44 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
         })}
       </Card>
 
+      {/* HOJA: elegir el molde de una línea */}
+      {pideMolde && (
+        <div onClick={()=>setPideMolde(null)} style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.55)",zIndex:50,display:"flex",alignItems:"flex-end"}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:"#fff",width:"100%",borderRadius:"20px 20px 0 0",padding:18,maxHeight:"88vh",overflowY:"auto"}}>
+            <div style={{width:40,height:4,background:C.border,borderRadius:2,margin:"0 auto 14px"}}/>
+            <div style={{fontFamily:F.h,fontWeight:800,fontSize:17,color:C.text,marginBottom:3}}>¿Qué molde monta {pideMolde}?</div>
+            <div style={{fontSize:12.5,color:C.mutedD,lineHeight:1.55,marginBottom:14}}>
+              Mientras esté montado, esa línea solo hará productos de ese molde. Cambiarlo cuesta una parada.
+            </div>
+            {moldes.length===0 && <Empty icon="🔧" text="No hay moldes en el catálogo"/>}
+            <div style={{display:"grid",gap:9,marginBottom:12}}>
+              {moldes.map(m=>{
+                const c = colorMoldeK(m.id);
+                const pend = items.filter(it => moldeDe(productos.find(z=>z.id===it.producto_id))===m.id
+                  && ((objetivo[it.producto_id]||0) - (colocado[it.producto_id]||0)) > 0.5).length;
+                const puesto = moldesLinea[pideMolde] === m.id;
+                return (
+                  <button key={m.id} onClick={()=>{ montarMolde(pideMolde, m.id); setLineaSel(pideMolde); setPideMolde(null); }}
+                    style={{textAlign:"left",cursor:"pointer",background:c.bg,border:`${puesto?3:2}px solid ${c.bd}`,
+                      borderRadius:14,padding:"14px 15px"}}>
+                    <div style={{fontFamily:F.h,fontWeight:800,fontSize:16,color:C.text}}>🔧 {m.nombre}{puesto && " · puesto"}</div>
+                    <div style={{fontSize:12.5,color:C.mutedD,marginTop:2}}>
+                      {m.calibre?`cal ${m.calibre} · `:""}cambio {m.minutos_cambio ?? 30} min
+                    </div>
+                    <div style={{fontSize:12.5,fontWeight:700,color:pend?C.text:C.muted,marginTop:3}}>
+                      {pend ? `${pend} producto${pend!==1?"s":""} por planificar` : "nada pendiente con este molde"}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+            {moldesLinea[pideMolde] && (
+              <Btn v="secondary" onClick={()=>{ montarMolde(pideMolde, ""); setPideMolde(null); }}>Quitar el molde de esta línea</Btn>
+            )}
+          </div>
+        </div>
+      )}
+
       {edit && <SlotEditor slot={edit} entrada={enSlot(edit.fecha,edit.turno,edit.linea)} productos={productos}
         items={items} colocado={colocado} objetivo={objetivo} persLinea={persDeLinea(edit.linea)}
         calSlot={(pid)=>{ const e = enSlot(edit.fecha,edit.turno,edit.linea);
@@ -5539,7 +5376,7 @@ function SlotEditor({ slot, entrada, productos, items, colocado, objetivo, persL
             <div style={{background:C.redBg,border:`1.5px solid ${C.red}`,borderRadius:11,padding:"11px 13px",marginBottom:14,
               fontSize:12.5,color:C.red,fontWeight:700,lineHeight:1.55}}>
               ⛔ Te pasas del reparto: de este producto la semana tiene <b>{num(obj)} uds</b> y en este hueco caben <b>{num(Math.max(0,libre))}</b> como mucho.
-              Para fabricar más, súbelo en 📅 Mes y ✂️ Reparto.
+              Para fabricar más, súbelo en 📅 Mes.
             </div>
           );
         })()}
@@ -5570,7 +5407,11 @@ function SlotEditor({ slot, entrada, productos, items, colocado, objetivo, persL
 }
 
 // ── TAB 2: PLAN SEMANAL + CUADRE ───────────────────────────────────────────────
-function PlanSemanaTab({ semana, setSemana, semanas, plan, guardar, productos, mps, perfil, slotsDia=SLOTS_DIA, persLinea=3, persDia=12, turnosCentro=TURNOS_ABIERTOS, cfgLineas, centroNombre="", replicarEnMes, nSemanasMes=4, moldes=[] }) {
+function PlanSemanaTab({ semana, setSemana, semanas, plan, guardar, productos, mps, perfil, slotsDia=SLOTS_DIA, persLinea=3, persDia=12, turnosCentro=TURNOS_ABIERTOS, cfgLineas, centroNombre="", replicarEnMes, nSemanasMes=4, moldes=[], planMes={}, semanasMes=[] }) {
+  // Sin Reparto: el objetivo es el plan del MES y se va gastando al colocar en cualquier semana
+  const itemsMes = planMes.items || [];
+  const colocadoEnMes = (pid) => semanasMes.reduce((a,w) =>
+    a + (w.calendario||[]).filter(x=>x.producto_id===pid).reduce((b,x)=>b+toNum(x.cantidad),0), 0);
   const items = plan.items || [];
   const bloqueado = !!plan.cerrado_plan;
   const setItems = (v) => guardar({ items: v });
@@ -5714,7 +5555,8 @@ function PlanSemanaTab({ semana, setSemana, semanas, plan, guardar, productos, m
         </div>
       )}
 
-      <CalendarioSemana semana={semana} plan={plan} guardar={guardar} productos={productos} bloqueado={bloqueado} cfgLineas={cfgLineas} turnosCentro={turnosCentro} replicarEnMes={replicarEnMes} nSemanasMes={nSemanasMes} moldes={moldes}/>
+      <CalendarioSemana semana={semana} plan={plan} guardar={guardar} productos={productos} bloqueado={bloqueado} cfgLineas={cfgLineas} turnosCentro={turnosCentro} replicarEnMes={replicarEnMes} nSemanasMes={nSemanasMes} moldes={moldes}
+        itemsMes={itemsMes} colocadoEnMes={colocadoEnMes}/>
 
       <button onClick={()=>setVerObjetivo(v=>!v)}
         style={{width:"100%",background:"#fff",border:`1.5px solid ${C.border}`,color:C.mutedD,borderRadius:12,padding:"13px",fontFamily:F.h,fontWeight:800,fontSize:13.5,cursor:"pointer",marginBottom:12}}>
