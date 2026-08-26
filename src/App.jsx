@@ -375,18 +375,7 @@ function LoginScreen({ noUsers }) {
       await signInWithEmailAndPassword(auth, correo, pass);
     } catch (e) {
       if (e?.code === "auth/user-not-found") {
-        try {
-          const snap = await getDocs(collection(db, "usuarios"));
-          const doc0 = snap.docs.find(d => (d.data().usuario||"").toLowerCase() === u);
-          if (!doc0) { setErr("Ese usuario no existe. Pídeselo a tu responsable."); setBusy(false); return; }
-          const datos = doc0.data();
-          if ((datos.clave||"") !== pass) { setErr("Clave incorrecta"); setBusy(false); return; }
-          if (datos.activo === false) { setErr("Este usuario está dado de baja"); setBusy(false); return; }
-          const cred = await createUserWithEmailAndPassword(auth, correo, pass);
-          await save("usuarios", doc0.id, { uid: cred.user.uid });
-        } catch (e2) {
-          setErr(e2?.code === "auth/weak-password" ? "La clave debe tener 6 caracteres o más" : "No se ha podido entrar");
-        }
+        setErr("Ese usuario no existe. Pídeselo a tu responsable.");
       } else if (e?.code === "auth/wrong-password") {
         setErr("Clave incorrecta");
       } else {
@@ -563,19 +552,30 @@ function UsuarioForm({ onBack, ep, turnos, centros, onDone }) {
         await save("usuarios", ep.id, data);
         onDone("Usuario actualizado");
       } else {
-        if (!email.trim() || pass.length < 6) { setErr("Email y contraseña (mín. 6) obligatorios"); setBusy(false); return; }
-        // App secundaria: crear usuario sin cerrar la sesión del admin
+        // El operario entra con usuario y clave; los demás, con email
+        const esOperario = rol === "operario";
+        const correo = esOperario ? correoDeUsuario(usuarioLogin) : email.trim();
+        const clv    = esOperario ? clave : pass;
+        if (!esOperario && (!email.trim() || pass.length < 6)) {
+          setErr("Email y contraseña (mín. 6) obligatorios"); setBusy(false); return;
+        }
+        // App secundaria: crear la cuenta sin cerrar la sesión del admin
         const secondary = initializeApp(firebaseConfig, "secondary-"+uid());
         try {
           const sAuth = getAuth(secondary);
-          const cred = await createUserWithEmailAndPassword(sAuth, email.trim(), pass);
+          const cred = await createUserWithEmailAndPassword(sAuth, correo, clv);
           await save("usuarios", cred.user.uid, data);
           await signOut(sAuth);
-          onDone("Usuario creado — ya puede iniciar sesión");
+          onDone(esOperario
+            ? `Operario creado — entra con "${usuarioLogin.trim().toLowerCase()}" y su clave`
+            : "Usuario creado — ya puede iniciar sesión");
         } finally { deleteApp(secondary).catch(()=>{}); }
       }
     } catch (e) {
-      setErr(e.code==="auth/email-already-in-use" ? "Ese email ya está registrado" : "Error: "+e.message);
+      setErr(e.code==="auth/email-already-in-use"
+        ? (rol==="operario" ? "Ese usuario ya existe. Ponle otro." : "Ese email ya está registrado")
+        : e.code==="auth/weak-password" ? "La clave debe tener 6 caracteres o más"
+        : "Error: "+e.message);
     }
     setBusy(false);
   };
@@ -597,13 +597,20 @@ function UsuarioForm({ onBack, ep, turnos, centros, onDone }) {
             <div style={{background:C.blueBg,borderRadius:12,padding:"13px 14px",marginBottom:14}}>
               <div style={{fontFamily:F.h,fontWeight:800,fontSize:13,color:C.blue,marginBottom:3}}>🔑 Cómo entra a la pantalla de fábrica</div>
               <div style={{fontSize:12,color:C.mutedD,lineHeight:1.55,marginBottom:11}}>
-                Sin correo: un usuario corto y una clave. La cuenta se crea sola la primera vez que entre.
+                Sin correo: un usuario corto y una clave, que se crean al guardar.
               </div>
               <Field label="Usuario" value={usuarioLogin} onChange={v=>setUsuarioLogin(v.toLowerCase().replace(/[^a-z0-9._-]/g,""))} placeholder="ali"/>
               <Field label="Clave" value={clave} onChange={setClave} placeholder="mín. 6 caracteres"/>
-              {usuarioLogin && (clave||"").length>=6 && (
+              {usuarioLogin && (clave||"").length>=6 && !ep && (
                 <div style={{background:"#fff",borderRadius:9,padding:"9px 11px",fontSize:12.5,color:C.mutedD,lineHeight:1.5}}>
                   Entrará poniendo <b style={{color:C.text}}>{usuarioLogin}</b> y su clave, y le saldrá directamente el menú de fábrica.
+                </div>
+              )}
+              {ep && (
+                <div style={{background:C.amberBg,border:`1.5px solid ${C.amber}`,borderRadius:9,padding:"9px 11px",
+                  fontSize:12.5,color:C.amber,fontWeight:700,lineHeight:1.5}}>
+                  ⚠️ Cambiar aquí el usuario o la clave no cambia la cuenta con la que ya entra.
+                  Para eso hay que borrarla en Firebase y volver a crearla.
                 </div>
               )}
             </div>
