@@ -3182,7 +3182,7 @@ function ProductoForm({ onBack, ep, procesos, mps, centros, moldes = [] }) {
   };
   const costeMOTotal = pa.reduce((s,x)=>s+costeProcLinea(minPorUd(x,"real")), 0);
   // ── Velocidad que debería dar la línea con estos tiempos
-  const MIN_TURNO = 480;                                  // 8 h
+  const MIN_TURNO = 450;            // 7,5 h productivas (8 h menos 0,5 de descanso)
   const enLinea = pa.filter(x => !procesos.find(p=>p.id===x.proceso_id)?.apoyo);
   const nPers = parseInt(persLinea)||3;
   const minLinea = (campo) => enLinea.reduce((a,x)=>a+minPorUd(x,campo), 0);
@@ -3378,7 +3378,13 @@ function ProductoForm({ onBack, ep, procesos, mps, centros, moldes = [] }) {
                     <NumIn value={x.min_obj} step="0.01" suf={`min/${(x.base_tiempo||pr?.base_tiempo)==="m" ? "m" : (unidad||"ud")}`}
                       onChange={v=>setPa(prev=>prev.map(z=>z.proceso_id===x.proceso_id?{...z,min_obj:v}:z))}/>
                   </div>
-                  <span style={{fontSize:12.5,color:cst>0?C.green:C.red,fontWeight:800}}>
+                  <span style={{marginLeft:"auto",textAlign:"right",flexShrink:0}}>
+                    <div style={{fontFamily:F.h,fontWeight:900,fontSize:17,color:C.text,lineHeight:1.1}}>
+                      {minPorUd(x,"real").toFixed(2)}
+                    </div>
+                    <div style={{fontSize:10.5,color:C.mutedD}}>min/{unidad||"ud"}</div>
+                  </span>
+                  <span style={{fontSize:12.5,color:cst>0?C.green:C.red,fontWeight:800,width:"100%"}}>
                     {cst>0 ? `→ ${cst.toFixed(3)} €/${unidad||"ud"} de mano de obra` : "⚠️ falta el tiempo"}
                   </span>
                   {(()=>{ const co = costeProcLinea(minPorUd(x,"obj"));
@@ -3454,6 +3460,28 @@ function ProductoForm({ onBack, ep, procesos, mps, centros, moldes = [] }) {
               );
             })()}
           </div>
+          {pa.length>0 && (() => {
+            const totReal = pa.reduce((a,x)=>a+minPorUd(x,"real"), 0);
+            const totObj  = pa.reduce((a,x)=>a+minPorUd(x,"obj"), 0);
+            const totLinea = minLinea("real");
+            const totApoyo = totReal - totLinea;
+            return (
+              <div style={{background:C.card2,borderRadius:11,padding:"12px 13px",marginTop:12}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
+                  <span style={{fontFamily:F.h,fontWeight:800,fontSize:13.5,color:C.text}}>TIEMPO TOTAL POR {(unidad||"UD").toUpperCase()}</span>
+                  <b style={{fontFamily:F.h,fontSize:22,color:C.text}}>{totReal.toFixed(2)} <span style={{fontSize:12,color:C.mutedD,fontWeight:600}}>min</span></b>
+                </div>
+                <div style={{fontSize:11.5,color:C.mutedD,marginTop:4,lineHeight:1.6}}>
+                  {totApoyo>0.005
+                    ? <>{totLinea.toFixed(2)} min en línea + {totApoyo.toFixed(2)} min fuera de línea</>
+                    : <>Todo en línea</>}
+                  {totObj>0 && Math.abs(totReal-totObj)>0.005 &&
+                    <> · al objetivo serían <b style={{color:C.green}}>{totObj.toFixed(2)} min</b> ({(totReal-totObj).toFixed(2)} menos)</>}
+                </div>
+              </div>
+            );
+          })()}
+
           {pa.length>0 && costeMOMeta>0 && Math.abs(costeMOTotal-costeMOMeta)>0.005 && (
             <div style={{background:C.blueBg,borderRadius:10,padding:"10px 12px",marginTop:10,fontSize:12.5,color:C.text,lineHeight:1.6}}>
               Si se alcanzaran los objetivos: <b>{costeMOMeta.toFixed(2)} €/{unidad||"ud"}</b>
@@ -3478,7 +3506,7 @@ function ProductoForm({ onBack, ep, procesos, mps, centros, moldes = [] }) {
               <b style={{fontSize:17,color:C.text}}>{minLinea("real").toFixed(2)} min</b>
             </div>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",padding:"7px 0",fontSize:13.5,borderTop:`1px solid ${C.border}`}}>
-              <span style={{color:C.mutedD}}>Minutos del turno · {nPers} persona{nPers!==1?"s":""} × 8 h</span>
+              <span style={{color:C.mutedD}}>Minutos del turno · {nPers} persona{nPers!==1?"s":""} × 7,5 h</span>
               <b style={{fontSize:17,color:C.text}}>{num(minEquipo)} min</b>
             </div>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",padding:"9px 0",fontSize:14,
@@ -3487,7 +3515,7 @@ function ProductoForm({ onBack, ep, procesos, mps, centros, moldes = [] }) {
               <b style={{fontFamily:F.h,fontSize:24,color:C.blue}}>{Math.floor(velEquipo("real"))} <span style={{fontSize:13,color:C.mutedD,fontWeight:600}}>por turno</span></b>
             </div>
             <div style={{fontSize:11.5,color:C.mutedD,lineHeight:1.55,marginBottom:12}}>
-              {num(minEquipo)} ÷ {minLinea("real").toFixed(2)} = {Math.floor(velEquipo("real"))}. No cuentan los procesos fuera de línea.
+              {num(minEquipo)} ÷ {minLinea("real").toFixed(2)} = {Math.floor(velEquipo("real"))}. Jornada de 8 h menos 0,5 de descanso. No cuentan los procesos fuera de línea.
             </div>
 
             <button onClick={()=>setUdsTurno(String(Math.floor(velEquipo("real"))))}
