@@ -3187,10 +3187,10 @@ function ProductoForm({ onBack, ep, procesos, mps, centros, moldes = [] }) {
   const nPers = parseInt(persLinea)||3;
   const minLinea = (campo) => enLinea.reduce((a,x)=>a+minPorUd(x,campo), 0);
   const cuello = (campo) => enLinea.reduce((a,x)=>Math.max(a, minPorUd(x,campo)), 0);
-  // Cada persona en un puesto: manda el proceso más lento
-  const velPuestos = (campo) => cuello(campo)>0 ? MIN_TURNO/cuello(campo) : 0;
-  // Todos haciendo de todo: se reparte el total entre la gente
-  const velEquipo  = (campo) => minLinea(campo)>0 ? (MIN_TURNO*nPers)/minLinea(campo) : 0;
+  // El equipo se reparte el trabajo: minutos disponibles ÷ minutos por stick
+  const minEquipo  = MIN_TURNO * nPers;
+  const velEquipo  = (campo) => minLinea(campo)>0 ? minEquipo/minLinea(campo) : 0;
+  const velPuestos = velEquipo;   // referencia única
   const costeMOMeta  = pa.reduce((s,x)=>s+costeProcLinea(minPorUd(x,"obj")), 0);
   const costeCalculado = costeMPTotal + costeMOTotal;
   const costeFinal = toNum(coste);
@@ -3309,7 +3309,7 @@ function ProductoForm({ onBack, ep, procesos, mps, centros, moldes = [] }) {
                 {puesto>0 && fila("Con el ritmo que has puesto", puesto,
                   `${nP} personas × 8 h × ${TARIFA_MO} €/h ÷ ${num(puesto)} uds`, true)}
                 {teor>0 && fila("Con los tiempos de los procesos", teor,
-                  `cuello de botella ${cuello("real").toFixed(2)} min/ud`, false)}
+                  `${minLinea("real").toFixed(2)} min por ${unidad||"ud"} ÷ ${nP} personas`, false)}
                 {puesto>0 && teor>0 && Math.abs(puesto-teor) > 0.5 && (
                   <div style={{background: puesto>teor ? C.redBg : C.greenBg,
                     border:`1.5px solid ${puesto>teor?C.red:C.green}`,borderRadius:10,padding:"10px 12px",
@@ -3471,71 +3471,51 @@ function ProductoForm({ onBack, ep, procesos, mps, centros, moldes = [] }) {
         {/* VELOCIDAD QUE DEBERÍA DAR LA LÍNEA */}
         {enLinea.length>0 && minLinea("real")>0 && (
           <Card style={{marginBottom:14}} color={C.blue+"66"}>
-            <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text,marginBottom:3}}>🏃 Velocidad que debería dar la línea</div>
-            <div style={{fontSize:12,color:C.mutedD,lineHeight:1.55,marginBottom:12}}>
-              Con {nPers} persona{nPers!==1?"s":""} y estos tiempos, en un turno de 8 h. No cuentan los procesos fuera de línea.
+            <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text,marginBottom:12}}>🏃 Cuántas se pueden hacer en un turno</div>
+
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",padding:"7px 0",fontSize:13.5}}>
+              <span style={{color:C.mutedD}}>Trabajo que lleva cada {unidad||"unidad"}</span>
+              <b style={{fontSize:17,color:C.text}}>{minLinea("real").toFixed(2)} min</b>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",padding:"7px 0",fontSize:13.5,borderTop:`1px solid ${C.border}`}}>
+              <span style={{color:C.mutedD}}>Minutos del turno · {nPers} persona{nPers!==1?"s":""} × 8 h</span>
+              <b style={{fontSize:17,color:C.text}}>{num(minEquipo)} min</b>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",padding:"9px 0",fontSize:14,
+              borderTop:`1.5px solid ${C.blue}55`,marginTop:2}}>
+              <span style={{fontFamily:F.h,fontWeight:800,color:C.blue}}>SE PUEDEN HACER</span>
+              <b style={{fontFamily:F.h,fontSize:24,color:C.blue}}>{Math.floor(velEquipo("real"))} <span style={{fontSize:13,color:C.mutedD,fontWeight:600}}>por turno</span></b>
+            </div>
+            <div style={{fontSize:11.5,color:C.mutedD,lineHeight:1.55,marginBottom:12}}>
+              {num(minEquipo)} ÷ {minLinea("real").toFixed(2)} = {Math.floor(velEquipo("real"))}. No cuentan los procesos fuera de línea.
             </div>
 
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
-              <div style={{background:C.card2,borderRadius:12,padding:"11px 8px",textAlign:"center"}}>
-                <div style={{fontFamily:F.h,fontWeight:900,fontSize:22,color:C.text}}>{minLinea("real").toFixed(2)}</div>
-                <div style={{fontSize:10.5,color:C.mutedD}}>min/ud en total</div>
-              </div>
-              <div style={{background:C.card2,borderRadius:12,padding:"11px 8px",textAlign:"center"}}>
-                <div style={{fontFamily:F.h,fontWeight:900,fontSize:22,color:C.amber}}>{cuello("real").toFixed(2)}</div>
-                <div style={{fontSize:10.5,color:C.mutedD}}>el proceso más lento</div>
-              </div>
-            </div>
+            <button onClick={()=>setUdsTurno(String(Math.floor(velEquipo("real"))))}
+              style={{width:"100%",background:C.blueBg,border:`1.5px solid ${C.blue}55`,color:C.blue,
+                borderRadius:11,padding:"12px",fontFamily:F.h,fontWeight:800,fontSize:13.5,cursor:"pointer",marginBottom:10}}>
+              Usar {Math.floor(velEquipo("real"))} como ritmo del producto
+            </button>
 
-            {(() => {
-              const lento = enLinea.reduce((a,x)=> minPorUd(x,"real") > minPorUd(a,"real") ? x : a, enLinea[0]);
-              const nomLento = procesos.find(p=>p.id===lento.proceso_id)?.nombre || "";
-              return (
-                <div style={{fontSize:12,color:C.mutedD,lineHeight:1.6,marginBottom:12}}>
-                  El cuello de botella es <b style={{color:C.amber}}>{nomLento}</b>: por rápido que vaya el resto, la línea no saca más de lo que dé ese proceso.
-                </div>
-              );
-            })()}
-
-            {[["Cada uno en un puesto", velPuestos("real"), "manda el proceso más lento", true],
-              ["Todos haciendo de todo", velEquipo("real"), nPers + " personas repartiéndose " + minLinea("real").toFixed(2) + " min", false]
-             ].map(([t, v, d, reco], i)=>(
-              <div key={i} style={{background: reco ? C.blueBg : "#fff", border:`1.5px solid ${reco?C.blue:C.border}`,
-                borderRadius:12,padding:"12px 13px",marginBottom:8}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8}}>
-                  <span style={{fontFamily:F.h,fontWeight:800,fontSize:13.5,color:C.text}}>{t}{reco && <span style={{color:C.blue,fontSize:11}}> · lo normal</span>}</span>
-                  <span style={{fontFamily:F.h,fontWeight:900,fontSize:21,color:C.text,flexShrink:0}}>{Math.floor(v)} <span style={{fontSize:12,color:C.mutedD,fontWeight:600}}>uds/turno</span></span>
-                </div>
-                <div style={{fontSize:11.5,color:C.mutedD,marginTop:2,lineHeight:1.5}}>{d}</div>
-                <button onClick={()=>setUdsTurno(String(Math.floor(v)))}
-                  style={{width:"100%",marginTop:9,background:"#fff",border:`1.5px solid ${C.blue}55`,color:C.blue,
-                    borderRadius:10,padding:"9px",fontFamily:F.h,fontWeight:800,fontSize:12.5,cursor:"pointer"}}>
-                  Usar {Math.floor(v)} como ritmo del producto
-                </button>
-              </div>
-            ))}
-
-            {toNum(udsTurno)>0 && velPuestos("real")>0 && (() => {
-              const puesto = toNum(udsTurno), teor = velPuestos("real");
-              const dif = puesto/teor;
+            {toNum(udsTurno)>0 && velEquipo("real")>0 && (() => {
+              const puesto = toNum(udsTurno), teor = velEquipo("real"), dif = puesto/teor;
               const col = dif > 1.05 ? C.red : dif < 0.85 ? C.amber : C.green;
               return (
                 <div style={{background: dif>1.05?C.redBg : dif<0.85?C.amberBg : C.greenBg,
-                  border:`1.5px solid ${col}`,borderRadius:11,padding:"11px 13px",marginTop:4,
+                  border:`1.5px solid ${col}`,borderRadius:11,padding:"11px 13px",
                   fontSize:12.5,color:col,fontWeight:700,lineHeight:1.6}}>
                   {dif > 1.05
-                    ? <>⚠️ Tienes puesto <b>{num(puesto)} uds/turno</b>, un {Math.round((dif-1)*100)}% por encima de lo que dan estos tiempos. O el ritmo es optimista o algún tiempo está inflado.</>
+                    ? <>⚠️ Tienes puesto {num(puesto)}, un {Math.round((dif-1)*100)}% más de lo que dan estos tiempos.</>
                     : dif < 0.85
-                      ? <>El ritmo puesto ({num(puesto)}) es un {Math.round((1-dif)*100)}% menor de lo que darían los tiempos. Puede haber paros, cambios de molde o tiempos que faltan en la ficha.</>
-                      : <>✔ El ritmo puesto ({num(puesto)} uds/turno) cuadra con los tiempos de los procesos.</>}
+                      ? <>Tienes puesto {num(puesto)}, un {Math.round((1-dif)*100)}% menos. Puede haber paros o tiempos que faltan.</>
+                      : <>✔ Cuadra con el ritmo que tienes puesto ({num(puesto)}).</>}
                 </div>
               );
             })()}
 
-            {velPuestos("obj") > velPuestos("real") + 0.5 && (
+            {velEquipo("obj") > velEquipo("real") + 0.5 && (
               <div style={{fontSize:12,color:C.mutedD,marginTop:9,lineHeight:1.6,borderTop:`1px solid ${C.border}`,paddingTop:9}}>
-                Alcanzando los objetivos daría <b style={{color:C.green}}>{Math.floor(velPuestos("obj"))} uds/turno</b> en vez de {Math.floor(velPuestos("real"))}
-                {" "}— <b style={{color:C.green}}>{Math.floor(velPuestos("obj")-velPuestos("real"))} uds más por turno</b>.
+                Con los tiempos objetivo saldrían <b style={{color:C.green}}>{Math.floor(velEquipo("obj"))} por turno</b>,
+                {" "}<b style={{color:C.green}}>{Math.floor(velEquipo("obj")-velEquipo("real"))} más</b>.
               </div>
             )}
           </Card>
