@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v2.42.0";
+const APP_VERSION = "v2.46.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -2966,10 +2966,9 @@ function CostesScreen({ onBack, centros }) {
   const [luz, setLuz] = useState("");
   const [horas, setHoras] = useState("");
   const [msg, setMsg] = useState(null);
+  const [abierto, setAbierto] = useState(false);
 
-  useEffect(()=>{
-    if (!sel && centros.length) setSel(centros[0].id);
-  },[centros.length]);
+
   const guardado = cfg.find(x=>x.id===sel);
   // recarga los valores al cambiar de centro o cuando llegan los datos de Firebase
   const huella = guardado ? `${guardado.amortizacion_mes}|${guardado.alquiler_mes}|${guardado.luz_agua_mes}|${guardado.horas_persona_mes}` : "";
@@ -2998,45 +2997,72 @@ function CostesScreen({ onBack, centros }) {
       <Header title="COSTES FIJOS POR CENTRO" onBack={onBack} sub="Cada centro reparte sus fijos por hora trabajada"/>
       <div style={{padding:14}}>
         {msg && <Toast msg={msg}/>}
-        <Sel label="Centro" value={sel} onChange={setSel} placeholder="Seleccionar centro…"
-          options={centros.map(c=>({value:c.id,label:`🏭 ${c.nombre}`}))}/>
-        {sel && <>
-          <Card style={{marginBottom:14}}>
-            {guardado && (
-              <div style={{background:C.amberBg,border:`1.5px solid ${C.amber}`,borderRadius:10,padding:"10px 12px",marginBottom:14,fontSize:12.5,color:C.amber,fontWeight:700,lineHeight:1.5}}>
-                ✏️ Editando los costes ya guardados de este centro. Cambia lo que necesites y pulsa Guardar.
-              </div>
-            )}
-            <Field dec label="Amortización maquinaria (€/mes)" value={amort} onChange={setAmort} type="number" placeholder="Ej: 2431 (350.000÷12 años÷12)" min="0" step="1"/>
-            <Field dec label="Alquiler nave (€/mes)" value={alquiler} onChange={setAlquiler} type="number" placeholder="Ej: 1200" min="0" step="1"/>
-            <Field dec label="Luz + agua (€/mes)" value={luz} onChange={setLuz} type="number" placeholder="Ej: 900" min="0" step="1"/>
-            <Field dec label="Horas-persona trabajadas / mes" value={horas} onChange={setHoras} type="number" placeholder="Ej: 1848 (11 operarios × 168 h)" min="1"/>
-            {costeHoraFijo && (
-              <div style={{background:C.card2,borderRadius:10,padding:"12px 14px",marginBottom:12}}>
-                <div style={{fontSize:13,color:C.muted}}>Estructura: {total.toFixed(0)} €/mes ÷ {horas} h</div>
-                <span style={{fontSize:14,color:C.muted}}>Estructura por hora-persona: </span>
-                <span style={{fontFamily:F.h,fontWeight:800,fontSize:20,color:C.blue}}>{costeHoraFijo} €/h</span>
-                {cargada && <div style={{marginTop:4,fontSize:14,color:C.muted}}>Tarifa cargada del centro (MO {centroSel.tarifa_mo} + estructura): <span style={{fontFamily:F.h,fontWeight:800,fontSize:18,color:C.text}}>{cargada} €/h</span></div>}
-              </div>
-            )}
-          </Card>
-          <Btn onClick={guardar}>{guardado?"💾 Guardar cambios":"💾 Guardar"}</Btn>
-        </>}
-        {/* Resumen de todos los centros */}
-        {cfg.length>0 && (
-          <Card style={{marginTop:14}}>
-            <div style={{fontFamily:F.h,fontWeight:700,fontSize:14,color:C.muted,textTransform:"uppercase",letterSpacing:0.5,marginBottom:10}}>Resumen</div>
-            {centros.map(c=>{
-              const x = cfg.find(z=>z.id===c.id);
-              if (!x) return null;
-              const ch = x.horas_persona_mes ? (x.fijos_mensuales/x.horas_persona_mes).toFixed(2) : "—";
-              return (
-                <div key={c.id} onClick={()=>{setSel(c.id); window.scrollTo(0,0);}} style={{display:"flex",justifyContent:"space-between",padding:"10px 0",borderBottom:`1px solid ${C.border}`,cursor:"pointer"}}>
-                  <span style={{fontSize:14,color:C.text,fontFamily:F.h,fontWeight:600}}>🏭 {c.nombre}</span>
-                  <span style={{fontSize:14,color:C.muted}}>{x.fijos_mensuales}€/mes → <span style={{color:C.accent,fontWeight:700}}>{ch}€/h</span></span>
+        {/* Lo que ya está creado */}
+        {centros.filter(c=>cfg.find(z=>z.id===c.id)).length===0 && !abierto && !sel && (
+          <Empty icon="💰" text="Sin costes fijos. Añade los de cada centro."/>
+        )}
+
+        <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:14}}>
+          {centros.map(c=>{
+            const x = cfg.find(z=>z.id===c.id);
+            if (!x) return null;
+            const ch = x.horas_persona_mes ? (x.fijos_mensuales/x.horas_persona_mes).toFixed(2) : "—";
+            return (
+              <Card key={c.id} color={sel===c.id?C.amber+"66":undefined}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
+                  <div style={{minWidth:0}}>
+                    <div style={{fontFamily:F.h,fontWeight:700,fontSize:16,color:C.text}}>🏭 {c.nombre}</div>
+                    <div style={{fontSize:12.5,color:C.mutedD,marginTop:2}}>
+                      {num(x.fijos_mensuales)} €/mes → <b style={{color:C.accent}}>{ch} €/h</b>
+                    </div>
+                    <div style={{fontSize:11.5,color:C.muted,marginTop:2}}>
+                      Amort. {num(x.amortizacion_mes||0)} · Alquiler {num(x.alquiler_mes||0)} · Luz {num(x.luz_agua_mes||0)}
+                    </div>
+                  </div>
+                  <IconBtn onClick={()=>{ setAbierto(false); setSel(c.id); window.scrollTo(0,0); }}>✏️</IconBtn>
                 </div>
-              );
-            })}
+              </Card>
+            );
+          })}
+        </div>
+
+        {/* Formulario, solo cuando se pide */}
+        {!abierto && !sel && (
+          <button onClick={()=>setAbierto(true)}
+            style={{width:"100%",background:C.accent,border:"none",color:"#fff",borderRadius:14,padding:"16px",
+              fontFamily:F.h,fontWeight:800,fontSize:15.5,cursor:"pointer"}}>＋ Costes de un centro</button>
+        )}
+
+        {(abierto || sel) && (
+          <Card style={{marginBottom:14}} color={sel?C.amber+"66":undefined}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+              <span style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:sel?C.amber:C.text}}>
+                {sel ? `✏️ Editando ${centros.find(c=>c.id===sel)?.nombre||""}` : "＋ Costes de un centro"}
+              </span>
+              <button onClick={()=>{ setAbierto(false); setSel(""); }}
+                style={{background:"none",border:"none",color:C.muted,fontSize:20,cursor:"pointer",lineHeight:1}}>✕</button>
+            </div>
+
+            {!sel && (
+              <Sel label="Centro" value={sel} onChange={setSel} placeholder="Elegir centro…"
+                options={centros.filter(c=>!cfg.find(z=>z.id===c.id)).map(c=>({value:c.id,label:`🏭 ${c.nombre}`}))}/>
+            )}
+
+            {sel && <>
+              <Field dec label="Amortización maquinaria (€/mes)" value={amort} onChange={setAmort} placeholder="Ej: 2431 (350.000÷12 años÷12)" min="0" step="1"/>
+              <Field dec label="Alquiler nave (€/mes)" value={alquiler} onChange={setAlquiler} placeholder="Ej: 1200" min="0" step="1"/>
+              <Field dec label="Luz + agua (€/mes)" value={luz} onChange={setLuz} placeholder="Ej: 900" min="0" step="1"/>
+              <Field dec label="Horas-persona trabajadas / mes" value={horas} onChange={setHoras} placeholder="Ej: 1848 (11 operarios × 168 h)" min="1"/>
+              {costeHoraFijo && (
+                <div style={{background:C.card2,borderRadius:10,padding:"12px 14px",marginBottom:12}}>
+                  <div style={{fontSize:12.5,color:C.mutedD}}>{total.toFixed(0)} €/mes ÷ {horas} h</div>
+                  <span style={{fontSize:13.5,color:C.mutedD}}>Estructura por hora-persona: </span>
+                  <span style={{fontFamily:F.h,fontWeight:800,fontSize:20,color:C.blue}}>{costeHoraFijo} €/h</span>
+                  {cargada && <div style={{marginTop:4,fontSize:13,color:C.mutedD}}>Tarifa cargada del centro (MO {centroSel.tarifa_mo} + estructura): <b style={{fontSize:17,color:C.text}}>{cargada} €/h</b></div>}
+                </div>
+              )}
+              <Btn onClick={async()=>{ await guardar(); setAbierto(false); setSel(""); }}>{guardado?"💾 Guardar cambios":"💾 Guardar"}</Btn>
+            </>}
           </Card>
         )}
       </div>
@@ -3140,12 +3166,26 @@ function PlanificacionScreen({ onBack, perfil, productos, mps, producciones, cen
           ))}
         </div>
       )}
-      <div style={{display:"flex",gap:6,padding:"10px 12px",background:C.navy,position:"sticky",top:0,zIndex:9}}>
-        {TABS.map(([k,l])=>(
-          <button key={k} onClick={()=>setTab(k)}
-            style={{flex:1,background:tab===k?"#fff":"rgba(255,255,255,0.12)",color:tab===k?C.navy:"#fff",
-              border:"none",borderRadius:10,padding:"11px 2px",fontFamily:F.h,fontWeight:800,fontSize:12,cursor:"pointer"}}>{l}</button>
-        ))}
+      <div style={{position:"sticky",top:0,zIndex:16,boxShadow:"0 2px 10px rgba(15,23,42,0.10)"}}>
+        <div style={{display:"flex",gap:6,padding:"10px 12px",background:C.navy}}>
+          {TABS.map(([k,l])=>(
+            <button key={k} onClick={()=>setTab(k)}
+              style={{flex:1,background:tab===k?"#fff":"rgba(255,255,255,0.12)",color:tab===k?C.navy:"#fff",
+                border:"none",borderRadius:10,padding:"11px 2px",fontFamily:F.h,fontWeight:800,fontSize:12,cursor:"pointer"}}>{l}</button>
+          ))}
+        </div>
+        {(tab==="semana" || tab==="cierre") && (
+          <div style={{display:"flex",gap:5,overflowX:"auto",padding:"7px 12px 8px",background:C.navy,borderTop:"1px solid rgba(255,255,255,0.10)"}}>
+            {semanas.map(sm=>(
+              <button key={sm} onClick={()=>setSemana(sm)}
+                style={{flexShrink:0,background:semana===sm?"#fff":"rgba(255,255,255,0.10)",
+                  color:semana===sm?C.navy:"rgba(255,255,255,0.85)",border:"none",borderRadius:9,
+                  padding:"7px 11px",fontFamily:F.h,fontWeight:800,fontSize:12,cursor:"pointer",whiteSpace:"nowrap"}}>
+                S{sm.split("-W")[1]} <span style={{fontWeight:600,opacity:0.7,fontSize:10.5}}>{rotuloSemana(sm).split(" – ")[0]}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
       <div style={{padding:12,maxWidth:900,margin:"0 auto"}}>
         {nHuerfanos>0 && (
@@ -3961,24 +4001,6 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
     }
   };
 
-  const asignar = (slot, pid, cantidad) => {
-    const prod = productos.find(p=>p.id===pid);
-    const need = persDe(prod);
-    const i0 = LINEAS_CAL.indexOf(slot.linea);
-    const usadas = [];
-    let acum = 0;
-    for (let i=i0; i<LINEAS_CAL.length && acum<need; i++) { usadas.push(LINEAS_CAL[i]); acum += persDeLinea(LINEAS_CAL[i]); }
-    for (let i=i0-1; i>=0 && acum<need; i--) { usadas.unshift(LINEAS_CAL[i]); acum += persDeLinea(LINEAS_CAL[i]); }
-    let base = cal.filter(x => !(x.fecha===slot.fecha && x.turno===slot.turno && usadas.includes(x.linea)));
-    // si alguna de las líneas ocupadas formaba pareja, se retira la pareja entera
-    const rotos = cal.filter(x => x.fecha===slot.fecha && x.turno===slot.turno && usadas.includes(x.linea) && x.grupo);
-    base = base.filter(x => !rotos.some(rz => rz.grupo === x.grupo));
-    const g = uid();
-    usadas.forEach(l => base.push({ id:uid(), grupo:g, fecha:slot.fecha, turno:slot.turno, linea:l,
-      producto_id:pid, cantidad: Math.round(cantidad/usadas.length*10)/10 }));
-    setCal(base);
-    setEdit(null);
-  };
   const quitar = (slot) => {
     const e = enSlot(slot.fecha, slot.turno, slot.linea);
     if (!e) { setEdit(null); return; }
@@ -4169,6 +4191,41 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
   cal.forEach(x=>{ colocado[x.producto_id] = (colocado[x.producto_id]||0) + (parseFloat(x.cantidad)||0); });
   const objetivo = {};
   items.forEach(it=>{ objetivo[it.producto_id] = (objetivo[it.producto_id]||0) + (parseFloat(it.cantidad)||0); });
+  const asignar = (slot, pid, cantidad) => {
+    const prod = productos.find(p=>p.id===pid);
+    // El calendario NO puede fabricar más de lo repartido: eso se cambia en Mes y Reparto
+    const obj = objetivo[pid] || 0;
+    if (obj > 0) {
+      const eActual = enSlot(slot.fecha, slot.turno, slot.linea);
+      const yaAqui = eActual && eActual.producto_id === pid
+        ? (eActual.grupo ? cal.filter(x=>x.grupo===eActual.grupo) : [eActual]).reduce((a,x)=>a+toNum(x.cantidad),0)
+        : 0;
+      const resto = (colocado[pid] || 0) - yaAqui;
+      const libre = obj - resto;
+      if (cantidad > libre + 0.5) {
+        window.alert(
+          `No cabe: de ${prod?.nombre} el reparto de esta semana son ${num(obj)} uds.\n\n` +
+          `Ya hay ${num(resto)} colocadas en otros huecos, así que aquí caben ${num(Math.max(0,libre))} como mucho.\n\n` +
+          `Si de verdad quieres fabricar más, súbelo primero en 📅 Mes y ✂️ Reparto.`);
+        return;
+      }
+    }
+    const need = persDe(prod);
+    const i0 = LINEAS_CAL.indexOf(slot.linea);
+    const usadas = [];
+    let acum = 0;
+    for (let i=i0; i<LINEAS_CAL.length && acum<need; i++) { usadas.push(LINEAS_CAL[i]); acum += persDeLinea(LINEAS_CAL[i]); }
+    for (let i=i0-1; i>=0 && acum<need; i--) { usadas.unshift(LINEAS_CAL[i]); acum += persDeLinea(LINEAS_CAL[i]); }
+    let base = cal.filter(x => !(x.fecha===slot.fecha && x.turno===slot.turno && usadas.includes(x.linea)));
+    // si alguna de las líneas ocupadas formaba pareja, se retira la pareja entera
+    const rotos = cal.filter(x => x.fecha===slot.fecha && x.turno===slot.turno && usadas.includes(x.linea) && x.grupo);
+    base = base.filter(x => !rotos.some(rz => rz.grupo === x.grupo));
+    const g = uid();
+    usadas.forEach(l => base.push({ id:uid(), grupo:g, fecha:slot.fecha, turno:slot.turno, linea:l,
+      producto_id:pid, cantidad: Math.round(cantidad/usadas.length*10)/10 }));
+    setCal(base);
+    setEdit(null);
+  };
   // Soltar el producto cogido en un hueco, avisando si cambia el molde de la línea
   const soltarEn = (f, t, l) => {
     if (!cogido) return;
@@ -4176,7 +4233,13 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
     const r = ritmoDe(p);
     if (r <= 0) { window.alert("Este producto no tiene ritmo definido. Ponlo en su ficha."); return; }
     const falta = (objetivo[cogido]||0) - (colocado[cogido]||0);
-    if (falta <= 0.5 && !window.confirm(`Ya está colocado todo el ${p.nombre} de esta semana.\n\n¿Poner otro turno de más?`)) return;
+    if (falta <= 0.5) {
+      window.alert(
+        `${p.nombre} ya está entero en el calendario: ${num(colocado[cogido]||0)} de ${num(objetivo[cogido]||0)} uds.\n\n` +
+        `Para fabricar más, súbelo primero en 📅 Mes y repártelo en ✂️ Reparto.`);
+      setCogido(null);
+      return;
+    }
 
     const montado = moldeMontado(f, t, l);
     const mio = moldeDe(p);
@@ -4186,8 +4249,7 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
         `⚠️ CAMBIO DE MOLDE\n\nLa ${l} ya trabaja esta semana con el molde ${nombreMolde(montado)}.\n` +
         `Poner aquí ${p.nombre} obliga a montar el molde ${nombreMolde(mio)}: unos ${min} min de parada.\n\n¿Lo pones igualmente?`)) return;
     }
-    const q = Math.min(r, falta > 0.5 ? falta : r);
-    asignar({ fecha:f, turno:t, linea:l }, cogido, Math.round(q));
+    asignar({ fecha:f, turno:t, linea:l }, cogido, Math.round(Math.min(r, falta)));
   };
 
   const todos = [...new Set([...Object.keys(objetivo), ...Object.keys(colocado)])];
@@ -4211,7 +4273,7 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
       )}
 
       {!bloqueado && items.length>0 && (
-        <div style={{position:"sticky",top:52,zIndex:12,background:C.bg,paddingBottom:8,marginBottom:6}}>
+        <div style={{position:"sticky",top:96,zIndex:12,background:C.bg,paddingBottom:8,marginBottom:6}}>
           <Card style={{padding:"11px 12px",marginBottom:0}} color={cogido?C.blue+"88":undefined}>
             <div style={{fontFamily:F.h,fontWeight:800,fontSize:13,color:C.text,marginBottom:3}}>
               {cogido ? "Ahora toca un hueco libre" : "1 · Coge un producto"}
@@ -4238,32 +4300,57 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
                 </div>
               );
             })()}
+            {(() => {
+              const pend = items.reduce((a,it)=>a+Math.max(0,(objetivo[it.producto_id]||0)-(colocado[it.producto_id]||0)),0);
+              const exc  = items.reduce((a,it)=>a+Math.max(0,(colocado[it.producto_id]||0)-(objetivo[it.producto_id]||0)),0);
+              const ok = pend<0.5 && exc<0.5;
+              return (
+                <div style={{display:"flex",gap:6,marginBottom:9}}>
+                  <div style={{flex:1,background:ok?C.greenBg:C.card2,borderRadius:9,padding:"7px 9px",textAlign:"center"}}>
+                    <div style={{fontFamily:F.h,fontWeight:900,fontSize:16,color:ok?C.green:C.text,lineHeight:1.1}}>{ok?"✔":num(pend)}</div>
+                    <div style={{fontSize:9.5,color:C.mutedD}}>{ok?"todo colocado":"uds por colocar"}</div>
+                  </div>
+                  {exc>0.5 && (
+                    <div style={{flex:1,background:C.amberBg,border:`1px solid ${C.amber}`,borderRadius:9,padding:"7px 9px",textAlign:"center"}}>
+                      <div style={{fontFamily:F.h,fontWeight:900,fontSize:16,color:C.amber,lineHeight:1.1}}>+{num(exc)}</div>
+                      <div style={{fontSize:9.5,color:C.amber}}>uds de más</div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
             <div style={{display:"flex",gap:7,overflowX:"auto",paddingBottom:3}}>
               {items.map(it=>{
                 const p = productos.find(z=>z.id===it.producto_id);
                 const falta = (objetivo[it.producto_id]||0) - (colocado[it.producto_id]||0);
-                const listo = falta <= 0.5;
+                const justo = Math.abs(falta) <= 0.5;
+                const pasado = falta < -0.5;
                 const k = moldeDe(p);
                 const c = colorMoldeK(k);
                 const on = cogido === it.producto_id;
+                const colNum = on ? "#fff" : justo ? C.green : pasado ? C.amber : C.text;
                 return (
                   <button key={it.producto_id} onClick={()=>setCogido(on?null:it.producto_id)}
-                    style={{flexShrink:0,minWidth:118,textAlign:"left",cursor:"pointer",
-                      background:on?c.bd:(listo?C.card2:c.bg),
-                      border:`2px solid ${on?c.bd:(listo?C.border:c.bd)}`,
-                      borderRadius:12,padding:"9px 11px",opacity:listo&&!on?0.55:1}}>
+                    style={{flexShrink:0,minWidth:126,textAlign:"left",cursor:"pointer",
+                      background:on?c.bd:(justo?C.card2:pasado?C.amberBg:c.bg),
+                      border:`2px solid ${on?c.bd:(justo?C.border:pasado?C.amber:c.bd)}`,
+                      borderRadius:12,padding:"9px 11px",opacity:justo&&!on?0.6:1}}>
                     <div style={{fontFamily:F.h,fontWeight:800,fontSize:12.5,color:on?"#fff":C.text,
                       overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{codigoCorto(p?.nombre||"?")}</div>
-                    <div style={{fontFamily:F.h,fontWeight:900,fontSize:19,color:on?"#fff":(listo?C.green:C.text),lineHeight:1.15}}>
-                      {listo ? "✔" : num(falta)}
+                    <div style={{fontFamily:F.h,fontWeight:900,fontSize:19,color:colNum,lineHeight:1.15}}>
+                      {justo ? "✔ 0" : pasado ? `+${num(-falta)}` : num(falta)}
                     </div>
                     <div style={{fontSize:10,color:on?"rgba(255,255,255,0.85)":C.mutedD,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                      {listo ? "colocado" : "por colocar"} · 🔧 {nombreMolde(k)}
+                      {justo ? "justo" : pasado ? "de más" : "por colocar"} · 🔧 {nombreMolde(k)}
+                    </div>
+                    <div style={{fontSize:9.5,color:on?"rgba(255,255,255,0.8)":C.muted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                      {num(colocado[it.producto_id]||0)} de {num(objetivo[it.producto_id]||0)}
                     </div>
                     <div style={{fontSize:10.5,fontWeight:800,marginTop:3,
                       color:on?"#fff":(ritmoDe(p)>0?C.blue:C.red),overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
                       {ritmoDe(p)>0
-                        ? `${num(Math.min(ritmoDe(p), listo?ritmoDe(p):falta))} por turno`
+                        ? `${num(falta>0.5 ? Math.min(ritmoDe(p), falta) : ritmoDe(p))} por turno`
                         : "⚠️ sin ritmo"}
                     </div>
                   </button>
@@ -4531,6 +4618,9 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
 
       {edit && <SlotEditor slot={edit} entrada={enSlot(edit.fecha,edit.turno,edit.linea)} productos={productos}
         items={items} colocado={colocado} objetivo={objetivo} persLinea={persDeLinea(edit.linea)}
+        calSlot={(pid)=>{ const e = enSlot(edit.fecha,edit.turno,edit.linea);
+          return e && e.producto_id===pid
+            ? (e.grupo ? cal.filter(x=>x.grupo===e.grupo) : [e]).reduce((a,x)=>a+toNum(x.cantidad),0) : 0; }}
         moldeLinea={moldeMontado(edit.fecha, edit.turno, edit.linea)}
         nombreMolde={nombreMolde} moldeDe={moldeDe}
         onAsignar={asignar} onQuitar={()=>quitar(edit)} onCerrar={()=>setEdit(null)}/>}
@@ -4539,7 +4629,7 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
 }
 
 // ── Editor de un hueco del calendario ──────────────────────────────────────────
-function SlotEditor({ slot, entrada, productos, items, colocado, objetivo, persLinea=3, moldeLinea="", nombreMolde=(x)=>x, moldeDe=()=>"", onAsignar, onQuitar, onCerrar }) {
+function SlotEditor({ slot, entrada, productos, items, colocado, objetivo, persLinea=3, moldeLinea="", nombreMolde=(x)=>x, moldeDe=()=>"", calSlot=()=>0, onAsignar, onQuitar, onCerrar }) {
   const [pid, setPid] = useState(entrada?.producto_id || "");
   const [q, setQ] = useState(entrada ? String(entrada.cantidad) : "");
   const p = productos.find(z=>z.id===pid);
@@ -4614,7 +4704,9 @@ function SlotEditor({ slot, entrada, productos, items, colocado, objetivo, persL
             <div style={{marginBottom:14}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:6}}>
                 <span style={{fontSize:11,color:C.mutedD,fontWeight:800}}>UNIDADES EN ESTE HUECO</span>
-                {ritmo>0 && <button onClick={()=>setQ(String(ritmo))}
+                {ritmo>0 && <button onClick={()=>{ const obj=objetivo[pid]||0;
+                    const libre = obj ? obj - ((colocado[pid]||0) - calSlot(pid)) : ritmo;
+                    setQ(String(Math.max(0, Math.round(Math.min(ritmo, libre))))); }}
                   style={{background:"none",border:"none",color:C.blue,fontSize:11.5,fontWeight:800,cursor:"pointer",padding:0}}>
                   poner el estándar ({ritmo})
                 </button>}
@@ -4628,6 +4720,20 @@ function SlotEditor({ slot, entrada, productos, items, colocado, objetivo, persL
             </div>
           </>
         )}
+
+        {pid && (() => {
+          const obj = objetivo[pid]||0;
+          if (!obj) return null;
+          const libre = obj - ((colocado[pid]||0) - calSlot(pid));
+          if (toNum(q) <= libre + 0.5) return null;
+          return (
+            <div style={{background:C.redBg,border:`1.5px solid ${C.red}`,borderRadius:11,padding:"11px 13px",marginBottom:14,
+              fontSize:12.5,color:C.red,fontWeight:700,lineHeight:1.55}}>
+              ⛔ Te pasas del reparto: de este producto la semana tiene <b>{num(obj)} uds</b> y en este hueco caben <b>{num(Math.max(0,libre))}</b> como mucho.
+              Para fabricar más, súbelo en 📅 Mes y ✂️ Reparto.
+            </div>
+          );
+        })()}
 
         {pid && ritmo>0 && toNum(q)>0 && toNum(q) < ritmo - 0.5 && (
           <div style={{background:C.amberBg,border:`1.5px solid ${C.amber}`,borderRadius:11,padding:"11px 13px",marginBottom:14,
@@ -4785,8 +4891,6 @@ function PlanSemanaTab({ semana, setSemana, semanas, plan, guardar, productos, m
 
   return (
     <>
-      <SelectorSemana semana={semana} setSemana={setSemana} semanas={semanas}/>
-
       {bloqueado && (
         <div style={{background:plan.forzado?C.amberBg:C.greenBg,border:`1.5px solid ${plan.forzado?C.amber:C.green}`,borderRadius:12,padding:"12px 14px",marginBottom:12}}>
           <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:plan.forzado?C.amber:C.green}}>
@@ -4876,19 +4980,6 @@ function PlanSemanaTab({ semana, setSemana, semanas, plan, guardar, productos, m
   );
 }
 
-const SelectorSemana = ({ semana, setSemana, semanas }) => (
-  <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:10,marginBottom:12}}>
-    {semanas.map(s=>(
-      <button key={s} onClick={()=>setSemana(s)}
-        style={{flexShrink:0,background:semana===s?C.accent:"#fff",color:semana===s?"#fff":C.mutedD,
-          border:`1.5px solid ${semana===s?C.accent:C.border}`,borderRadius:12,padding:"10px 14px",
-          fontFamily:F.h,fontWeight:700,fontSize:13,cursor:"pointer"}}>
-        <div>Sem {s.split("-W")[1]}</div>
-        <div style={{fontSize:10.5,opacity:0.75,fontWeight:600}}>{rotuloSemana(s)}</div>
-      </button>
-    ))}
-  </div>
-);
 
 // ── TAB 3: CIERRE SEMANAL ──────────────────────────────────────────────────────
 function CierreSemanaTab({ semana, setSemana, semanas, plan, guardar, productos, mps, producciones, perfil }) {
@@ -4987,8 +5078,6 @@ function CierreSemanaTab({ semana, setSemana, semanas, plan, guardar, productos,
 
   return (
     <>
-      <SelectorSemana semana={semana} setSemana={setSemana} semanas={semanas}/>
-
       {!plan.cerrado_plan && (
         <div style={{background:C.amberBg,border:`1.5px solid ${C.amber}`,borderRadius:12,padding:"12px 14px",marginBottom:12,fontSize:13,color:C.amber,fontFamily:F.h,fontWeight:700,lineHeight:1.5}}>
           ⚠️ Esta semana no tiene el plan cerrado. El comparativo es solo orientativo.
