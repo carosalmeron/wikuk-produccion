@@ -3501,10 +3501,19 @@ function ProductoForm({ onBack, ep, procesos, mps, centros, moldes = [] }) {
           <Card style={{marginBottom:14}} color={C.blue+"66"}>
             <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text,marginBottom:12}}>🏃 Cuántas se pueden hacer en un turno</div>
 
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",padding:"7px 0",fontSize:13.5}}>
-              <span style={{color:C.mutedD}}>Trabajo que lleva cada {unidad||"unidad"}</span>
-              <b style={{fontSize:17,color:C.text}}>{minLinea("real").toFixed(2)} min</b>
-            </div>
+            {(() => {
+              const tot = pa.reduce((a,x)=>a+minPorUd(x,"real"), 0);
+              const apoyo = tot - minLinea("real");
+              return (
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",padding:"7px 0",fontSize:13.5}}>
+                  <span style={{color:C.mutedD}}>
+                    Trabajo <b style={{color:C.text}}>en línea</b> por {unidad||"unidad"}
+                    {apoyo>0.005 && <div style={{fontSize:11,color:C.muted}}>de {tot.toFixed(2)} min totales · {apoyo.toFixed(2)} los hace apoyo</div>}
+                  </span>
+                  <b style={{fontSize:17,color:C.text,flexShrink:0}}>{minLinea("real").toFixed(2)} min</b>
+                </div>
+              );
+            })()}
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",padding:"7px 0",fontSize:13.5,borderTop:`1px solid ${C.border}`}}>
               <span style={{color:C.mutedD}}>Minutos del turno · {nPers} persona{nPers!==1?"s":""} × 7,5 h</span>
               <b style={{fontSize:17,color:C.text}}>{num(minEquipo)} min</b>
@@ -3517,6 +3526,29 @@ function ProductoForm({ onBack, ep, procesos, mps, centros, moldes = [] }) {
             <div style={{fontSize:11.5,color:C.mutedD,lineHeight:1.55,marginBottom:12}}>
               {num(minEquipo)} ÷ {minLinea("real").toFixed(2)} = {Math.floor(velEquipo("real"))}. Jornada de 8 h menos 0,5 de descanso. No cuentan los procesos fuera de línea.
             </div>
+
+            {(() => {
+              const tot = pa.reduce((a,x)=>a+minPorUd(x,"real"), 0);
+              const apoyoMin = tot - minLinea("real");
+              if (apoyoMin <= 0.005) return null;
+              const uds = Math.floor(velEquipo("real"));
+              const minNec = apoyoMin * uds;
+              const persNec = minNec / MIN_TURNO;
+              const cuellos = persNec > 1.05;
+              return (
+                <div style={{background: cuellos ? C.amberBg : C.card2, border: cuellos?`1.5px solid ${C.amber}`:"none",
+                  borderRadius:11,padding:"11px 12px",marginBottom:10,fontSize:12.5,color:C.text,lineHeight:1.6}}>
+                  <div style={{fontFamily:F.h,fontWeight:800,fontSize:12.5,color:cuellos?C.amber:C.mutedD,marginBottom:3}}>
+                    🤝 EL APOYO TIENE QUE SEGUIR EL RITMO
+                  </div>
+                  Para sacar {uds} {unidad||"uds"} hacen falta <b>{num(Math.round(minNec))} min</b> de trabajo fuera de línea
+                  ({apoyoMin.toFixed(2)} min × {uds}) = <b style={{color:cuellos?C.amber:C.text}}>{persNec.toFixed(1)} personas</b> de apoyo.
+                  {cuellos && <div style={{color:C.amber,fontWeight:700,marginTop:4}}>
+                    Con 1 sola persona de apoyo la línea no pasaría de <b>{Math.floor(MIN_TURNO/apoyoMin)} {unidad||"uds"}</b> por turno: el apoyo sería el freno.
+                  </div>}
+                </div>
+              );
+            })()}
 
             <button onClick={()=>setUdsTurno(String(Math.floor(velEquipo("real"))))}
               style={{width:"100%",background:C.blueBg,border:`1.5px solid ${C.blue}55`,color:C.blue,
