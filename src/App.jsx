@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v2.48.0";
+const APP_VERSION = "v2.49.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -1156,6 +1156,397 @@ function DiarioScreen({ onBack, productos, lineas, turnos, mps, motivos, usuario
 // ═══════════════════════════════════════════════════════════════════════════════
 // ⏱️ TERMINAL OPERARIO — 3 toques: mi orden → mi proceso → tiempo y cantidad
 // ═══════════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════
+// TERMINAL DE PLANTA — pantalla táctil del obrador. Botones grandes, poco texto.
+// ═══════════════════════════════════════════════════════════════════════════════
+const TT = {                       // medidas pensadas para dedo con guante
+  btn: 84, btnSm: 68, radio: 18,
+  txt: 22, txtSm: 17, num: 68,
+};
+const BotonGrande = ({ children, sub, onClick, bg=C.card, color=C.text, borde, alto=TT.btn, disabled }) => (
+  <button onClick={onClick} disabled={disabled}
+    style={{minHeight:alto,width:"100%",background:disabled?C.card2:bg,color:disabled?C.muted:color,
+      border:borde?`3px solid ${borde}`:`2px solid ${C.border}`,borderRadius:TT.radio,
+      padding:"12px 16px",fontFamily:F.h,fontWeight:800,fontSize:TT.txt,cursor:disabled?"default":"pointer",
+      display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:3,
+      boxShadow:disabled?"none":"0 2px 6px rgba(15,23,42,0.10)",lineHeight:1.15}}>
+    <span>{children}</span>
+    {sub && <span style={{fontSize:14,fontWeight:600,opacity:0.75}}>{sub}</span>}
+  </button>
+);
+
+function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mps, motivos, ordenes, moldes=[] }) {
+  const hoy = new Date().toISOString().slice(0,10);
+  const [lineaId, setLineaId] = useState("");
+  const [turnoId, setTurnoId] = useState("");
+  const [productoId, setProductoId] = useState("");
+  const [ordenId, setOrdenId] = useState("");
+  const [uds, setUds] = useState(0);
+  const [personas, setPersonas] = useState(0);
+  const [paroActivo, setParoActivo] = useState(null);   // {motivo_id, nombre, desde}
+  const [paros, setParos] = useState([]);
+  const [consumos, setConsumos] = useState([]);
+  const [vista, setVista] = useState("linea");          // linea·turno·producto·trabajo
+  const [modal, setModal] = useState(null);             // paro·lote·fin
+  const [ahora, setAhora] = useState(Date.now());
+  const [guardando, setGuardando] = useState(false);
+
+  useEffect(()=>{ const t=setInterval(()=>setAhora(Date.now()),1000); return ()=>clearInterval(t); },[]);
+
+  const linea = lineas.find(l=>l.id===lineaId);
+  const turno = turnos.find(t=>t.id===turnoId);
+  const prod  = productos.find(p=>p.id===productoId);
+  const ritmo = toNum(prod?.uds_turno_linea);
+  const molde = prod?.molde_id ? (moldes.find(m=>m.id===prod.molde_id)?.nombre) : prod?.molde;
+  const pct   = ritmo>0 ? uds/ritmo : 0;
+
+  const mmss = (ms) => { const s=Math.max(0,Math.floor(ms/1000));
+    return `${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`; };
+  const minParados = paros.reduce((a,p)=>a+(p.minutos||0),0) + (paroActivo ? (ahora-paroActivo.desde)/60000 : 0);
+
+  const guardar = async () => {
+    if (guardando) return;
+    setGuardando(true);
+    const parosFinal = paroActivo
+      ? [...paros, { motivo_id:paroActivo.motivo_id, motivo:paroActivo.nombre, minutos: Math.round((ahora-paroActivo.desde)/60000) }]
+      : paros;
+    await save("producciones", uid(), {
+      orden_id: ordenId || "", producto_id: productoId, fecha: hoy,
+      turno_id: turnoId, linea_id: lineaId, linea_nombre: linea?.nombre || "",
+      cantidad: uds, n_personas: personas || (parseInt(linea?.personas)||3), horas_equipo: 8,
+      consumos, paros: parosFinal, nota: "",
+      origen: "terminal",
+      registrado_por: perfil?.nombre || "terminal", registrado_at: new Date().toISOString(),
+    });
+    for (const cs of consumos) if (cs.lote && cs.materia_id) {
+      const lid = (cs.materia_id+"_"+cs.lote).replace(/[^a-zA-Z0-9_-]/g,"_");
+      await save("lotes", lid, { materia_id: cs.materia_id, codigo: cs.lote, ultima_fecha: hoy });
+    }
+    setModal({ tipo:"hecho", uds, pct });
+    setGuardando(false);
+  };
+
+  const reiniciar = () => {
+    setUds(0); setParos([]); setParoActivo(null); setConsumos([]);
+    setProductoId(""); setOrdenId(""); setModal(null); setVista("producto");
+  };
+
+  // ── Cabecera fija del terminal
+  const Cabecera = ({ titulo, atras }) => (
+    <div style={{background:C.navy,padding:"16px 20px",display:"flex",alignItems:"center",gap:16}}>
+      {atras && (
+        <button onClick={atras}
+          style={{width:64,height:64,borderRadius:16,background:"rgba(255,255,255,0.15)",border:"none",
+            color:"#fff",fontSize:30,cursor:"pointer",flexShrink:0}}>‹</button>
+      )}
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontFamily:F.h,fontWeight:800,fontSize:26,color:"#fff",lineHeight:1.15}}>{titulo}</div>
+        <div style={{fontSize:15,color:"rgba(255,255,255,0.65)",marginTop:2}}>
+          {new Date().toLocaleDateString("es-ES",{weekday:"long",day:"numeric",month:"long"})}
+        </div>
+      </div>
+      <button onClick={onBack}
+        style={{height:56,padding:"0 20px",borderRadius:14,background:"rgba(255,255,255,0.15)",border:"none",
+          color:"#fff",fontFamily:F.h,fontWeight:700,fontSize:17,cursor:"pointer",flexShrink:0}}>Salir</button>
+    </div>
+  );
+
+  // ═══ PASO 1 · LÍNEA ═══
+  if (vista === "linea") {
+    const lc = lineas.filter(l => l.activo !== false && (!perfil?.centro || l.centro === perfil.centro));
+    const lista = lc.length ? lc : lineas.filter(l=>l.activo!==false);
+    return (
+      <div style={{background:C.bg,minHeight:"100vh"}}>
+        <Cabecera titulo="¿En qué línea trabajas?"/>
+        <div style={{padding:24,display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:18}}>
+          {lista.map(l=>(
+            <BotonGrande key={l.id} alto={130} bg="#fff" borde={C.blue}
+              sub={`${parseInt(l.personas)||3} personas`}
+              onClick={()=>{ setLineaId(l.id); setPersonas(parseInt(l.personas)||3); setVista("turno"); }}>
+              ⚙️ {l.nombre}
+            </BotonGrande>
+          ))}
+          {lista.length===0 && <Empty icon="⚙️" text="No hay líneas dadas de alta"/>}
+        </div>
+      </div>
+    );
+  }
+
+  // ═══ PASO 2 · TURNO ═══
+  if (vista === "turno") {
+    return (
+      <div style={{background:C.bg,minHeight:"100vh"}}>
+        <Cabecera titulo="¿Qué turno?" atras={()=>setVista("linea")}/>
+        <div style={{padding:24,display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:18}}>
+          {turnos.map(t=>(
+            <BotonGrande key={t.id} alto={130} bg="#fff" borde={C.blue}
+              sub={t.hora_inicio ? `${t.hora_inicio} – ${t.hora_fin||""}` : null}
+              onClick={()=>{ setTurnoId(t.id); setVista("producto"); }}>
+              🕐 {t.nombre}
+            </BotonGrande>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // ═══ PASO 3 · QUÉ SE FABRICA ═══
+  if (vista === "producto") {
+    const abiertas = ordenes.filter(o => !o.cerrada);
+    const deLinea  = abiertas.filter(o => !o.linea_id || o.linea_id === lineaId);
+    const lista = (deLinea.length ? deLinea : abiertas).slice(0, 12);
+    return (
+      <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
+        <Cabecera titulo="¿Qué vas a fabricar?" atras={()=>setVista("turno")}/>
+        <div style={{padding:24}}>
+          <div style={{fontSize:17,color:C.mutedD,marginBottom:16}}>
+            {linea?.nombre} · {turno?.nombre}
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(300px,1fr))",gap:18}}>
+            {lista.map(o=>{
+              const p = productos.find(x=>x.id===o.producto_id);
+              const m = p?.molde_id ? moldes.find(z=>z.id===p.molde_id)?.nombre : p?.molde;
+              return (
+                <BotonGrande key={o.id} alto={140} bg="#fff" borde={C.green}
+                  onClick={()=>{ setProductoId(o.producto_id); setOrdenId(o.id); setVista("trabajo"); }}>
+                  <span style={{fontSize:24}}>{p?.nombre || "?"}</span>
+                  <span style={{fontSize:15,fontWeight:600,color:C.mutedD}}>
+                    OT {o.numero || "—"} · {num(o.cantidad||0)} uds{m?` · 🔧 ${m}`:""}
+                  </span>
+                </BotonGrande>
+              );
+            })}
+          </div>
+          {lista.length===0 && (
+            <div style={{marginTop:20}}><Empty icon="📋" text="No hay órdenes abiertas. Créalas en Órdenes de Producción."/></div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ═══ PASO 4 · PANTALLA DE TRABAJO ═══
+  const colorPct = pct >= 1 ? C.green : pct >= 0.7 ? C.amber : C.red;
+  return (
+    <div style={{background: paroActivo ? "#FEF2F2" : C.bg, minHeight:"100vh", paddingBottom:24}}>
+      <Cabecera titulo={prod?.nombre || "Producción"} atras={()=>setVista("producto")}/>
+
+      <div style={{padding:"16px 20px",display:"flex",gap:14,flexWrap:"wrap",alignItems:"center",
+        background:"#fff",borderBottom:`2px solid ${C.border}`}}>
+        {[["⚙️", linea?.nombre], ["🕐", turno?.nombre], ["👥", `${personas} personas`], molde?["🔧", molde]:null]
+          .filter(Boolean).map(([i,t],k)=>(
+          <span key={k} style={{fontSize:18,fontFamily:F.h,fontWeight:700,color:C.text,
+            background:C.card2,borderRadius:12,padding:"10px 16px"}}>{i} {t}</span>
+        ))}
+      </div>
+
+      {paroActivo && (
+        <div style={{background:C.red,color:"#fff",padding:"20px",textAlign:"center"}}>
+          <div style={{fontFamily:F.h,fontWeight:800,fontSize:26}}>⏸ LÍNEA PARADA · {paroActivo.nombre}</div>
+          <div style={{fontFamily:F.h,fontWeight:900,fontSize:52,letterSpacing:1,marginTop:4}}>{mmss(ahora-paroActivo.desde)}</div>
+        </div>
+      )}
+
+      {/* CONTADOR */}
+      <div style={{padding:"24px 20px",textAlign:"center"}}>
+        <div style={{fontSize:17,color:C.mutedD,fontFamily:F.h,fontWeight:700,letterSpacing:1}}>UNIDADES FABRICADAS</div>
+        <div style={{fontFamily:F.h,fontWeight:900,fontSize:96,color:colorPct,lineHeight:1.05}}>{num(uds)}</div>
+        {ritmo>0 && (
+          <>
+            <div style={{fontSize:19,color:C.mutedD,marginBottom:10}}>de <b style={{color:C.text}}>{num(ritmo)}</b> del turno</div>
+            <div style={{height:22,background:C.card2,borderRadius:11,overflow:"hidden",maxWidth:620,margin:"0 auto"}}>
+              <div style={{width:Math.min(100,pct*100)+"%",height:"100%",background:colorPct,borderRadius:11,transition:"width .3s"}}/>
+            </div>
+            <div style={{fontFamily:F.h,fontWeight:800,fontSize:22,color:colorPct,marginTop:8}}>{Math.round(pct*100)}%</div>
+          </>
+        )}
+      </div>
+
+      {/* BOTONES DE CUENTA */}
+      <div style={{padding:"0 20px",display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:14,marginBottom:18}}>
+        <BotonGrande alto={100} bg="#fff" borde={C.border} onClick={()=>setUds(u=>Math.max(0,u-1))}>− 1</BotonGrande>
+        <BotonGrande alto={100} bg="#fff" borde={C.border} onClick={()=>setUds(u=>Math.max(0,u-10))}>− 10</BotonGrande>
+        <BotonGrande alto={100} bg={C.green} color="#fff" borde={C.green} onClick={()=>setUds(u=>u+1)}>+ 1</BotonGrande>
+        <BotonGrande alto={100} bg={C.green} color="#fff" borde={C.green} onClick={()=>setUds(u=>u+10)}>+ 10</BotonGrande>
+      </div>
+
+      {/* ACCIONES */}
+      <div style={{padding:"0 20px",display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(230px,1fr))",gap:14}}>
+        {paroActivo ? (
+          <BotonGrande alto={110} bg={C.green} color="#fff" borde={C.green}
+            onClick={()=>{ setParos([...paros,{ motivo_id:paroActivo.motivo_id, motivo:paroActivo.nombre,
+                minutos: Math.round((ahora-paroActivo.desde)/60000) }]); setParoActivo(null); }}>
+            ▶ REANUDAR
+          </BotonGrande>
+        ) : (
+          <BotonGrande alto={110} bg="#fff" color={C.red} borde={C.red}
+            sub={paros.length ? `${paros.length} paros · ${Math.round(minParados)} min` : null}
+            onClick={()=>setModal({tipo:"paro"})}>⏸ PARAR LÍNEA</BotonGrande>
+        )}
+        <BotonGrande alto={110} bg="#fff" color={C.blue} borde={C.blue}
+          sub={consumos.length ? `${consumos.length} registrados` : "lote y metros"}
+          onClick={()=>setModal({tipo:"lote"})}>📦 MATERIA</BotonGrande>
+        <BotonGrande alto={110} bg={C.navy} color="#fff" borde={C.navy}
+          disabled={uds<=0} onClick={()=>setModal({tipo:"fin"})}>✔ TERMINAR TURNO</BotonGrande>
+      </div>
+
+      {modal?.tipo==="paro"  && <ModalParo motivos={motivos} onCerrar={()=>setModal(null)}
+        onElegir={(m)=>{ setParoActivo({motivo_id:m.id, nombre:m.nombre, desde:Date.now()}); setModal(null); }}/>}
+      {modal?.tipo==="lote"  && <ModalLote mps={mps} prod={prod} onCerrar={()=>setModal(null)}
+        onGuardar={(c)=>{ setConsumos([...consumos,c]); setModal(null); }}/>}
+      {modal?.tipo==="fin"   && <ModalFin uds={uds} ritmo={ritmo} prod={prod} paros={paros} minParados={minParados}
+        consumos={consumos} guardando={guardando} onCerrar={()=>setModal(null)} onConfirmar={guardar}/>}
+      {modal?.tipo==="hecho" && <ModalHecho uds={modal.uds} pct={modal.pct} onSeguir={reiniciar} onSalir={onBack}/>}
+    </div>
+  );
+}
+
+// ── Capa a pantalla completa para los diálogos del terminal
+const CapaTerminal = ({ titulo, onCerrar, children, color=C.navy }) => (
+  <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.75)",zIndex:60,display:"flex",flexDirection:"column"}}>
+    <div style={{background:color,padding:"18px 22px",display:"flex",alignItems:"center",gap:16}}>
+      <div style={{flex:1,fontFamily:F.h,fontWeight:800,fontSize:26,color:"#fff"}}>{titulo}</div>
+      <button onClick={onCerrar}
+        style={{width:64,height:64,borderRadius:16,background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",fontSize:30,cursor:"pointer"}}>✕</button>
+    </div>
+    <div style={{flex:1,overflowY:"auto",background:C.bg,padding:22}}>{children}</div>
+  </div>
+);
+
+// ── Motivos de paro, en rejilla grande
+const ModalParo = ({ motivos, onElegir, onCerrar }) => (
+  <CapaTerminal titulo="¿Por qué para la línea?" onCerrar={onCerrar} color={C.red}>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(250px,1fr))",gap:16}}>
+      {motivos.map(m=>(
+        <BotonGrande key={m.id} alto={120} bg="#fff" borde={C.red} onClick={()=>onElegir(m)}>
+          {m.nombre}
+        </BotonGrande>
+      ))}
+      {motivos.length===0 && <Empty icon="⏸" text="No hay motivos de paro configurados"/>}
+    </div>
+  </CapaTerminal>
+);
+
+// ── Teclado numérico grande
+const Teclado = ({ valor, onChange, sufijo }) => (
+  <>
+    <div style={{background:"#fff",border:`2px solid ${C.border}`,borderRadius:16,padding:"18px",
+      textAlign:"center",marginBottom:16}}>
+      <span style={{fontFamily:F.h,fontWeight:900,fontSize:52,color:C.text}}>{valor || "0"}</span>
+      {sufijo && <span style={{fontSize:22,color:C.mutedD,marginLeft:8}}>{sufijo}</span>}
+    </div>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12}}>
+      {["1","2","3","4","5","6","7","8","9",".","0","←"].map(k=>(
+        <button key={k} onClick={()=>{
+            if (k==="←") onChange(valor.slice(0,-1));
+            else if (k==="." && valor.includes(".")) return;
+            else onChange(valor + k);
+          }}
+          style={{height:86,background:k==="←"?C.card2:"#fff",border:`2px solid ${C.border}`,borderRadius:16,
+            fontFamily:F.h,fontWeight:800,fontSize:32,color:C.text,cursor:"pointer"}}>{k}</button>
+      ))}
+    </div>
+  </>
+);
+
+// ── Registro de materia y lote
+function ModalLote({ mps, prod, onGuardar, onCerrar }) {
+  const propias = (prod?.materias_asignadas||[]).map(m=>mps.find(x=>x.id===m.mp_id)).filter(Boolean);
+  const lista = propias.length ? propias : mps;
+  const [mpId, setMpId] = useState(lista.length===1 ? lista[0].id : "");
+  const [lote, setLote] = useState("");
+  const [metros, setMetros] = useState("");
+  const [campo, setCampo] = useState("lote");
+  const mp = mps.find(x=>x.id===mpId);
+
+  if (!mpId) return (
+    <CapaTerminal titulo="¿Qué materia estás usando?" onCerrar={onCerrar} color={C.blue}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(250px,1fr))",gap:16}}>
+        {lista.map(m=>(
+          <BotonGrande key={m.id} alto={110} bg="#fff" borde={C.blue} onClick={()=>setMpId(m.id)}>{m.nombre}</BotonGrande>
+        ))}
+      </div>
+    </CapaTerminal>
+  );
+
+  return (
+    <CapaTerminal titulo={mp?.nombre || "Materia"} onCerrar={onCerrar} color={C.blue}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
+        <BotonGrande alto={90} bg={campo==="lote"?C.blue:"#fff"} color={campo==="lote"?"#fff":C.text}
+          borde={C.blue} sub={lote||"sin poner"} onClick={()=>setCampo("lote")}>LOTE</BotonGrande>
+        <BotonGrande alto={90} bg={campo==="metros"?C.blue:"#fff"} color={campo==="metros"?"#fff":C.text}
+          borde={C.blue} sub={metros?`${metros} m`:"sin poner"} onClick={()=>setCampo("metros")}>METROS</BotonGrande>
+      </div>
+      <Teclado valor={campo==="lote"?lote:metros}
+        onChange={v=>campo==="lote"?setLote(v):setMetros(v)}
+        sufijo={campo==="metros"?"m":null}/>
+      <div style={{marginTop:16}}>
+        <BotonGrande alto={96} bg={C.green} color="#fff" borde={C.green}
+          disabled={!lote && !metros}
+          onClick={()=>onGuardar({ materia_id:mpId, lote:lote.trim(), metros_consumidos: toNum(metros) })}>
+          ✔ GUARDAR
+        </BotonGrande>
+      </div>
+    </CapaTerminal>
+  );
+}
+
+// ── Confirmación antes de cerrar el turno
+const ModalFin = ({ uds, ritmo, prod, paros, minParados, consumos, guardando, onConfirmar, onCerrar }) => {
+  const pct = ritmo>0 ? uds/ritmo : 0;
+  const falta = ritmo>0 ? ritmo-uds : 0;
+  return (
+    <CapaTerminal titulo="¿Cerramos el turno?" onCerrar={onCerrar} color={C.navy}>
+      <div style={{background:"#fff",border:`2px solid ${C.border}`,borderRadius:18,padding:22,marginBottom:18,textAlign:"center"}}>
+        <div style={{fontSize:19,color:C.mutedD}}>{prod?.nombre}</div>
+        <div style={{fontFamily:F.h,fontWeight:900,fontSize:76,color:pct>=1?C.green:C.amber,lineHeight:1.1}}>{num(uds)}</div>
+        <div style={{fontSize:19,color:C.mutedD}}>unidades{ritmo>0 && <> · {Math.round(pct*100)}% del turno</>}</div>
+        {falta > 0.5 && (
+          <div style={{background:C.amberBg,border:`2px solid ${C.amber}`,borderRadius:14,padding:"14px",marginTop:16,
+            fontFamily:F.h,fontWeight:800,fontSize:19,color:C.amber}}>
+            Faltan {num(falta)} para el objetivo
+          </div>
+        )}
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:18}}>
+        <div style={{background:"#fff",border:`2px solid ${C.border}`,borderRadius:16,padding:"16px",textAlign:"center"}}>
+          <div style={{fontFamily:F.h,fontWeight:900,fontSize:34,color:paros.length?C.red:C.green}}>{Math.round(minParados)}</div>
+          <div style={{fontSize:15,color:C.mutedD}}>min parados · {paros.length} paros</div>
+        </div>
+        <div style={{background:"#fff",border:`2px solid ${C.border}`,borderRadius:16,padding:"16px",textAlign:"center"}}>
+          <div style={{fontFamily:F.h,fontWeight:900,fontSize:34,color:consumos.length?C.green:C.red}}>{consumos.length}</div>
+          <div style={{fontSize:15,color:C.mutedD}}>lotes registrados</div>
+        </div>
+      </div>
+      {consumos.length===0 && (
+        <div style={{background:C.redBg,border:`2px solid ${C.red}`,borderRadius:14,padding:"16px",marginBottom:18,
+          fontSize:18,color:C.red,fontWeight:700,textAlign:"center",lineHeight:1.5}}>
+          ⚠️ No has registrado ningún lote de materia
+        </div>
+      )}
+      <div style={{display:"grid",gap:12}}>
+        <BotonGrande alto={104} bg={C.green} color="#fff" borde={C.green} disabled={guardando}
+          onClick={onConfirmar}>{guardando ? "Guardando…" : "✔ SÍ, CERRAR TURNO"}</BotonGrande>
+        <BotonGrande alto={88} bg="#fff" borde={C.border} onClick={onCerrar}>← Seguir trabajando</BotonGrande>
+      </div>
+    </CapaTerminal>
+  );
+};
+
+// ── Confirmación final
+const ModalHecho = ({ uds, pct, onSeguir, onSalir }) => (
+  <div style={{position:"fixed",inset:0,background:C.green,zIndex:70,display:"flex",flexDirection:"column",
+    alignItems:"center",justifyContent:"center",padding:30,gap:22}}>
+    <div style={{fontSize:96}}>✔</div>
+    <div style={{fontFamily:F.h,fontWeight:900,fontSize:40,color:"#fff",textAlign:"center"}}>Parte guardado</div>
+    <div style={{fontFamily:F.h,fontWeight:900,fontSize:72,color:"#fff"}}>{num(uds)} uds</div>
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,width:"100%",maxWidth:620,marginTop:10}}>
+      <BotonGrande alto={100} bg="#fff" color={C.green} borde="#fff" onClick={onSeguir}>▶ OTRO PRODUCTO</BotonGrande>
+      <BotonGrande alto={100} bg="rgba(255,255,255,0.2)" color="#fff" borde="#fff" onClick={onSalir}>SALIR</BotonGrande>
+    </div>
+  </div>
+);
+
 function TerminalOperario({ perfil, productos }) {
   const [lineas] = useCol("lineas");
   const [turnos] = useCol("turnos");
@@ -2075,12 +2466,12 @@ function LineasScreen({ onBack, centros }) {
               <div style={{display:"flex",flexDirection:"column",gap:8}}>
                 {rows.map(l=>(
                   <Card key={l.id} style={{opacity:l.activo!==false?1:0.5}}>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                      <div>
-                        <div style={{fontFamily:F.h,fontWeight:700,fontSize:16,color:C.text}}>⚙️ {l.nombre}</div>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10}}>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontFamily:F.h,fontWeight:700,fontSize:16,color:C.text,wordBreak:"break-word",lineHeight:1.35}}>⚙️ {l.nombre}</div>
                         <div style={{fontSize:12.5,color:C.mutedD,marginTop:2}}>👥 {parseInt(l.personas)||3} persona{(parseInt(l.personas)||3)!==1?"s":""} por turno</div>
                       </div>
-                      <div style={{display:"flex",gap:6}}>
+                      <div style={{display:"flex",gap:6,flexShrink:0}}>
                         <IconBtn onClick={()=>startEdit(l)}>✏️</IconBtn>
                         <button onClick={()=>save("lineas",l.id,{activo:l.activo===false})}
                           style={{background:"#fff",border:`1px solid ${l.activo!==false?C.green:C.border}`,color:l.activo!==false?C.green:C.muted,borderRadius:20,padding:"4px 12px",fontSize:12,fontWeight:600,cursor:"pointer"}}>
@@ -2273,12 +2664,12 @@ function TurnosScreen({ onBack }) {
         <div style={{display:"flex",flexDirection:"column",gap:8}}>
           {turnos.map(t=>(
             <Card key={t.id}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                <div>
-                  <span style={{fontFamily:F.h,fontWeight:700,fontSize:18,color:C.text}}>{t.nombre}</span>
-                  <span style={{color:C.accent,fontSize:15,marginLeft:12,fontFamily:F.h,fontWeight:600}}>{t.hora_inicio} – {t.hora_fin}</span>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10}}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontFamily:F.h,fontWeight:700,fontSize:17,color:C.text,wordBreak:"break-word",lineHeight:1.35}}>{t.nombre}</div>
+                  <div style={{color:C.accent,fontSize:14,fontFamily:F.h,fontWeight:600,marginTop:2}}>{t.hora_inicio} – {t.hora_fin}</div>
                 </div>
-                <div style={{display:"flex",gap:6}}>
+                <div style={{display:"flex",gap:6,flexShrink:0}}>
                   <IconBtn onClick={()=>startEdit(t)}>✏️</IconBtn>
                   <IconBtn danger onClick={()=>{if(window.confirm("¿Eliminar turno?"))del("turnos",t.id);}}>🗑️</IconBtn>
                 </div>
@@ -2301,14 +2692,18 @@ function ProcesosScreen({ onBack }) {
   const [nombre, setNombre] = useState("");
   const [diferido, setDiferido] = useState(false);
   const [apoyo, setApoyo] = useState(false);
+  const [tProc, setTProc] = useState("");
+  const [tObj, setTObj]   = useState("");
   const [editId, setEditId] = useState(null);
   const [nuevoAbierto, setNuevoAbierto] = useState(false);
-  const startEdit = (p)=>{ setEditId(p.id); setNombre(p.nombre||""); setDiferido(!!p.diferido); setApoyo(!!p.apoyo); window.scrollTo(0,0); };
+  const startEdit = (p)=>{ setNuevoAbierto(false); setEditId(p.id); setNombre(p.nombre||""); setDiferido(!!p.diferido); setApoyo(!!p.apoyo);
+    setTProc(p.tiempo_proceso?.toString()||""); setTObj(p.tiempo_objetivo?.toString()||""); window.scrollTo(0,0); };
 
   const add = async () => {
     if (!nombre.trim()) return;
-    await save("procesos", editId||uid(), { nombre: nombre.trim(), diferido, apoyo });
-    setNombre(""); setDiferido(false); setApoyo(false); setEditId(null);
+    await save("procesos", editId||uid(), { nombre: nombre.trim(), diferido, apoyo,
+      tiempo_proceso: toNum(tProc), tiempo_objetivo: toNum(tObj) });
+    setNombre(""); setDiferido(false); setApoyo(false); setTProc(""); setTObj(""); setEditId(null); setNuevoAbierto(false);
   };
   return (
     <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
@@ -2316,6 +2711,23 @@ function ProcesosScreen({ onBack }) {
       <div style={{padding:14}}>
         <FormPlegable abierto={nuevoAbierto} setAbierto={setNuevoAbierto} editando={!!editId} etiqueta="Proceso" onCancelar={()=>{setEditId(null);}}>
           <Field label="Nombre del proceso" value={nombre} onChange={setNombre} placeholder="Ej: Plisado"/>
+          <div style={{background:C.blueBg,borderRadius:11,padding:"12px 13px",marginBottom:14}}>
+            <div style={{fontFamily:F.h,fontWeight:800,fontSize:13,color:C.blue,marginBottom:3}}>⏱️ Tiempos por unidad</div>
+            <div style={{fontSize:12,color:C.mutedD,marginBottom:11,lineHeight:1.5}}>
+              El <b>objetivo</b> es el que se precarga al meter este proceso en un producto. Ahí se puede cambiar si ese producto tarda distinto.
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+              <Field dec label="Tiempo de proceso (min/ud)" value={tProc} onChange={setTProc} placeholder="1.40" min="0" step="0.01"/>
+              <Field dec label="Tiempo objetivo (min/ud)" value={tObj} onChange={setTObj} placeholder="1.20" min="0" step="0.01"/>
+            </div>
+            {toNum(tProc)>0 && toNum(tObj)>0 && (
+              <div style={{fontSize:12.5,color:toNum(tObj)<toNum(tProc)?C.green:C.mutedD,fontWeight:700,lineHeight:1.5}}>
+                {toNum(tObj)<toNum(tProc)
+                  ? `Margen de mejora: ${(toNum(tProc)-toNum(tObj)).toFixed(2)} min/ud (${Math.round((1-toNum(tObj)/toNum(tProc))*100)}%)`
+                  : "El objetivo no es más exigente que el tiempo actual."}
+              </div>
+            )}
+          </div>
           <button onClick={()=>setDiferido(d=>!d)}
             style={{background:"#fff",border:`1.5px solid ${diferido?C.amber:C.border}`,color:diferido?C.amber:C.muted,borderRadius:20,padding:"6px 16px",fontSize:14,fontFamily:F.h,fontWeight:600,cursor:"pointer",marginBottom:12}}>
             {diferido?"⏭ Diferido (se hace al día siguiente)":"◯ Diferido (día siguiente)"}
@@ -2330,16 +2742,29 @@ function ProcesosScreen({ onBack }) {
         <div style={{display:"flex",flexDirection:"column",gap:8}}>
           {procesos.map(p=>(
             <Card key={p.id}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                <div style={{fontFamily:F.h,fontWeight:700,fontSize:17,color:C.text}}>
-                  {p.nombre} {p.diferido && <Pill color={C.amber} bg={C.amberBg}>⏭ DIFERIDO</Pill>} {p.apoyo && <Pill color={C.blue} bg={C.blueBg}>🤝 APOYO</Pill>}
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10}}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontFamily:F.h,fontWeight:700,fontSize:16.5,color:C.text,lineHeight:1.35,wordBreak:"break-word"}}>{p.nombre}</div>
+                  <div style={{fontSize:12.5,color:C.mutedD,marginTop:3}}>
+                    {toNum(p.tiempo_proceso)>0 || toNum(p.tiempo_objetivo)>0
+                      ? <>⏱️ actual <b style={{color:C.text}}>{toNum(p.tiempo_proceso)||"—"}</b> · objetivo <b style={{color:C.blue}}>{toNum(p.tiempo_objetivo)||"—"}</b> min/ud</>
+                      : <span style={{color:C.amber,fontWeight:700}}>⚠️ sin tiempos definidos</span>}
+                  </div>
+                  {(p.diferido || p.apoyo) && (
+                    <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:5}}>
+                      {p.diferido && <Pill color={C.amber} bg={C.amberBg}>⏭ DIFERIDO</Pill>}
+                      {p.apoyo && <Pill color={C.blue} bg={C.blueBg}>🤝 APOYO</Pill>}
+                    </div>
+                  )}
                 </div>
-                <IconBtn onClick={()=>startEdit(p)}>✏️</IconBtn>
-                <IconBtn danger onClick={()=>{
-                  const n = procEnUso(p.id);
-                  if (n>0) { window.alert(`⛔ No se puede borrar: ${n} productos usan este proceso. Quítalo primero de esos productos.`); return; }
-                  if(window.confirm("¿Eliminar proceso del catálogo?")) del("procesos",p.id);
-                }}>🗑️</IconBtn>
+                <div style={{display:"flex",gap:4,flexShrink:0}}>
+                  <IconBtn onClick={()=>startEdit(p)}>✏️</IconBtn>
+                  <IconBtn danger onClick={()=>{
+                    const n = procEnUso(p.id);
+                    if (n>0) { window.alert(`⛔ No se puede borrar: ${n} productos usan este proceso. Quítalo primero de esos productos.`); return; }
+                    if(window.confirm("¿Eliminar proceso del catálogo?")) del("procesos",p.id);
+                  }}>🗑️</IconBtn>
+                </div>
               </div>
             </Card>
           ))}
@@ -2674,6 +3099,13 @@ function ProductoForm({ onBack, ep, procesos, mps, centros, moldes = [] }) {
   const [ma, setMa]         = useState(ep?.materias_asignadas||[]); // [{mp_id,capas,precio_ud,rendimiento}]
   const [selProc, setSelProc] = useState("");
   const [minObj, setMinObj]   = useState("");
+  // el tiempo objetivo del catálogo se precarga, pero se puede cambiar aquí
+  useEffect(()=>{
+    if (!selProc) { setMinObj(""); return; }
+    const c = procesos.find(p=>p.id===selProc);
+    const t = toNum(c?.tiempo_objetivo) || toNum(c?.tiempo_proceso);
+    setMinObj(t>0 ? String(t) : "");
+  },[selProc]);
   const [selMp, setSelMp]     = useState("");
   const [capas, setCapas]     = useState("");
   const [precioMp, setPrecioMp] = useState("");
@@ -2802,12 +3234,12 @@ function ProductoForm({ onBack, ep, procesos, mps, centros, moldes = [] }) {
             const cst = costeProcLinea(toNum(x.min_obj));
             return (
               <div key={x.proceso_id} style={{padding:"9px 0",borderBottom:`1px solid ${C.border}`}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                  <div>
-                    <span style={{fontFamily:F.h,fontWeight:600,fontSize:16,color:C.text}}>{pr?.diferido?"⏭ ":""}{pr?.nombre||"?"}</span>
-                    <span style={{color:C.accent,fontSize:14,marginLeft:10,fontWeight:600}}>min/{unidad||"ud"}</span>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10}}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontFamily:F.h,fontWeight:700,fontSize:15.5,color:C.text,wordBreak:"break-word",lineHeight:1.35}}>{pr?.diferido?"⏭ ":""}{pr?.nombre||"?"}</div>
+                    <div style={{color:C.accent,fontSize:13,fontWeight:600,marginTop:2}}>min/{unidad||"ud"}</div>
                   </div>
-                  <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                  <div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0,flexWrap:"wrap",justifyContent:"flex-end"}}>
                     <button onClick={()=>setPa(prev=>prev.map(z=>({...z,define_cantidad:z.proceso_id===x.proceso_id})))}
                       style={{background:"#fff",border:`1.5px solid ${x.define_cantidad?C.green:C.border}`,color:x.define_cantidad?C.green:C.muted,borderRadius:20,padding:"3px 12px",fontSize:12,fontFamily:F.h,fontWeight:600,cursor:"pointer"}}>
                       {x.define_cantidad?"★ Define qty":"◯"}
@@ -2822,15 +3254,38 @@ function ProductoForm({ onBack, ep, procesos, mps, centros, moldes = [] }) {
                   <span style={{fontSize:12.5,color:cst>0?C.green:C.red,fontWeight:800}}>
                     {cst>0 ? `→ ${cst.toFixed(3)} €/${unidad||"ud"} de mano de obra` : "⚠️ falta el tiempo"}
                   </span>
+                  {(()=>{ const tc = toNum(pr?.tiempo_objetivo);
+                    if (!tc || Math.abs(tc - toNum(x.min_obj)) < 0.005) return null;
+                    return <span style={{fontSize:11.5,color:C.amber,fontWeight:700}}>
+                      (catálogo: {tc} min/ud)
+                    </span>; })()}
                 </div>
               </div>
             );
           })}
-          <div style={{display:"grid",gridTemplateColumns:"2fr 1fr auto",gap:8,marginTop:12,alignItems:"end"}}>
-            <Sel value={selProc} onChange={setSelProc} placeholder="Proceso…"
-              options={procesos.filter(p=>!pa.find(x=>x.proceso_id===p.id)).map(p=>({value:p.id,label:p.nombre}))}/>
-            <Field dec label="Tiempo (min/ud)" value={minObj} onChange={setMinObj} type="number" placeholder="min/ud" min="0.01" step="0.01"/>
-            <button onClick={addProc} style={{background:C.accent,border:"none",color:"#fff",borderRadius:11,padding:"13px 18px",fontFamily:F.h,fontWeight:700,fontSize:17,cursor:"pointer",marginBottom:14}}>＋</button>
+          <div style={{marginTop:12,paddingTop:12,borderTop:`1px solid ${C.border}`}}>
+            <Sel label="Añadir proceso" value={selProc} onChange={setSelProc} placeholder="Elegir del catálogo…"
+              options={procesos.filter(p=>!pa.find(x=>x.proceso_id===p.id)).map(p=>({
+                value:p.id,
+                label:`${p.nombre}${toNum(p.tiempo_objetivo)>0?`  ·  obj ${toNum(p.tiempo_objetivo)} min/ud`:""}` }))}/>
+            {selProc && (()=>{
+              const c = procesos.find(p=>p.id===selProc);
+              const tObj = toNum(c?.tiempo_objetivo), tAct = toNum(c?.tiempo_proceso);
+              return (
+                <div style={{background:tObj||tAct?C.blueBg:C.amberBg,borderRadius:10,padding:"10px 12px",marginBottom:12,
+                  fontSize:12.5,color:tObj||tAct?C.text:C.amber,fontWeight:tObj||tAct?400:700,lineHeight:1.6}}>
+                  {tObj||tAct
+                    ? <>Del catálogo: actual <b>{tAct||"—"}</b> · objetivo <b>{tObj||"—"}</b> min/ud. Se ha puesto el objetivo; cámbialo si este producto tarda distinto.</>
+                    : <>⚠️ Este proceso no tiene tiempos en el catálogo. Escríbelo aquí o defínelos en Procesos.</>}
+                </div>
+              );
+            })()}
+            <div style={{display:"flex",gap:8,alignItems:"flex-end"}}>
+              <div style={{flex:1}}>
+                <Field dec label={`Tiempo para este producto (min/${unidad||"ud"})`} value={minObj} onChange={setMinObj} placeholder="1.20" min="0.01" step="0.01"/>
+              </div>
+              <button onClick={addProc} style={{background:C.accent,border:"none",color:"#fff",borderRadius:12,padding:"14px 22px",fontFamily:F.h,fontWeight:800,fontSize:16,cursor:"pointer",marginBottom:14}}>＋</button>
+            </div>
           </div>
           {pa.length>0 && (
             <div style={{marginTop:10,paddingTop:10,borderTop:`1.5px solid ${C.border}`,display:"flex",justifyContent:"space-between"}}>
@@ -3191,7 +3646,7 @@ function PlanificacionScreen({ onBack, perfil, productos, mps, producciones, cen
   return (
     <div style={{background:C.bg,minHeight:"100vh",paddingBottom:40}}>
       <Header title={(centro?.nombre||"PLANIFICACIÓN").toUpperCase()} onBack={()=>setCentroId("")}
-        sub={`Planificación · ${nombreMes(periodo)} · toca ‹ para cambiar de centro`}/>
+        sub="Planificación · toca ‹ para cambiar de centro"/>
       <div style={{position:"sticky",top:0,zIndex:16,boxShadow:"0 2px 10px rgba(15,23,42,0.10)"}}>
         <div style={{display:"flex",gap:6,padding:"10px 12px",background:C.navy}}>
           {TABS.map(([k,l])=>(
@@ -3234,7 +3689,7 @@ function PlanificacionScreen({ onBack, perfil, productos, mps, producciones, cen
             ⛔ Ningún producto está asignado a este centro. Asígnalos en su ficha antes de planificar.
           </div>
         )}
-        {tab==="mes" && <PlanMesTab periodo={periodo} setPeriodo={setPeriodo} plan={planMes} guardar={guardarMes}
+        {tab==="mes" && <PlanMesTab periodo={periodo} plan={planMes} guardar={guardarMes}
           productos={prodCentro} mps={mps} semanas={semanas} planesSem={planesSem} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} turnosCentro={turnosCentro} centroNombre={centro?.nombre||""} perfil={perfil} ggMes={ggMes} irReparto={()=>setTab("reparto")}/>}
         {tab==="reparto" && <RepartoTab periodo={periodo} semanas={semanas} planMes={planMes} planesSem={planesSem}
           productos={prodCentro} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} centroId={centroId} moldes={moldes} irASemana={(s)=>{ setSemana(s); setTab("semana"); }} irAlMes={()=>setTab("mes")}/>}
@@ -3413,7 +3868,7 @@ function LineaEditor({ it, productos, otros, onGuardar, onQuitar, onCerrar }) {
 }
 
 // ── TAB 1: PLAN MENSUAL ────────────────────────────────────────────────────────
-function PlanMesTab({ periodo, setPeriodo, plan, guardar, productos, mps, semanas, planesSem, slotsDia=SLOTS_DIA, persLinea=3, persDia=12, turnosCentro=TURNOS_ABIERTOS, centroNombre="", perfil, ggMes=0, irReparto }) {
+function PlanMesTab({ periodo, plan, guardar, productos, mps, semanas, planesSem, slotsDia=SLOTS_DIA, persLinea=3, persDia=12, turnosCentro=TURNOS_ABIERTOS, centroNombre="", perfil, ggMes=0, irReparto }) {
   const items = plan.items || [];
   const setItems = (v) => guardar({ items: v });
   const dias = diasLaborablesMes(periodo).length;
@@ -3556,12 +4011,6 @@ function PlanMesTab({ periodo, setPeriodo, plan, guardar, productos, mps, semana
 
   return (
     <>
-      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
-        <button onClick={()=>setPeriodo(sumaPeriodo(periodo,-1))} style={{background:"#fff",border:`1.5px solid ${C.border}`,borderRadius:12,padding:"12px 16px",fontSize:17,fontWeight:800,color:C.text,cursor:"pointer"}}>‹</button>
-        <div style={{flex:1,textAlign:"center",fontFamily:F.h,fontWeight:800,fontSize:17,color:C.text,textTransform:"capitalize"}}>{nombreMes(periodo)}</div>
-        <button onClick={()=>setPeriodo(sumaPeriodo(periodo,1))} style={{background:"#fff",border:`1.5px solid ${C.border}`,borderRadius:12,padding:"12px 16px",fontSize:17,fontWeight:800,color:C.text,cursor:"pointer"}}>›</button>
-      </div>
-
       <ItemsEditor items={items} setItems={setItems} productos={productos} persLinea={persLinea}/>
       <RecursosCard r={r} mps={mps} dias={dias} slotsDia={slotsDia} persDia={persDia} turnosCentro={turnosCentro} titulo="Recursos del mes"/>
 
@@ -5208,6 +5657,7 @@ function Home({ perfil, onGo, onLogout, counts, ordenes=[], producciones=[], pro
   const esGerencia = perfil.rol === "gerencia";
   const tiles = [
     { id:"planificacion", grupo:"proc", icon:"📅", bg:"#EEF2FF", label:"Planificación", sub:"Mes · semana · cuadre · cierre", roles:["gerencia","sup_fabrica"] },
+    { id:"terminal",  grupo:"proc", icon:"🖥️", bg:"#ECFDF5", label:"Terminal de Planta",   sub:"Pantalla táctil del obrador",        roles:["gerencia","sup_fabrica","sup_oficina","operario"] },
     { id:"ordenes",   grupo:"proc", icon:"📋", bg:"#ECFDF5", label:"Órdenes de Producción", sub:"Planificar y registrar",     roles:["gerencia","sup_fabrica","sup_oficina"] },
     { id:"diario",    grupo:"proc", icon:"📖", bg:"#EFF6FF", label:"Diario de Fabricación", sub:"El parte oficial del día",          roles:["gerencia","sup_fabrica","sup_oficina"] },
     { id:"analitica", grupo:"proc", icon:"📊", bg:"#FDF2F8", label:"Analítica",         sub:"Evolución · costes · lotes · equipos", roles:["gerencia","sup_fabrica"] },
@@ -5445,6 +5895,8 @@ export default function App() {
       <style>{STYLES}</style>
       {view==="home"      && <Home perfil={perfil} onGo={setView} onLogout={()=>signOut(auth)} counts={counts} ordenes={ordenesRoot} producciones={produccionesRoot} productos={productos}/>}
       {view==="moldes"    && <MoldesScreen onBack={back} productos={productos}/>}
+      {view==="terminal"  && <TerminalPlanta onBack={back} perfil={perfil} productos={productos} lineas={lineas}
+        turnos={turnos} centros={centros} mps={mps} motivos={motivos} ordenes={ordenesRoot} moldes={moldes}/>}
       {view==="planificacion" && <PlanificacionScreen onBack={back} perfil={perfil} productos={productos} mps={mps} producciones={produccionesRoot} centros={centros} lineas={lineas} moldes={moldes}/>}
       {view==="ordenes"   && <OrdenesScreen onBack={back} perfil={perfil} productos={productos} lineas={lineas} turnos={turnos} centros={centros} mps={mps} motivos={motivos} usuarios={usuarios}/>}
       {view==="diario"    && <DiarioScreen onBack={back} productos={productos} lineas={lineas} turnos={turnos} mps={mps} motivos={motivos} usuarios={usuarios} centros={centros}/>}
