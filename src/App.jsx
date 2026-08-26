@@ -3926,7 +3926,7 @@ function PlanificacionScreen({ onBack, perfil, productos, mps, producciones, cen
     return destino.length;
   };
 
-  const TABS = [["mes","📅 Mes"],["semana","🗓️ Planificar"],["cierre","🔒 Cierre"]];
+  const TABS = [["mes","📅 Mes"],["semana","🗓️ Planificar"],["resumen","📊 Resumen"],["cierre","🔒 Cierre"]];
 
   // ── Primero se elige el centro: no se carga nada hasta entonces
   if (!centroId) return (
@@ -4027,6 +4027,10 @@ function PlanificacionScreen({ onBack, perfil, productos, mps, producciones, cen
         {tab==="semana" && <PlanSemanaTab semana={semana} setSemana={setSemana} semanas={semanas} plan={planSem}
           guardar={guardarSem} productos={prodCentro} mps={mps} perfil={perfil} slotsDia={slotsDia} persLinea={persLinea} persDia={persDia} turnosCentro={turnosCentro} cfgLineas={cfgLineas} centroNombre={centro?.nombre||""} replicarEnMes={replicarEnMes} nSemanasMes={semanas.length} moldes={moldes}
           planMes={planMes} semanasMes={planesSem}/>}
+        {tab==="resumen" && <ResumenMesTab periodo={periodo} semanas={semanas} planMes={planMes} planesSem={planesSem}
+          productos={prodCentro} mps={mps} moldes={moldes} procesos={procesos} slotsDia={slotsDia}
+          persLinea={persLinea} persDia={persDia} turnosCentro={turnosCentro} ggMes={ggMes}
+          centroNombre={centro?.nombre||""} perfil={perfil}/>}
         {tab==="cierre" && <CierreSemanaTab semana={semana} setSemana={setSemana} semanas={semanas} plan={planSem}
           guardar={guardarSem} productos={prodCentro} mps={mps} producciones={producciones} perfil={perfil}/>}
       </div>
@@ -4196,6 +4200,224 @@ function LineaEditor({ it, productos, otros, onGuardar, onQuitar, onCerrar }) {
         </div>
       </div>
     </div>
+  );
+}
+
+// ── TAB: RESUMEN DEL MES ───────────────────────────────────────────────────────
+function ResumenMesTab({ periodo, semanas, planMes, planesSem, productos, mps, moldes=[], procesos=[],
+                         slotsDia=SLOTS_DIA, persLinea=3, persDia=12, turnosCentro=2, ggMes=0, centroNombre="", perfil }) {
+  const items = planMes.items || [];
+  const dias = diasLaborablesMes(periodo).length;
+  const docDe = (sm) => planesSem.find(p => p.semana === sm);
+  const calDe = (sm) => docDe(sm)?.calendario || [];
+
+  const colocadoDe = (pid) => semanas.reduce((a,sm) =>
+    a + calDe(sm).filter(x=>x.producto_id===pid).reduce((b,x)=>b+toNum(x.cantidad),0), 0);
+
+  // Recursos de cada semana, calculados sobre lo que hay puesto en su calendario
+  const porSemana = semanas.map(sm => {
+    const cal = calDe(sm);
+    const its = cal.map(x => ({ producto_id: x.producto_id, cantidad: toNum(x.cantidad) }));
+    const r = calcRecursos(its, productos, persLinea, procesos);
+    const huecos = slotsDia * 5;
+    const persLineaDia = Math.ceil(Math.ceil(r.personaTurnos/5) / persLinea) * persLinea;
+    const persApoyoDia = Math.ceil((r.horasApoyo||0) / 5 / 8);
+    return { sm, cal, r, huecos, usados: cal.length, libres: huecos - cal.length,
+             persDiaSem: Math.min(persDia, persLineaDia) + persApoyoDia,
+             cerrada: !!docDe(sm)?.cerrado_plan };
+  });
+
+  const totalMes = porSemana.reduce((a,w)=>({
+    uds:   a.uds   + w.r.uds,
+    coste: a.coste + w.r.coste,
+    mp:    a.mp    + w.r.costeMP,
+    mo:    a.mo    + w.r.costeMO,
+    ventas:a.ventas+ w.r.ventas,
+    horasApoyo: a.horasApoyo + (w.r.horasApoyo||0),
+    usados: a.usados + w.usados,
+    huecos: a.huecos + w.huecos,
+  }), {uds:0,coste:0,mp:0,mo:0,ventas:0,horasApoyo:0,usados:0,huecos:0});
+
+  // Materias primas de todo el mes
+  const materias = {};
+  porSemana.forEach(w => Object.entries(w.r.materias).forEach(([id,m]) => {
+    materias[id] = (materias[id]||0) + m;
+  }));
+
+  const picoPersonal = porSemana.reduce((a,w)=>Math.max(a,w.persDiaSem), 0);
+  const sinColocar = items.map(it => ({ ...it, col: colocadoDe(it.producto_id) }))
+    .filter(x => Math.abs(toNum(x.cantidad) - x.col) > 0.5);
+  const total = totalMes.mp + totalMes.mo + ggMes;
+  const benef = totalMes.ventas - total;
+
+  const fila = (l, v, extra, col) => (
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",fontSize:13,padding:"6px 0"}}>
+      <span style={{color:C.mutedD}}>{l}{extra && <span style={{fontSize:11,color:C.muted}}> · {extra}</span>}</span>
+      <b style={{color:col||C.text,flexShrink:0,marginLeft:10}}>{v}</b>
+    </div>
+  );
+
+  const imprimir = () => {
+    const fMat = Object.entries(materias).sort((a,b)=>b[1]-a[1]).map(([id,m])=>{
+      const mp = mps.find(x=>x.id===id);
+      return `<tr><td>${esc(mp?.nombre||"?")}</td><td class="n">${num(m)}</td><td class="n">${num(m/((mp?.metros_madeja)||90))}</td></tr>`;
+    }).join("");
+    const fSem = porSemana.map(w=>`<tr><td>Semana ${w.sm.split("-W")[1]}</td><td>${esc(rotuloSemana(w.sm))}</td>
+      <td class="n">${num(w.r.uds)}</td><td class="n">${w.usados}/${w.huecos}</td><td class="n">${w.persDiaSem}</td>
+      <td class="n">${eur(w.r.coste)}</td><td>${w.cerrada?"Cerrada":"Abierta"}</td></tr>`).join("");
+    const fProd = items.map(it=>{
+      const p = productos.find(x=>x.id===it.producto_id);
+      const col = colocadoDe(it.producto_id), obj = toNum(it.cantidad);
+      return `<tr><td>${esc(p?.nombre||"?")}</td><td class="n">${num(obj)}</td><td class="n">${num(col)}</td>
+        <td class="n">${Math.abs(obj-col)<0.5?"OK":num(obj-col)}</td></tr>`;
+    }).join("");
+    imprimirHTML(`
+      <h1>Resumen del mes — ${esc(nombreMes(periodo))}</h1>
+      <div class="sub">${esc(centroNombre)} · ${dias} días laborables · ${semanas.length} semanas</div>
+      <div class="kpis">
+        <div class="kpi"><b>${num(totalMes.uds)}</b><span>Unidades planificadas</span></div>
+        <div class="kpi"><b>${picoPersonal}</b><span>Personas/día en el pico</span></div>
+        <div class="kpi"><b>${totalMes.usados}/${totalMes.huecos}</b><span>Huecos ocupados</span></div>
+        <div class="kpi"><b>${eur(total)}</b><span>Coste total</span></div>
+      </div>
+      <h2>Semana a semana</h2>
+      <table><tr><th>Semana</th><th>Fechas</th><th class="n">Uds</th><th class="n">Huecos</th><th class="n">Pers./día</th><th class="n">Coste</th><th>Estado</th></tr>${fSem}</table>
+      <h2>Materias primas de todo el mes</h2>
+      <table><tr><th>Materia</th><th class="n">Metros</th><th class="n">Madejas</th></tr>${fMat}</table>
+      <h2>Plan frente a lo colocado</h2>
+      <table><tr><th>Producto</th><th class="n">Plan</th><th class="n">Colocado</th><th class="n">Falta</th></tr>${fProd}</table>
+      <h2>Economía</h2>
+      <table>
+        <tr><td>Materia prima</td><td class="n">${eur(totalMes.mp)}</td></tr>
+        <tr><td>Mano de obra</td><td class="n">${eur(totalMes.mo)}</td></tr>
+        <tr><td>Gastos generales</td><td class="n">${eur(ggMes)}</td></tr>
+        <tr><td><b>Coste total</b></td><td class="n"><b>${eur(total)}</b></td></tr>
+        <tr><td>Ventas previstas</td><td class="n">${eur(totalMes.ventas)}</td></tr>
+        <tr><td><b>Beneficio</b></td><td class="n"><b>${benef>=0?"+":""}${eur(benef)}</b></td></tr>
+      </table>
+      ${pieInforme(perfil)}
+    `);
+  };
+
+  if (items.length === 0) return <Empty icon="📭" text="El plan de este mes está vacío"/>;
+
+  return (
+    <>
+      <Card style={{marginBottom:12}}>
+        <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text,marginBottom:10}}>📊 Todo el mes de un vistazo</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+          {[[num(totalMes.uds),"Unidades planificadas"],
+            [`${picoPersonal} pers.`,"Al día en la semana pico"],
+            [`${totalMes.usados}/${totalMes.huecos}`,"Huecos ocupados"],
+            [eur(total),"Coste total del mes"]].map(([v,l],i)=>(
+            <div key={i} style={{background:C.card2,borderRadius:12,padding:"11px 8px",textAlign:"center"}}>
+              <div style={{fontFamily:F.h,fontWeight:900,fontSize:19,color:C.text}}>{v}</div>
+              <div style={{fontSize:10.5,color:C.mutedD,marginTop:2}}>{l}</div>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      {/* SEMANA A SEMANA */}
+      <Card style={{marginBottom:12}}>
+        <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text,marginBottom:10}}>🗓️ Cómo queda cada semana</div>
+        {porSemana.map(w=>{
+          const pct = w.huecos>0 ? w.usados/w.huecos : 0;
+          const col = pct>0.95 ? C.green : pct<0.5 ? C.amber : C.blue;
+          return (
+            <div key={w.sm} style={{padding:"10px 0",borderBottom:`1px solid ${C.card2}`}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8}}>
+                <div style={{minWidth:0}}>
+                  <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text}}>{w.cerrada?"🔒 ":""}Semana {w.sm.split("-W")[1]}</div>
+                  <div style={{fontSize:11.5,color:C.mutedD}}>{rotuloSemana(w.sm)} · {num(w.r.uds)} uds</div>
+                </div>
+                <div style={{textAlign:"right",flexShrink:0}}>
+                  <div style={{fontFamily:F.h,fontWeight:900,fontSize:17,color:col}}>{w.persDiaSem} pers.</div>
+                  <div style={{fontSize:10.5,color:C.mutedD}}>{w.usados} de {w.huecos} huecos</div>
+                </div>
+              </div>
+              <div style={{height:8,background:C.card2,borderRadius:4,overflow:"hidden",marginTop:7}}>
+                <div style={{width:Math.min(100,pct*100)+"%",height:"100%",background:col,borderRadius:4}}/>
+              </div>
+              {w.libres>0 && (
+                <div style={{fontSize:11.5,color:C.amber,fontWeight:700,marginTop:5}}>
+                  {w.libres} huecos libres · caben {Math.round(w.libres/5*persLinea)} personas más al día
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </Card>
+
+      {/* PERSONAL */}
+      <Card style={{marginBottom:12}} color={picoPersonal>persDia?C.red+"66":C.green+"55"}>
+        <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text,marginBottom:9}}>👥 Personal que necesita el mes</div>
+        {fila("En la semana de más carga", `${picoPersonal} personas/día`, "", picoPersonal>persDia?C.red:C.text)}
+        {fila("Plantilla completa del centro", `${persDia} personas/día`)}
+        {totalMes.horasApoyo>0 && fila("Trabajo fuera de línea", `${Math.round(totalMes.horasApoyo)} h`, "desalado y similares")}
+        <div style={{background:picoPersonal>persDia?C.redBg:C.card2,borderRadius:10,padding:"10px 12px",marginTop:8,
+          fontSize:12,color:picoPersonal>persDia?C.red:C.mutedD,fontWeight:picoPersonal>persDia?700:400,lineHeight:1.6}}>
+          {picoPersonal>persDia
+            ? <>⛔ La semana pico pide {picoPersonal-persDia} personas más de las que tiene el centro. Reparte carga a otras semanas.</>
+            : <>Con la plantilla del centro se cubre el mes. Semana a semana varía entre {Math.min(...porSemana.map(w=>w.persDiaSem))} y {picoPersonal} personas/día.</>}
+        </div>
+      </Card>
+
+      {/* MATERIAS PRIMAS */}
+      <Card style={{marginBottom:12}}>
+        <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text,marginBottom:3}}>📦 Materia prima de todo el mes</div>
+        <div style={{fontSize:11.5,color:C.mutedD,lineHeight:1.55,marginBottom:10}}>
+          Lo que hay que tener en casa para cumplir el plan. Incluye el rendimiento objetivo de cada materia.
+        </div>
+        {Object.keys(materias).length===0 && <div style={{fontSize:13,color:C.muted}}>Nada colocado todavía.</div>}
+        {Object.entries(materias).sort((a,b)=>b[1]-a[1]).map(([id,m])=>{
+          const mp = mps.find(x=>x.id===id);
+          const madejas = m/((mp?.metros_madeja)||90);
+          return (
+            <div key={id} style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",padding:"7px 0",borderBottom:`1px solid ${C.card2}`}}>
+              <span style={{fontSize:13.5,color:C.text}}>{mp?.nombre||"?"}</span>
+              <span style={{flexShrink:0,marginLeft:10,textAlign:"right"}}>
+                <b style={{fontSize:15,color:C.text}}>{num(m)} m</b>
+                <div style={{fontSize:11.5,color:C.mutedD}}>{num(madejas)} madejas</div>
+              </span>
+            </div>
+          );
+        })}
+      </Card>
+
+      {/* PLAN FRENTE A LO COLOCADO */}
+      {sinColocar.length>0 && (
+        <Card style={{marginBottom:12}} color={C.amber+"66"}>
+          <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.amber,marginBottom:8}}>⚠️ Sin terminar de planificar</div>
+          {sinColocar.map(x=>{
+            const p = productos.find(z=>z.id===x.producto_id);
+            const d = toNum(x.cantidad) - x.col;
+            return (
+              <div key={x.id} style={{display:"flex",justifyContent:"space-between",fontSize:13,padding:"5px 0"}}>
+                <span style={{color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p?.nombre||"?"}</span>
+                <b style={{color:C.amber,flexShrink:0,marginLeft:8}}>{d>0?`faltan ${num(d)}`:`sobran ${num(-d)}`}</b>
+              </div>
+            );
+          })}
+        </Card>
+      )}
+
+      {/* ECONOMÍA */}
+      <Card style={{marginBottom:12}} color={(benef>=0?C.green:C.red)+"66"}>
+        <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text,marginBottom:9}}>💶 Lo que deja el mes</div>
+        {fila("Materia prima", eur(totalMes.mp))}
+        {fila("Mano de obra", eur(totalMes.mo))}
+        {fila("Gastos generales", eur(ggMes))}
+        <div style={{borderTop:`1px solid ${C.border}`,marginTop:4,paddingTop:4}}>
+          {fila("Coste total", eur(total), totalMes.uds>0?`${(total/totalMes.uds).toFixed(2)} €/ud`:"")}
+          {fila("Ventas previstas", eur(totalMes.ventas))}
+          {fila("Beneficio", `${benef>=0?"+":""}${eur(benef)}`,
+            totalMes.ventas>0?`${Math.round(benef/totalMes.ventas*100)}%`:"", benef>=0?C.green:C.red)}
+        </div>
+      </Card>
+
+      <Btn v="secondary" onClick={imprimir}>🖨️ Imprimir el resumen del mes</Btn>
+    </>
   );
 }
 
@@ -4580,6 +4802,22 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
     return Object.entries(t).map(([pid,q]) => `· ${productos.find(p=>p.id===pid)?.nombre||"?"}: ${num(q)} uds`).join("\n");
   };
 
+  // tope: lo que queda del plan del mes, para que copiar no invente producción
+  const libreDe = (pid) => Math.max(0, (objetivo[pid]||0) - (colocado[pid]||0));
+  const recortar = (nuevas) => {
+    const restante = {};
+    const out = [];
+    for (const x of nuevas) {
+      const pid = x.producto_id;
+      if (!(pid in restante)) restante[pid] = libreDe(pid);
+      const q = toNum(x.cantidad);
+      if (restante[pid] < q - 0.5) continue;      // no cabe: se descarta esa tirada
+      restante[pid] -= q;
+      out.push(x);
+    }
+    return { out, descartadas: nuevas.length - out.length };
+  };
+
   const repetirTurnoEnDia = (f, t) => {
     const patron = cal.filter(x => x.fecha===f && x.turno===t);
     if (!patron.length) { window.alert("Este turno está vacío. Planifícalo primero."); return; }
@@ -4587,10 +4825,13 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
     if (!otros.length) { window.alert("Este centro solo tiene un turno."); return; }
     if (!window.confirm(`Copiar el ${t} del ${DIA_CORTO(f)} a ${otros.join(" y ")} de ese mismo día.\n\nCada turno quedará con:\n${resumenDe(patron)}\n\n¿Seguir?`)) return;
     let base = cal.filter(x => !(x.fecha===f && otros.includes(x.turno)));
+    const nuevas = [];
     otros.forEach(t2 => { const mapa = {};
       patron.forEach(x => { if (x.grupo && !mapa[x.grupo]) mapa[x.grupo] = uid();
-        base.push({ ...x, id: uid(), grupo: x.grupo ? mapa[x.grupo] : uid(), turno: t2 }); }); });
-    setCal(base);
+        nuevas.push({ ...x, id: uid(), grupo: x.grupo ? mapa[x.grupo] : uid(), turno: t2 }); }); });
+    const { out, descartadas } = recortar(nuevas);
+    if (descartadas) window.alert(`Se han copiado solo las tiradas que caben en el plan del mes.\n${descartadas} se han descartado por pasarse.`);
+    setCal([...base, ...out]);
   };
 
   const repetirDiaEnSemana = (f) => {
@@ -4599,10 +4840,13 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
     const otros = dias.filter(z => z !== f);
     if (!window.confirm(`Copiar el ${DIA_CORTO(f)} entero a los otros ${otros.length} días de la semana.\n\nCada día quedará con:\n${resumenDe(patron)}\n\n¿Seguir?`)) return;
     let base = cal.filter(x => x.fecha === f);
+    const nuevas = [];
     otros.forEach(f2 => { const mapa = {};
       patron.forEach(x => { if (x.grupo && !mapa[x.grupo]) mapa[x.grupo] = uid();
-        base.push({ ...x, id: uid(), grupo: x.grupo ? mapa[x.grupo] : uid(), fecha: f2 }); }); });
-    setCal(base);
+        nuevas.push({ ...x, id: uid(), grupo: x.grupo ? mapa[x.grupo] : uid(), fecha: f2 }); }); });
+    const { out, descartadas } = recortar(nuevas);
+    if (descartadas) window.alert(`Se han copiado solo los días que caben en el plan del mes.\n${descartadas} tirada(s) descartada(s) por pasarse.`);
+    setCal([...base, ...out]);
   };
 
   const repetirSemanaEnMes = async () => {
@@ -5094,7 +5338,7 @@ function CalendarioSemana({ semana, plan, guardar, productos, bloqueado, cfgLine
         <Card style={{marginBottom:12}} color={C.blue+"55"}>
           <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text,marginBottom:3}}>💡 Agrupación por molde</div>
           <div style={{fontSize:12,color:C.mutedD,lineHeight:1.55,marginBottom:11}}>
-            Lo que hay que fabricar esta semana, ordenado por molde. Los productos de un mismo bloque se pueden encadenar sin parar la línea.
+Lo que queda del mes, ordenado por molde. Los de un mismo bloque se encadenan sin parar la línea.
           </div>
           {grupos.map(g=>{
             const dias2 = g.slots/TURNOS_CAL.length;
@@ -5597,6 +5841,36 @@ function PlanSemanaTab({ semana, setSemana, semanas, plan, guardar, productos, m
           {estado==="sobra" && `⚠️ Sobran ${Math.max(1,Math.floor(-dif*persLinea/5))} personas al día sin trabajo asignado. Mete más producción.`}
         </div>
       </Card>
+
+      {/* CÓMO QUEDA LA SEMANA */}
+      {cal.length>0 && (() => {
+        const huecos = slotsDia*5, usados = cal.length, libres = huecos - usados;
+        const persNec = Math.ceil(r.personaTurnos/5);
+        const sobran = Math.max(0, persDia - persNec);
+        return (
+          <Card style={{marginBottom:12}} color={libres===0?C.green+"66":C.blue+"55"}>
+            <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text,marginBottom:10}}>📋 Así queda la semana</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
+              {[[`${persNec} de ${persDia}`,"personas al día"],
+                [`${usados} de ${huecos}`,"huecos ocupados"],
+                [num(r.uds),"unidades"],
+                [eur(r.coste),"coste objetivo"]].map(([v,l],i)=>(
+                <div key={i} style={{background:C.card2,borderRadius:12,padding:"11px 8px",textAlign:"center"}}>
+                  <div style={{fontFamily:F.h,fontWeight:900,fontSize:19,color:C.text}}>{v}</div>
+                  <div style={{fontSize:10.5,color:C.mutedD,marginTop:2}}>{l}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{background:libres===0?C.greenBg:C.amberBg,borderRadius:10,padding:"10px 12px",
+              fontSize:12.5,color:libres===0?C.green:C.amber,fontWeight:700,lineHeight:1.6}}>
+              {libres===0
+                ? <>✔ Semana llena: los {huecos} huecos están ocupados y la plantilla cuadra.</>
+                : <>Quedan <b>{libres} huecos libres</b> y <b>{sobran} personas al día</b> sin trabajo asignado.
+                    Mete más producción, o baja los huecos disponibles abajo si esos turnos no se van a trabajar.</>}
+            </div>
+          </Card>
+        );
+      })()}
 
       {!bloqueado && (
         <Card style={{marginBottom:12}} color={(todoOk?C.green:C.amber)+"77"}>
