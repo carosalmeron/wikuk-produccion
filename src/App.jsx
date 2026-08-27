@@ -1443,6 +1443,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
   const [prods]     = useCol("producciones");
   const [incid]     = useCol("incidencias");
   const [costesCfg] = useCol("config_costes");
+  const [ordenes]   = useCol("ordenes");
   const ggMes = toNum(costesCfg.find(c=>c.id===centroId)?.fijos_mensuales);
 
   const semanaHoy = isoWeek(hoy);
@@ -1450,15 +1451,30 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
   const iTurno = Math.max(0, turnos.findIndex(t=>t.id===turnoId));
   const claveTurno = `T${iTurno+1}`;
 
-  // ── Las órdenes del día salen del calendario planificado
-  const otsHoy = planesSem
+  // ── Del calendario planificado
+  const otsPlan = planesSem
     .filter(w => w.semana === semanaHoy && (!centroId || w.centro === centroId))
     .flatMap(w => (w.calendario||[])
       .filter(x => x.fecha === hoy && x.turno === claveTurno)
-      .map(x => ({ ...x, semana: w.semana })));
+      .map(x => ({ ...x, semana: w.semana, origen_ot: "plan" })));
 
-  const parteDe = (ot) => prods.find(p => p.fecha===hoy && p.linea_nombre===ot.linea
-    && p.turno_clave===claveTurno && p.producto_id===ot.producto_id);
+  // ── Y las creadas a mano en Órdenes de Producción
+  const nombreLinea = (id) => lineas.find(l => l.id === id)?.nombre || "";
+  const otsManual = ordenes
+    .filter(o => !o.cerrada && o.fecha === hoy
+      && (!o.turno_id || o.turno_id === turnoId)
+      && (!centroId || (o.centro || productos.find(p=>p.id===o.producto_id)?.centro) === centroId))
+    .map(o => ({ linea: nombreLinea(o.linea_id) || "Sin línea", turno: claveTurno,
+      fecha: o.fecha, producto_id: o.producto_id, cantidad: toNum(o.cantidad),
+      orden_id: o.id, numero: o.numero, cliente: o.cliente, tipo: o.tipo, origen_ot: "manual" }));
+
+  // Si una orden a mano coincide con un hueco del calendario, no se repite
+  const otsHoy = [...otsPlan, ...otsManual.filter(m =>
+    !otsPlan.some(p => p.linea === m.linea && p.producto_id === m.producto_id))];
+
+  const parteDe = (ot) => prods.find(p =>
+    (ot.orden_id && p.orden_id === ot.orden_id) ||
+    (p.fecha===hoy && p.linea_nombre===ot.linea && p.turno_clave===claveTurno && p.producto_id===ot.producto_id));
   const abiertas = otsHoy.filter(ot => !parteDe(ot));
   const cerradasHoy = otsHoy.filter(ot => parteDe(ot));
   const cerradasTodas = prods.filter(p => p.origen==="terminal" && !p.reabierta).slice(0, 30);
@@ -1581,7 +1597,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
               </div>
               <div style={{fontSize:15,color:C.mutedD,lineHeight:1.6}}>
                 {centro?.nombre||"—"} · {turno?.nombre||"sin turno"} · {fechaESLarga(hoy)}
-                <div style={{marginTop:8}}>Las órdenes salen del calendario de Planificación. Si debería haber trabajo, díselo a tu responsable.</div>
+                <div style={{marginTop:8}}>Las órdenes salen del calendario de Planificación y de las creadas a mano en Órdenes de Producción. Si debería haber trabajo, díselo a tu responsable.</div>
               </div>
             </div>
           )}
@@ -1607,6 +1623,11 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                   <div style={{fontSize:14,color:C.mutedD}}>
                     {num(ot.cantidad)} uds{nombreMolde(p)?` · 🔧 ${nombreMolde(p)}`:""}
                   </div>
+                  {ot.origen_ot==="manual" && (
+                    <div style={{fontSize:13.5,color:C.blue,fontWeight:700,marginTop:4}}>
+                      📋 OT {ot.numero||"—"}{ot.cliente?` · ${ot.cliente}`:""}{ot.tipo?` · ${ot.tipo}`:""}
+                    </div>
+                  )}
                   {parte && <div style={{fontSize:14,color:C.green,fontWeight:700,marginTop:4}}>
                     {num(parte.cantidad)} hechas · cerró {parte.cerrado_por||"—"}
                   </div>}
@@ -2145,6 +2166,7 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
     setGuardando(true);
     const id = parte?.id || uid();
     await save("producciones", id, {
+      orden_id: ot.orden_id || parte?.orden_id || "",
       producto_id: ot.producto_id, fecha: fechaOT, turno_id: parte?.turno_id || turno?.id || "", turno_clave: claveOT,
       linea_nombre: ot.linea, cantidad: hecho, objetivo_ot: objetivo,
       n_personas: [...new Set(tareas.map(t=>t.persona_id).filter(Boolean))].length || 3,
