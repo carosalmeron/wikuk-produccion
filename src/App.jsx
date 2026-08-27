@@ -2127,25 +2127,26 @@ function CierreTurno({ ots, partes, apoyos=[], productos, mps, centros, centro, 
       <div style="border:3px solid ${desvio>=0?"#16a34a":"#ef4444"};background:${desvio>=0?"#f0fdf4":"#fef2f2"};
         border-radius:12px;padding:18px">
         <div style="text-align:center">
-          <div style="font-size:12px;color:#555;letter-spacing:.4px">FRENTE AL OBJETIVO DEL TURNO</div>
-          <div style="font-size:34px;font-weight:900;color:${desvio>=0?"#16a34a":"#ef4444"};margin:6px 0">
-            ${desvio>=0?"+":"−"} ${eur(Math.abs(desvio))}</div>
-          <div style="font-size:14px">Hemos ganado ${eur(benefReal)} cuando tocaban ${eur(benefObj)}</div>
+          <div style="font-size:12px;color:#555;letter-spacing:.4px">
+            ${desvioCoste>0?"LO QUE NOS HA COSTADO LA INEFICIENCIA":"LO QUE HEMOS AHORRADO"}</div>
+          <div style="font-size:34px;font-weight:900;color:${desvioCoste>0?"#ef4444":"#16a34a"};margin:6px 0">
+            ${desvioCoste>0?"−":"+"} ${eur(Math.abs(desvioCoste))}</div>
+          <div style="font-size:14px;font-weight:700">
+            ${Math.abs(costeUdReal-costeObjUd).toFixed(2)} € ${desvioCoste>0?"de más":"de menos"} por unidad × ${num(T.real)} fabricadas</div>
+          <div style="font-size:13px;color:#555;margin-top:2px">
+            ${costeUdReal.toFixed(2)} € en vez de ${costeObjUd.toFixed(2)} €</div>
         </div>
         <div style="border-top:2px solid ${desvio>=0?"#16a34a":"#ef4444"};margin-top:14px;padding-top:12px;font-size:13px">
-          <div style="font-size:11px;color:#555;font-weight:700;letter-spacing:.4px;margin-bottom:7px">DE DÓNDE SALE LA DIFERENCIA</div>
+          <div style="font-size:11px;color:#555;font-weight:700;letter-spacing:.4px;margin-bottom:7px">Y ADEMÁS</div>
           <table style="width:100%;border-collapse:collapse">
-            <tr><td style="padding:4px 0">Por las ${num(Math.abs(T.plan-T.real))} uds que ${T.real<T.plan?"faltan":"sobran"}
-              <div style="font-size:11px;color:#777">a ${margenUd.toFixed(2)} € de margen cada una</div></td>
+            <tr><td style="padding:4px 0">${num(Math.abs(T.plan-T.real))} uds que ${T.real<T.plan?"no se han hecho":"se han hecho de más"}
+              <div style="font-size:11px;color:#777">margen de ${margenUd.toFixed(2)} € cada una</div></td>
               <td style="padding:4px 0;text-align:right;font-weight:800;color:${desvioVolumen>=0?"#16a34a":"#ef4444"}">
                 ${desvioVolumen>=0?"+":"−"} ${eur(Math.abs(desvioVolumen))}</td></tr>
-            <tr><td style="padding:4px 0">Porque lo hecho costó ${desvioCoste>=0?"más":"menos"}
-              <div style="font-size:11px;color:#777">${eur(costeReal)} en vez de ${eur(costeEsperado)} para ${num(T.real)} uds</div></td>
-              <td style="padding:4px 0;text-align:right;font-weight:800;color:${desvioCoste<=0?"#16a34a":"#ef4444"}">
-                ${desvioCoste<=0?"+":"−"} ${eur(Math.abs(desvioCoste))}</td></tr>
-            <tr><td style="padding:6px 0;border-top:1px solid #ccc">Coste por unidad</td>
+            <tr><td style="padding:6px 0;border-top:1px solid #ccc">Beneficio del turno</td>
               <td style="padding:6px 0;border-top:1px solid #ccc;text-align:right">
-                <b>${costeUdReal.toFixed(2)} €</b> · debería ser ${costeObjUd.toFixed(2)} €</td></tr>
+                <b style="color:${benefReal>=0?"#16a34a":"#ef4444"}">${eur(benefReal)}</b>
+                <span style="color:#777"> de ${eur(benefObj)} previstos</span></td></tr>
           </table>
         </div>
       </div>
@@ -2165,10 +2166,10 @@ function CierreTurno({ ots, partes, apoyos=[], productos, mps, centros, centro, 
     (rends.length?`\nRendimiento: ${rends.map(x=>`${x.lote} ${Math.round(x.r)}%`).join(", ")}`:"") +
     `\n\nCoste objetivo ${eur(costeObj)} · real ${eur(costeReal)}` +
     `\nBeneficio ${eur(benefReal)} de ${eur(benefObj)} previstos` +
-    `\n${desvio>=0?"GANAMOS":"PERDEMOS"} ${eur(Math.abs(desvio))} frente al objetivo` +
-    `\n  · ${eur(Math.abs(desvioVolumen))} por las ${num(Math.abs(T.plan-T.real))} uds que ${T.real<T.plan?"faltan":"sobran"}` +
-    `\n  · ${eur(Math.abs(desvioCoste))} porque lo hecho costó ${desvioCoste>=0?"más":"menos"}` +
-    `\nCoste/ud: ${costeUdReal.toFixed(2)} € (debería ${costeObjUd.toFixed(2)} €)` +
+    `\n\n${desvioCoste>0?"INEFICIENCIA":"AHORRO"}: ${eur(Math.abs(desvioCoste))}` +
+    `\n${costeUdReal.toFixed(2)} €/ud en vez de ${costeObjUd.toFixed(2)} € → ${Math.abs(costeUdReal-costeObjUd).toFixed(2)} € × ${num(T.real)} uds` +
+    (Math.abs(T.plan-T.real)>0.5 ? `\nAdemás ${eur(Math.abs(desvioVolumen))} por las ${num(Math.abs(T.plan-T.real))} uds que ${T.real<T.plan?"faltan":"sobran"}` : "") +
+    `\nBeneficio ${eur(benefReal)} de ${eur(benefObj)} previstos` +
     `\n\nCerrado por ${perfil?.nombre||""}`;
 
   // Mismo sistema que el CRM: una función de Vercel en /api/send-email
@@ -2310,48 +2311,41 @@ function CierreTurno({ ots, partes, apoyos=[], productos, mps, centros, centro, 
         {fila("Gastos generales", "", eur(ggTurno))}
         {fila("Coste total", eur(costeObj)+" →", eur(costeReal), (costeReal-costeObj>=0?"+":"")+eur(costeReal-costeObj))}
 
-        <div style={{background:C.card2,borderRadius:12,padding:"12px 14px",marginTop:12,fontSize:14,lineHeight:1.7}}>
-          <div style={{fontFamily:F.h,fontWeight:800,fontSize:12.5,color:C.mutedD,marginBottom:5}}>COSTE POR UNIDAD</div>
-          <div style={{display:"flex",justifyContent:"space-between"}}>
-            <span style={{color:C.mutedD}}>Debería costar cada una</span><b>{costeObjUd.toFixed(2)} €</b>
-          </div>
-          <div style={{display:"flex",justifyContent:"space-between"}}>
-            <span style={{color:C.mutedD}}>Ha costado cada una</span>
-            <b style={{color:costeUdReal>costeObjUd?C.red:C.green}}>{costeUdReal.toFixed(2)} €</b>
-          </div>
-        </div>
-
-        <div style={{background:desvio>=0?C.greenBg:C.redBg,border:`3px solid ${desvio>=0?C.green:C.red}`,
+        <div style={{background:desvioCoste>0?C.redBg:C.greenBg,border:`3px solid ${desvioCoste>0?C.red:C.green}`,
           borderRadius:16,padding:20,textAlign:"center",marginTop:14}}>
-          <div style={{fontSize:13.5,color:C.mutedD,fontWeight:800,letterSpacing:0.4}}>FRENTE AL OBJETIVO DEL TURNO</div>
-          <div style={{fontFamily:F.h,fontWeight:900,fontSize:42,color:desvio>=0?C.green:C.red,lineHeight:1.15,margin:"6px 0"}}>
-            {desvio>=0?"+":"−"} {eur(Math.abs(desvio))}
+          <div style={{fontSize:13.5,color:C.mutedD,fontWeight:800,letterSpacing:0.4}}>
+            {desvioCoste>0 ? "LO QUE NOS HA COSTADO LA INEFICIENCIA" : "LO QUE HEMOS AHORRADO"}
+          </div>
+          <div style={{fontFamily:F.h,fontWeight:900,fontSize:42,color:desvioCoste>0?C.red:C.green,lineHeight:1.15,margin:"6px 0"}}>
+            {desvioCoste>0?"−":"+"} {eur(Math.abs(desvioCoste))}
           </div>
           <div style={{fontSize:15,color:C.text,fontWeight:700}}>
-            Hemos ganado {eur(benefReal)} cuando tocaban {eur(benefObj)}
+            {Math.abs(costeUdReal-costeObjUd).toFixed(2)} € {desvioCoste>0?"de más":"de menos"} por unidad × {num(T.real)} fabricadas
+          </div>
+          <div style={{fontSize:13.5,color:C.mutedD,marginTop:3}}>
+            {costeUdReal.toFixed(2)} € en vez de {costeObjUd.toFixed(2)} €
           </div>
 
-          <div style={{borderTop:`2px solid ${desvio>=0?C.green:C.red}`,marginTop:14,paddingTop:12,textAlign:"left"}}>
-            <div style={{fontFamily:F.h,fontWeight:800,fontSize:12.5,color:C.mutedD,marginBottom:7}}>DE DÓNDE SALE LA DIFERENCIA</div>
-            <div style={{display:"flex",justifyContent:"space-between",gap:10,fontSize:14,marginBottom:6}}>
-              <span style={{color:C.text}}>
-                Por las {num(Math.abs(T.plan-T.real))} uds que {T.real<T.plan?"faltan":"sobran"}
-                <div style={{fontSize:12,color:C.mutedD}}>a {margenUd.toFixed(2)} € de margen cada una</div>
+          <div style={{borderTop:`2px solid ${desvioCoste>0?C.red:C.green}`,marginTop:14,paddingTop:12,textAlign:"left"}}>
+            <div style={{fontFamily:F.h,fontWeight:800,fontSize:12.5,color:C.mutedD,marginBottom:7}}>Y ADEMÁS</div>
+            {Math.abs(T.plan-T.real) > 0.5 && (
+              <div style={{display:"flex",justifyContent:"space-between",gap:10,fontSize:14,marginBottom:6}}>
+                <span style={{color:C.text}}>
+                  {num(Math.abs(T.plan-T.real))} uds que {T.real<T.plan?"no se han hecho":"se han hecho de más"}
+                  <div style={{fontSize:12,color:C.mutedD}}>margen de {margenUd.toFixed(2)} € cada una</div>
+                </span>
+                <b style={{flexShrink:0,color:desvioVolumen>=0?C.green:C.red}}>
+                  {desvioVolumen>=0?"+":"−"} {eur(Math.abs(desvioVolumen))}
+                </b>
+              </div>
+            )}
+            <div style={{display:"flex",justifyContent:"space-between",gap:10,fontSize:14,
+              borderTop:`1px solid ${C.border}`,paddingTop:6}}>
+              <span style={{color:C.mutedD}}>Beneficio del turno</span>
+              <span style={{flexShrink:0}}>
+                <b style={{color:benefReal>=0?C.green:C.red}}>{eur(benefReal)}</b>
+                <span style={{color:C.mutedD}}> de {eur(benefObj)} previstos</span>
               </span>
-              <b style={{flexShrink:0,color:desvioVolumen>=0?C.green:C.red}}>
-                {desvioVolumen>=0?"+":"−"} {eur(Math.abs(desvioVolumen))}
-              </b>
-            </div>
-            <div style={{display:"flex",justifyContent:"space-between",gap:10,fontSize:14}}>
-              <span style={{color:C.text}}>
-                Porque lo hecho costó {desvioCoste>=0?"más":"menos"}
-                <div style={{fontSize:12,color:C.mutedD}}>
-                  {eur(costeReal)} en vez de {eur(costeEsperado)} para {num(T.real)} uds
-                </div>
-              </span>
-              <b style={{flexShrink:0,color:desvioCoste<=0?C.green:C.red}}>
-                {desvioCoste<=0?"+":"−"} {eur(Math.abs(desvioCoste))}
-              </b>
             </div>
           </div>
         </div>
