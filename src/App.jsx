@@ -54,6 +54,15 @@ const P = {
   fh:"'Barlow Condensed','Arial Narrow',sans-serif",
 };
 const uid = () => Math.random().toString(36).slice(2, 10);
+// Fechas siempre en español: 2026-08-21 → 21 ago 2026
+const fechaES = (f, opts) => {
+  if (!f || typeof f !== "string" || f.length < 8) return f || "";
+  try { return new Date(f + "T12:00:00").toLocaleDateString("es-ES",
+    opts || { day:"numeric", month:"short", year:"numeric" }); }
+  catch(e){ return f; }
+};
+const fechaESLarga = (f) => fechaES(f, { weekday:"long", day:"numeric", month:"long", year:"numeric" });
+const fechaESCorta = (f) => fechaES(f, { day:"2-digit", month:"2-digit", year:"2-digit" });
 // Los operarios entran con usuario y clave; por dentro se traduce a un correo interno
 const DOMINIO_OPERARIO = "operario.wikuk";
 const correoDeUsuario = (u) => `${(u||"").trim().toLowerCase().replace(/[^a-z0-9._-]/g,"")}@${DOMINIO_OPERARIO}`;
@@ -521,6 +530,7 @@ function UsuarioForm({ onBack, ep, turnos, centros, onDone }) {
   const [centrosSup, setCentrosSup] = useState(ep?.centros||[]);  // supervisores: varios
   const [costeHora, setCosteHora] = useState(ep?.coste_hora?.toString()||"");
   const [usuarioLogin, setUsuarioLogin] = useState(ep?.usuario||"");
+  const [recibeInf, setRecibeInf] = useState(!!ep?.recibe_informe);
   const [clave, setClave] = useState(ep?.clave||"");
   const [horasDia, setHorasDia]   = useState(ep?.horas_dia?.toString()||"8");
   const [activo, setActivo] = useState(ep?.activo!==false);
@@ -544,6 +554,7 @@ function UsuarioForm({ onBack, ep, turnos, centros, onDone }) {
       centros: (rol==="sup_fabrica"||rol==="sup_calidad") ? centrosSup : [],
       coste_hora: parseFloat(costeHora)||0,
       horas_dia: parseFloat(horasDia)||8, activo,
+      recibe_informe: recibeInf,
       usuario: rol==="operario" ? usuarioLogin.trim().toLowerCase() : "",
       clave:   rol==="operario" ? clave : "",
     };
@@ -623,6 +634,18 @@ function UsuarioForm({ onBack, ep, turnos, centros, onDone }) {
               <Field label="Horas / día" value={horasDia} onChange={setHorasDia} type="number" placeholder="8" min="1" step="0.5"/>
             </div>
           </>}
+          {rol!=="operario" && (
+            <button onClick={()=>setRecibeInf(v=>!v)}
+              style={{width:"100%",background:recibeInf?C.greenBg:"#fff",border:`1.5px solid ${recibeInf?C.green:C.border}`,
+                borderRadius:12,padding:"13px 15px",marginBottom:14,cursor:"pointer",textAlign:"left"}}>
+              <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:recibeInf?C.green:C.mutedD}}>
+                {recibeInf?"📧 Recibe el informe de producción":"◯ Recibe el informe de producción"}
+              </div>
+              <div style={{fontSize:12,color:C.mutedD,marginTop:3,lineHeight:1.5}}>
+                Le llega el informe de cada turno al cerrarlo: producción, rendimientos, paradas, incidencias y el resultado frente al objetivo.
+              </div>
+            </button>
+          )}
           {(rol==="sup_fabrica"||rol==="sup_calidad") && <>
             <div style={{fontFamily:F.h,fontWeight:700,fontSize:13,color:C.muted,textTransform:"uppercase",letterSpacing:0.5,marginBottom:8}}>Centros que supervisa</div>
             <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:14}}>
@@ -907,7 +930,7 @@ function OrdenesScreen({ onBack, perfil, productos, lineas, turnos, centros, mps
                     </div>
                     {prodSub(p) && <div style={{fontSize:12,color:C.muted,marginTop:1}}>{prodSub(p)}</div>}
                     <div style={{fontSize:13,color:C.muted,marginTop:2}}>
-                      {o.fecha} · {l?.nombre||"sin línea"} · {o.tipo||"Plan"}{o.cliente?` · 👤 ${o.cliente}`:""}
+                      {fechaES(o.fecha)} · {l?.nombre||"sin línea"} · {o.tipo||"Plan"}{o.cliente?` · 👤 ${o.cliente}`:""}
                     </div>
                   </div>
                   <Pill color={E.c} bg={E.bg}>{E.t}</Pill>
@@ -1175,7 +1198,7 @@ function RegistrarProduccion({ onBack, orden, perfil, turnos, hechas, produccion
             {producciones.sort((a,b)=>(b.fecha||"").localeCompare(a.fecha||"")).map(r=>(
               <div key={r.id} style={{padding:"8px 0",borderBottom:`1px solid ${C.border}`,fontSize:13.5}}>
                 <div style={{display:"flex",justifyContent:"space-between",gap:8}}>
-                  <span><b>{r.fecha}</b> · {r.cantidad} uds{r.n_personas?` · ${r.n_personas}p`:""}
+                  <span><b>{fechaES(r.fecha)}</b> · {r.cantidad} uds{r.n_personas?` · ${r.n_personas}p`:""}
                     {(r.consumos||[]).map((cs,i)=>cs.rendimiento_pct!=null?<span key={i} style={{marginLeft:6,fontWeight:800,color:cs.rendimiento_pct>=85?C.green:cs.rendimiento_pct>=75?C.amber:C.red}}>{cs.rendimiento_pct}%</span>:null)}
                   </span>
                   <span style={{color:C.muted,fontSize:12}}>{r.registrado_por}
@@ -1417,6 +1440,8 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
   const [planesSem] = useCol("planes_semana");
   const [prods]     = useCol("producciones");
   const [incid]     = useCol("incidencias");
+  const [costesCfg] = useCol("config_costes");
+  const ggMes = toNum(costesCfg.find(c=>c.id===centroId)?.fijos_mensuales);
 
   const semanaHoy = isoWeek(hoy);
   const turno = turnos.find(t=>t.id===turnoId);
@@ -1524,7 +1549,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                       </div>
                       <div style={{fontSize:19,fontWeight:700,color:C.text,marginBottom:4}}>{pr?.nombre||"?"}</div>
                       <div style={{fontSize:14,color:C.mutedD}}>
-                        {p.fecha===hoy?"hoy":p.fecha} · {num(p.cantidad)} uds registradas
+                        {p.fecha===hoy?"hoy":fechaES(p.fecha)} · {num(p.cantidad)} uds registradas
                       </div>
                       <div style={{fontSize:14,color:C.amber,fontWeight:700,marginTop:6}}>
                         {p.reabierta_motivo} — {p.reabierta_por}
@@ -1567,9 +1592,24 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
               );
             })}
           </div>
-          <div style={{marginTop:20}}>
+          <div style={{marginTop:20,display:"grid",gap:12}}>
+            {otsHoy.length>0 && (
+              <>
+                <BotonF alto={110} bg={abiertas.length?C.card2:C.navy} color={abiertas.length?C.muted:"#fff"}
+                  borde={abiertas.length?C.border:C.navy} disabled={abiertas.length>0 || reabiertas.length>0}
+                  sub={abiertas.length ? `faltan ${abiertas.length} línea(s) por cerrar`
+                    : reabiertas.length ? `hay ${reabiertas.length} reabierta(s)` : "genera el informe y lo envía"}
+                  onClick={()=>setModal({tipo:"cierreTurno"})}>🔒 CERRAR EL TURNO</BotonF>
+              </>
+            )}
             <BotonF alto={88} borde={C.border} onClick={()=>setVista("cerradas")}>🗂️ Ver órdenes cerradas</BotonF>
           </div>
+
+          {modal?.tipo==="cierreTurno" && (
+            <CierreTurno ots={otsHoy} partes={prods.filter(p=>p.fecha===hoy)} productos={productos} mps={mps}
+              centros={centros} centro={centro} turno={turno} hoy={hoy} perfil={perfil} usuarios={usuarios}
+              ggMes={ggMes} onCerrar={()=>setModal(null)} onHecho={()=>{ setModal(null); setVista("inicio"); }}/>
+          )}
         </div>
       </div>
     );
@@ -1598,7 +1638,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                   <div style={{flex:1,minWidth:200}}>
                     <div style={{fontFamily:F.h,fontWeight:900,fontSize:20,color:C.text}}>{prod?.nombre||"?"} · {p.linea_nombre}</div>
                     <div style={{fontSize:14,color:C.mutedD,marginTop:3}}>
-                      {p.fecha===hoy?"hoy":p.fecha} · cerró <b>{p.cerrado_por||"—"}</b>
+                      {p.fecha===hoy?"hoy":fechaES(p.fecha)} · cerró <b>{p.cerrado_por||"—"}</b>
                       {p.reabierta_por && <> · ↺ reabierta por {p.reabierta_por}</>}
                     </div>
                     <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:10}}>
@@ -1652,7 +1692,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                 <div style={{minWidth:0}}>
                   <div style={{fontFamily:F.h,fontWeight:800,fontSize:17,color:C.text}}>{i.lote||"sin lote"} · {mp?.nombre||""}</div>
                   <div style={{fontSize:14,color:C.mutedD,marginTop:3}}>
-                    {t?t[2]:i.tipo} · {i.linea||""} · {i.fecha===hoy?"hoy":i.fecha} · anotó {i.registrado_por||"—"}
+                    {t?t[2]:i.tipo} · {i.linea||""} · {i.fecha===hoy?"hoy":fechaES(i.fecha)} · anotó {i.registrado_por||"—"}
                   </div>
                   {i.nota && <div style={{fontSize:13.5,color:C.mutedD,marginTop:4,fontStyle:"italic"}}>“{i.nota}”</div>}
                 </div>
@@ -1701,6 +1741,238 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
     moldes={moldes} gente={gente} procesos={procesos} claveTurno={claveTurno} turno={turno} hoy={hoy}
     onSalir={onBack} onVolver={()=>setVista("ordenes")}/>;
 }
+
+// ── CIERRE DEL TURNO E INFORME ─────────────────────────────────────────────────
+function CierreTurno({ ots, partes, productos, mps, centros, centro, turno, hoy, perfil, usuarios,
+                       ggMes, onCerrar, onHecho }) {
+  const [guardando, setGuardando] = useState(false);
+
+  const prodDe = (pid) => productos.find(p => p.id === pid);
+  const precioMP = (id) => toNum(mps.find(m=>m.id===id)?.precio_ud);
+  const rendObj  = (id) => toNum(mps.find(m=>m.id===id)?.rendimiento_objetivo) || 85;
+
+  // ── Producción, línea a línea
+  const filas = ots.map(ot => {
+    const parte = partes.find(p => p.linea_nombre===ot.linea && p.producto_id===ot.producto_id && p.fecha===hoy);
+    const p = prodDe(ot.producto_id);
+    const plan = toNum(ot.cantidad), real = toNum(parte?.cantidad);
+    const ritmo = toNum(p?.uds_turno_linea), pers = parseInt(p?.personas_linea)||3;
+    // objetivo
+    const mpUdObj = toNum(p?.coste_mp_objetivo);
+    const moUdObj = ritmo>0 ? (pers*8*TARIFA_MO)/ritmo : 0;
+    // real
+    const matReal = (parte?.consumos||[]).reduce((a,c)=>a+toNum(c.metros_consumidos)*precioMP(c.materia_id), 0);
+    const moReal  = (parseInt(parte?.n_personas)||pers) * (toNum(parte?.horas_equipo)||8) * TARIFA_MO;
+    const pv = toNum(p?.precio_venta);
+    return { ot, parte, p, plan, real, pv,
+      objMat: mpUdObj*plan, objMO: moUdObj*plan,
+      realMat: matReal, realMO: moReal,
+      ventaObj: pv*plan, ventaReal: pv*real };
+  });
+
+  const T = filas.reduce((a,f)=>({
+    plan:a.plan+f.plan, real:a.real+f.real,
+    objMat:a.objMat+f.objMat, objMO:a.objMO+f.objMO,
+    realMat:a.realMat+f.realMat, realMO:a.realMO+f.realMO,
+    ventaObj:a.ventaObj+f.ventaObj, ventaReal:a.ventaReal+f.ventaReal,
+  }), {plan:0,real:0,objMat:0,objMO:0,realMat:0,realMO:0,ventaObj:0,ventaReal:0});
+
+  // Generales que le tocan al turno: el mes entre días laborables y turnos abiertos
+  const turnosAb = parseInt(centro?.turnos_abiertos) || 2;
+  const ggTurno = ggMes / 21 / turnosAb;
+  const costeObj  = T.objMat + T.objMO + ggTurno;
+  const costeReal = T.realMat + T.realMO + ggTurno;
+  const benefObj  = T.ventaObj - costeObj;
+  const benefReal = T.ventaReal - costeReal;
+  const desvio    = benefReal - benefObj;
+
+  // ── Rendimientos por lote
+  const rends = filas.flatMap(f => (f.parte?.consumos||[]).map(c=>{
+    const capas = (f.p?.materias_asignadas||[]).find(m=>m.mp_id===c.materia_id)?.capas || 1;
+    const teo = toNum(f.p?.metros_finales) * toNum(capas) * f.real;
+    const gast = toNum(c.metros_consumidos);
+    return { mp: mps.find(m=>m.id===c.materia_id), lote:c.lote, teo, gast,
+      r: (teo>0&&gast>0) ? teo/gast*100 : null, obj: rendObj(c.materia_id) };
+  })).filter(x=>x.r!=null);
+
+  const paros = filas.flatMap(f => (f.parte?.paros||[]).map(x=>({...x, linea:f.ot.linea})));
+  const minParados = paros.reduce((a,x)=>a+toNum(x.minutos),0);
+  const notas = filas.filter(f=>f.parte?.observacion).map(f=>({ linea:f.ot.linea, txt:f.parte.observacion }));
+  const destinatarios = usuarios.filter(u => u.recibe_informe && u.email);
+
+  const htmlInforme = () => `
+    <h1>Producción · ${esc(turno?.nombre||"")} · ${new Date(hoy+"T12:00:00").toLocaleDateString("es-ES",{weekday:"long",day:"numeric",month:"long"})}</h1>
+    <div class="sub">${esc(centro?.nombre||"")} · cerrado por ${esc(perfil?.nombre||"")} a las ${new Date().toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"})}</div>
+
+    <h2>Lo que se ha producido</h2>
+    <table><tr><th>Línea</th><th>Producto</th><th class="n">Plan</th><th class="n">Real</th><th class="n">%</th></tr>
+      ${filas.map(f=>`<tr><td>${esc(f.ot.linea)}</td><td>${esc(f.p?.nombre||"?")}</td>
+        <td class="n">${num(f.plan)}</td><td class="n">${num(f.real)}</td>
+        <td class="n">${f.plan>0?Math.round(f.real/f.plan*100):"—"}%</td></tr>`).join("")}
+      <tr><td colspan="2"><b>TOTAL</b></td><td class="n"><b>${num(T.plan)}</b></td>
+        <td class="n"><b>${num(T.real)}</b></td><td class="n"><b>${T.plan>0?Math.round(T.real/T.plan*100):"—"}%</b></td></tr>
+    </table>
+
+    ${rends.length ? `<h2>Rendimientos</h2>
+    <table><tr><th>Materia · lote</th><th class="n">Teórico</th><th class="n">Gastado</th><th class="n">Rend.</th><th class="n">Obj.</th></tr>
+      ${rends.map(x=>`<tr><td>${esc(x.mp?.nombre||"?")} · ${esc(x.lote||"sin lote")}</td>
+        <td class="n">${num(x.teo)} m</td><td class="n">${num(x.gast)} m</td>
+        <td class="n"><b>${Math.round(x.r)}%</b></td><td class="n">${x.obj}%</td></tr>`).join("")}
+    </table>` : ""}
+
+    ${paros.length ? `<h2>Paradas</h2>
+    <table><tr><th>Motivo</th><th>Línea</th><th class="n">Minutos</th></tr>
+      ${paros.map(x=>`<tr><td>${esc(x.motivo)}</td><td>${esc(x.linea)}</td><td class="n">${Math.round(toNum(x.minutos))}</td></tr>`).join("")}
+      <tr><td colspan="2"><b>TOTAL · ${paros.length} paradas</b></td><td class="n"><b>${Math.round(minParados)} min</b></td></tr>
+    </table>` : ""}
+
+    ${notas.length ? `<h2>Observaciones</h2>${notas.map(n=>`<div style="font-size:11px;margin-bottom:4px">${esc(n.linea)}: <i>“${esc(n.txt)}”</i></div>`).join("")}` : ""}
+
+    <h2>Lo que ha costado el turno</h2>
+    <table><tr><th>Concepto</th><th class="n">Objetivo</th><th class="n">Real</th><th class="n">Desvío</th></tr>
+      <tr><td>Materia prima</td><td class="n">${eur(T.objMat)}</td><td class="n">${eur(T.realMat)}</td>
+        <td class="n">${T.realMat-T.objMat>=0?"+":""}${eur(T.realMat-T.objMat)}</td></tr>
+      <tr><td>Mano de obra</td><td class="n">${eur(T.objMO)}</td><td class="n">${eur(T.realMO)}</td>
+        <td class="n">${T.realMO-T.objMO>=0?"+":""}${eur(T.realMO-T.objMO)}</td></tr>
+      <tr><td>Gastos generales</td><td class="n">${eur(ggTurno)}</td><td class="n">${eur(ggTurno)}</td><td class="n">—</td></tr>
+      <tr><td><b>COSTE TOTAL</b></td><td class="n"><b>${eur(costeObj)}</b></td><td class="n"><b>${eur(costeReal)}</b></td>
+        <td class="n"><b>${costeReal-costeObj>=0?"+":""}${eur(costeReal-costeObj)}</b></td></tr>
+    </table>
+
+    <div class="aviso" style="border-color:${desvio>=0?"#166534":"#b45309"};background:${desvio>=0?"#F0FDF4":"#fffbeb"};text-align:center;padding:14px">
+      <div style="font-size:11px;letter-spacing:.4px">FRENTE AL OBJETIVO DEL TURNO</div>
+      <div style="font-size:30px;font-weight:900;margin:4px 0">${desvio>=0?"+":"−"} ${eur(Math.abs(desvio))}</div>
+      <div style="font-size:12px">Hemos ganado ${eur(benefReal)} cuando tocaban ${eur(benefObj)}</div>
+    </div>
+    ${pieInforme(perfil)}
+  `;
+
+  const textoCorto = () =>
+    `PRODUCCIÓN · ${turno?.nombre||""} · ${hoy}\n${centro?.nombre||""}\n\n` +
+    filas.map(f=>`${f.ot.linea}: ${f.p?.nombre} ${num(f.real)}/${num(f.plan)} (${f.plan>0?Math.round(f.real/f.plan*100):0}%)`).join("\n") +
+    `\n\nTOTAL ${num(T.real)}/${num(T.plan)} uds` +
+    (paros.length?`\nParadas: ${paros.length} · ${Math.round(minParados)} min`:"") +
+    (rends.length?`\nRendimiento: ${rends.map(x=>`${x.lote} ${Math.round(x.r)}%`).join(", ")}`:"") +
+    `\n\nCoste objetivo ${eur(costeObj)} · real ${eur(costeReal)}` +
+    `\nBeneficio ${eur(benefReal)} de ${eur(benefObj)} previstos` +
+    `\n${desvio>=0?"GANAMOS":"PERDEMOS"} ${eur(Math.abs(desvio))} frente al objetivo` +
+    `\n\nCerrado por ${perfil?.nombre||""}`;
+
+  const cerrarYEnviar = async (accion) => {
+    setGuardando(true);
+    await save("cierres_turno", `${hoy}__${claveDe(turno,0)}__${centro?.id||""}`, {
+      fecha: hoy, turno_id: turno?.id||"", centro: centro?.id||"",
+      uds_plan: T.plan, uds_real: T.real,
+      coste_objetivo: costeObj, coste_real: costeReal,
+      beneficio_objetivo: benefObj, beneficio_real: benefReal, desvio,
+      min_parados: minParados, n_paradas: paros.length,
+      cerrado_por: perfil?.nombre||"", cerrado_at: new Date().toISOString(),
+      enviado_a: destinatarios.map(u=>u.email),
+    });
+    setGuardando(false);
+    if (accion === "imprimir") imprimirHTML(htmlInforme());
+    if (accion === "correo") {
+      const para = destinatarios.map(u=>u.email).join(",");
+      window.location.href = `mailto:${para}?subject=${encodeURIComponent(`Producción ${turno?.nombre||""} · ${hoy}`)}&body=${encodeURIComponent(textoCorto())}`;
+    }
+    if (accion === "compartir") {
+      if (navigator.share) { try { await navigator.share({ title:"Informe del turno", text:textoCorto() }); } catch(e){} }
+      else { try { await navigator.clipboard.writeText(textoCorto()); window.alert("Informe copiado. Pégalo donde quieras."); } catch(e){} }
+    }
+    onHecho();
+  };
+
+  const fila = (l,a,b,c2) => (
+    <div style={{display:"flex",justifyContent:"space-between",fontSize:14.5,padding:"7px 0",borderBottom:`1px solid ${C.card2}`}}>
+      <span style={{color:C.mutedD}}>{l}</span>
+      <span style={{flexShrink:0,marginLeft:10}}>{a} <b style={{color:C.text}}>{b}</b>
+        {c2 && <b style={{color:c2.startsWith("+")?C.red:C.green,marginLeft:8}}>{c2}</b>}</span>
+    </div>
+  );
+
+  return (
+    <CapaF titulo="Cerrar el turno" sub={`${turno?.nombre||""} · ${centro?.nombre||""}`} onCerrar={onCerrar}>
+      <BloqueF titulo="Lo que se ha producido">
+        {filas.map((f,i)=>{
+          const pct = f.plan>0 ? f.real/f.plan : 0;
+          return (
+            <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",
+              padding:"9px 0",borderBottom:`1px solid ${C.card2}`,fontSize:15.5}}>
+              <span style={{minWidth:0}}>
+                <b style={{color:C.text}}>{f.ot.linea}</b>
+                <div style={{fontSize:13,color:C.mutedD}}>{f.p?.nombre||"?"}</div>
+              </span>
+              <span style={{flexShrink:0,marginLeft:10,textAlign:"right"}}>
+                <b style={{fontSize:19,color:pct>=1?C.green:pct>=0.9?C.amber:C.red}}>{num(f.real)}</b>
+                <span style={{color:C.mutedD}}>/{num(f.plan)}</span>
+                <div style={{fontSize:13,color:C.mutedD}}>{Math.round(pct*100)}%</div>
+              </span>
+            </div>
+          );
+        })}
+        <div style={{display:"flex",justifyContent:"space-between",paddingTop:10,fontFamily:F.h,fontWeight:800,fontSize:17}}>
+          <span>TOTAL</span><span>{num(T.real)} / {num(T.plan)} uds</span>
+        </div>
+      </BloqueF>
+
+      {rends.length>0 && (
+        <BloqueF titulo="Rendimientos">
+          {rends.map((x,i)=>(
+            <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"7px 0",fontSize:14.5}}>
+              <span style={{color:C.mutedD}}>{x.mp?.nombre} · {x.lote||"sin lote"}</span>
+              <b style={{color:x.r>=x.obj?C.green:C.red,flexShrink:0,marginLeft:10}}>{Math.round(x.r)}% <span style={{color:C.mutedD,fontWeight:600}}>obj {x.obj}%</span></b>
+            </div>
+          ))}
+        </BloqueF>
+      )}
+
+      {paros.length>0 && (
+        <BloqueF titulo={`Paradas · ${Math.round(minParados)} min`}>
+          {paros.map((x,i)=>(
+            <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"7px 0",fontSize:14.5}}>
+              <span style={{color:C.mutedD}}>{x.motivo} · {x.linea}</span>
+              <b style={{color:C.red,flexShrink:0}}>{Math.round(toNum(x.minutos))} min</b>
+            </div>
+          ))}
+        </BloqueF>
+      )}
+
+      <BloqueF titulo="Lo que ha costado el turno" borde={desvio>=0?C.green:C.red}>
+        {fila("Materia prima", eur(T.objMat)+" →", eur(T.realMat), (T.realMat-T.objMat>=0?"+":"")+eur(T.realMat-T.objMat))}
+        {fila("Mano de obra", eur(T.objMO)+" →", eur(T.realMO), (T.realMO-T.objMO>=0?"+":"")+eur(T.realMO-T.objMO))}
+        {fila("Gastos generales", "", eur(ggTurno))}
+        {fila("Coste total", eur(costeObj)+" →", eur(costeReal), (costeReal-costeObj>=0?"+":"")+eur(costeReal-costeObj))}
+
+        <div style={{background:desvio>=0?C.greenBg:C.redBg,border:`3px solid ${desvio>=0?C.green:C.red}`,
+          borderRadius:16,padding:20,textAlign:"center",marginTop:14}}>
+          <div style={{fontSize:13.5,color:C.mutedD,fontWeight:800,letterSpacing:0.4}}>FRENTE AL OBJETIVO DEL TURNO</div>
+          <div style={{fontFamily:F.h,fontWeight:900,fontSize:42,color:desvio>=0?C.green:C.red,lineHeight:1.15,margin:"6px 0"}}>
+            {desvio>=0?"+":"−"} {eur(Math.abs(desvio))}
+          </div>
+          <div style={{fontSize:15,color:C.text,fontWeight:700}}>
+            Hemos ganado {eur(benefReal)} cuando tocaban {eur(benefObj)}
+          </div>
+        </div>
+      </BloqueF>
+
+      <div style={{background:C.card2,borderRadius:14,padding:"13px 15px",marginBottom:16,fontSize:14,color:C.mutedD,lineHeight:1.6}}>
+        {destinatarios.length
+          ? <>📧 Se enviará a <b style={{color:C.text}}>{destinatarios.map(u=>u.nombre).join(", ")}</b>.</>
+          : <>⚠️ Nadie tiene marcado “recibe el informe de producción” en su ficha de usuario.</>}
+      </div>
+
+      <div style={{display:"grid",gap:12}}>
+        <BotonF alto={104} bg={C.green} color="#fff" borde={C.green} disabled={guardando}
+          onClick={()=>cerrarYEnviar("correo")}>{guardando?"Guardando…":"📧 CERRAR Y ENVIAR POR CORREO"}</BotonF>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+          <BotonF alto={88} borde={C.border} disabled={guardando} onClick={()=>cerrarYEnviar("compartir")}>📤 Compartir</BotonF>
+          <BotonF alto={88} borde={C.border} disabled={guardando} onClick={()=>cerrarYEnviar("imprimir")}>🖨️ Imprimir</BotonF>
+        </div>
+      </div>
+    </CapaF>
+  );
+}
+const claveDe = (turno, i) => turno?.id || `T${i+1}`;
 
 // ── LA ORDEN DE TRABAJO: todo el turno en una pantalla ─────────────────────────
 function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, procesos, claveTurno, turno, hoy, onSalir, onVolver }) {
@@ -1774,7 +2046,7 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
     <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
       <CabF titulo={p.nombre} atras={onVolver} onSalir={onSalir}
         color={esReabierta ? C.amber : C.navy}
-        sub={`${ot.linea} · ${fechaOT===hoy?"hoy":fechaOT} · objetivo ${num(objetivo)} ${p.unidad||"uds"}`}/>
+        sub={`${ot.linea} · ${fechaOT===hoy?"hoy":fechaES(fechaOT)} · objetivo ${num(objetivo)} ${p.unidad||"uds"}`}/>
       <div style={{padding:22}}>
         {esReabierta && (
           <div style={{background:C.amberBg,border:`2px solid ${C.amber}`,borderRadius:14,padding:"14px 16px",
@@ -2302,7 +2574,7 @@ function HojaReabrir({ parte, perfil, onCerrar, onHecho }) {
     onHecho({ ...parte, reabierta:true, reabierta_por: perfil?.nombre||"terminal", reabierta_motivo: motivo });
   };
   return (
-    <CapaF titulo="¿Reabrir esta orden?" sub={`${parte.linea_nombre} · ${parte.fecha}`} onCerrar={onCerrar} color={C.amber}>
+    <CapaF titulo="¿Reabrir esta orden?" sub={`${parte.linea_nombre} · ${fechaES(parte.fecha)}`} onCerrar={onCerrar} color={C.amber}>
       <div style={{background:C.amberBg,border:`2px solid ${C.amber}`,borderRadius:14,padding:15,marginBottom:18,
         fontSize:15.5,color:C.amber,fontWeight:700,lineHeight:1.55}}>
         El informe de ese turno ya se generó. Al volver a cerrarla, los números del cierre semanal se recalcularán.
@@ -2433,7 +2705,7 @@ function TerminalOperario({ perfil, productos }) {
         const p = productos.find(x=>x.id===o.producto_id);
         const l = lineas.find(x=>x.id===o.linea_id);
         return <BigBtn key={o.id} onClick={()=>{setOrden(o);setPaso(2);}}
-          sub={`${o.fecha}${l?` · ${l.nombre}`:""} · ${o.cantidad} uds`}>{o.numero?`OT ${o.numero} · `:""}{p?.nombre||"?"}</BigBtn>;
+          sub={`${fechaES(o.fecha)}${l?` · ${l.nombre}`:""} · ${o.cantidad} uds`}>{o.numero?`OT ${o.numero} · `:""}{p?.nombre||"?"}</BigBtn>;
       })}
     </div>
   );
@@ -2866,7 +3138,7 @@ function AnaliticaScreen({ onBack, productos, mps, lineas, turnos, usuarios, cen
                         <div style={{display:"flex",flexWrap:"wrap",gap:3,marginBottom:10}}>
                           {rs.map((r,i)=>(
                             <div key={i} onClick={(e)=>{e.stopPropagation();setDiaSel(diaSel===r.fecha?null:r.fecha);}}
-                              title={r.fecha}
+                              title={fechaES(r.fecha)}
                               style={{width:16,height:16,borderRadius:4,background:colorDe(r),cursor:"pointer",
                                       outline: diaSel===r.fecha?`2px solid ${C.text}`:"none", outlineOffset:1,
                                       opacity: r.lotes.some(l=>l.includes("26U"))?1:0.92,
@@ -7000,7 +7272,7 @@ function Home({ perfil, onGo, onLogout, counts, ordenes=[], producciones=[], pro
   const partesDash = esHoy ? partesHoy : producciones.filter(p=>p.fecha===ultimaFecha);
   const udsDash = partesDash.reduce((s,p)=>s+(p.cantidad||0),0);
   const planDash = ordenes.filter(o=>o.fecha===fechaDash).reduce((s,o)=>s+planHome(o),0);
-  const fmtFecha = (f)=>{ try { return new Date(f+"T12:00:00").toLocaleDateString("es-ES",{weekday:"long",day:"numeric",month:"2-digit"}); } catch(e){ return f; } };
+  const fmtFecha = (f) => fechaES(f, { weekday:"long", day:"numeric", month:"long" });
   const esGerencia = perfil.rol === "gerencia";
   const tiles = [
     { id:"planificacion", grupo:"proc", icon:"📅", bg:"#EEF2FF", label:"Planificación", sub:"Mes · semana · cuadre · cierre", roles:["gerencia","sup_fabrica"] },
