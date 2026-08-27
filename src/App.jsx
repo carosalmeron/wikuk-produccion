@@ -1847,6 +1847,69 @@ function CierreTurno({ ots, partes, productos, mps, centros, centro, turno, hoy,
     ${pieInforme(perfil)}
   `;
 
+  // El mismo informe, con estilos dentro para que se vea bien en cualquier correo
+  const htmlCorreo = () => {
+    const est = 'style="border:1px solid #ddd;padding:7px 9px;font-size:13px"';
+    const th  = 'style="border:1px solid #ccc;padding:7px 9px;font-size:12px;background:#eee;text-align:left"';
+    const n   = 'style="border:1px solid #ddd;padding:7px 9px;font-size:13px;text-align:right"';
+    return `<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#111;max-width:680px">
+      <h2 style="margin:0 0 2px;font-size:19px">Producción · ${esc(turno?.nombre||"")}</h2>
+      <div style="font-size:13px;color:#555;margin-bottom:16px">${esc(fechaESLarga(hoy))} · ${esc(centro?.nombre||"")} · cerrado por ${esc(perfil?.nombre||"")}</div>
+
+      <h3 style="font-size:13px;text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid #111;padding-bottom:4px">Lo que se ha producido</h3>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:18px">
+        <tr><th ${th}>Línea</th><th ${th}>Producto</th><th ${th}>Plan</th><th ${th}>Real</th><th ${th}>%</th></tr>
+        ${filas.map(f=>`<tr><td ${est}>${esc(f.ot.linea)}</td><td ${est}>${esc(f.p?.nombre||"?")}</td>
+          <td ${n}>${num(f.plan)}</td><td ${n}>${num(f.real)}</td>
+          <td ${n}><b>${f.plan>0?Math.round(f.real/f.plan*100):"—"}%</b></td></tr>`).join("")}
+        <tr><td ${est} colspan="2"><b>TOTAL</b></td><td ${n}><b>${num(T.plan)}</b></td>
+          <td ${n}><b>${num(T.real)}</b></td><td ${n}><b>${T.plan>0?Math.round(T.real/T.plan*100):"—"}%</b></td></tr>
+      </table>
+
+      ${rends.length ? `<h3 style="font-size:13px;text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid #111;padding-bottom:4px">Rendimientos</h3>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:18px">
+        <tr><th ${th}>Materia · lote</th><th ${th}>Teórico</th><th ${th}>Gastado</th><th ${th}>Rend.</th><th ${th}>Obj.</th></tr>
+        ${rends.map(x=>`<tr><td ${est}>${esc(x.mp?.nombre||"?")} · ${esc(x.lote||"sin lote")}</td>
+          <td ${n}>${num(x.teo)} m</td><td ${n}>${num(x.gast)} m</td>
+          <td ${n}><b style="color:${x.r>=x.obj?"#166534":"#b91c1c"}">${Math.round(x.r)}%</b></td>
+          <td ${n}>${x.obj}%</td></tr>`).join("")}
+      </table>` : ""}
+
+      ${paros.length ? `<h3 style="font-size:13px;text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid #111;padding-bottom:4px">Paradas</h3>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:18px">
+        <tr><th ${th}>Motivo</th><th ${th}>Línea</th><th ${th}>Minutos</th></tr>
+        ${paros.map(x=>`<tr><td ${est}>${esc(x.motivo)}</td><td ${est}>${esc(x.linea)}</td><td ${n}>${Math.round(toNum(x.minutos))}</td></tr>`).join("")}
+        <tr><td ${est} colspan="2"><b>TOTAL · ${paros.length} paradas</b></td><td ${n}><b>${Math.round(minParados)} min</b></td></tr>
+      </table>` : ""}
+
+      ${notas.length ? `<h3 style="font-size:13px;text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid #111;padding-bottom:4px">Observaciones</h3>
+      <div style="font-size:13px;line-height:1.8;margin-bottom:18px;color:#555">
+        ${notas.map(x=>`${esc(x.linea)}: <i>“${esc(x.txt)}”</i>`).join("<br/>")}</div>` : ""}
+
+      <h3 style="font-size:13px;text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid #111;padding-bottom:4px">Lo que ha costado el turno</h3>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:18px">
+        <tr><th ${th}>Concepto</th><th ${th}>Objetivo</th><th ${th}>Real</th><th ${th}>Desvío</th></tr>
+        <tr><td ${est}>Materia prima</td><td ${n}>${eur(T.objMat)}</td><td ${n}>${eur(T.realMat)}</td><td ${n}>${T.realMat-T.objMat>=0?"+":""}${eur(T.realMat-T.objMat)}</td></tr>
+        <tr><td ${est}>Mano de obra</td><td ${n}>${eur(T.objMO)}</td><td ${n}>${eur(T.realMO)}</td><td ${n}>${T.realMO-T.objMO>=0?"+":""}${eur(T.realMO-T.objMO)}</td></tr>
+        <tr><td ${est}>Gastos generales</td><td ${n}>${eur(ggTurno)}</td><td ${n}>${eur(ggTurno)}</td><td ${n}>—</td></tr>
+        <tr><td ${est}><b>COSTE TOTAL</b></td><td ${n}><b>${eur(costeObj)}</b></td><td ${n}><b>${eur(costeReal)}</b></td>
+          <td ${n}><b>${costeReal-costeObj>=0?"+":""}${eur(costeReal-costeObj)}</b></td></tr>
+      </table>
+
+      <div style="border:3px solid ${desvio>=0?"#16a34a":"#ef4444"};background:${desvio>=0?"#f0fdf4":"#fef2f2"};
+        border-radius:12px;padding:18px;text-align:center">
+        <div style="font-size:12px;color:#555;letter-spacing:.4px">FRENTE AL OBJETIVO DEL TURNO</div>
+        <div style="font-size:34px;font-weight:900;color:${desvio>=0?"#16a34a":"#ef4444"};margin:6px 0">
+          ${desvio>=0?"+":"−"} ${eur(Math.abs(desvio))}</div>
+        <div style="font-size:14px">Hemos ganado ${eur(benefReal)} cuando tocaban ${eur(benefObj)}</div>
+      </div>
+
+      <div style="font-size:11px;color:#888;border-top:1px solid #ddd;margin-top:18px;padding-top:8px">
+        Wikuk Producción ${APP_VERSION} · enviado automáticamente al cerrar el turno
+      </div>
+    </div>`;
+  };
+
   const textoCorto = () =>
     `PRODUCCIÓN · ${turno?.nombre||""} · ${hoy}\n${centro?.nombre||""}\n\n` +
     filas.map(f=>`${f.ot.linea}: ${f.p?.nombre} ${num(f.real)}/${num(f.plan)} (${f.plan>0?Math.round(f.real/f.plan*100):0}%)`).join("\n") +
@@ -1858,23 +1921,62 @@ function CierreTurno({ ots, partes, productos, mps, centros, centro, turno, hoy,
     `\n${desvio>=0?"GANAMOS":"PERDEMOS"} ${eur(Math.abs(desvio))} frente al objetivo` +
     `\n\nCerrado por ${perfil?.nombre||""}`;
 
+  // Mismo sistema que el CRM: una función de Vercel en /api/send-email
+  const enviarCorreo = async (para, asunto, html) => {
+    const resultados = [];
+    for (const to of para) {
+      try {
+        const r = await fetch("/api/send-email", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ to, subject: asunto, html }),
+        });
+        resultados.push({ to, ok: r.ok, detalle: r.ok ? "" : (await r.text()).slice(0,200) });
+      } catch (e) {
+        resultados.push({ to, ok: false, detalle: String(e).slice(0,200) });
+      }
+    }
+    return resultados;
+  };
+
   const cerrarYEnviar = async (accion) => {
     setGuardando(true);
-    await save("cierres_turno", `${hoy}__${claveDe(turno,0)}__${centro?.id||""}`, {
-      fecha: hoy, turno_id: turno?.id||"", centro: centro?.id||"",
+    const idCierre = `${hoy}__${claveDe(turno,0)}__${centro?.id||""}`;
+    const asunto = `Producción ${turno?.nombre||""} · ${fechaESLarga(hoy)} · ${centro?.nombre||""}`;
+    const html = htmlCorreo();
+    await save("cierres_turno", idCierre, {
+      fecha: hoy, turno_id: turno?.id||"", turno_nombre: turno?.nombre||"",
+      centro: centro?.id||"", centro_nombre: centro?.nombre||"",
       uds_plan: T.plan, uds_real: T.real,
       coste_objetivo: costeObj, coste_real: costeReal,
       beneficio_objetivo: benefObj, beneficio_real: benefReal, desvio,
       min_parados: minParados, n_paradas: paros.length,
       cerrado_por: perfil?.nombre||"", cerrado_at: new Date().toISOString(),
-      enviado_a: destinatarios.map(u=>u.email),
+      // Lo que necesita el servidor para enviarlo solo
+      destinatarios: destinatarios.map(u=>u.email),
+      asunto, resumen: textoCorto(), informe_html: html,
+      email_estado: destinatarios.length ? "enviando" : "sin_destinatarios",
     });
+
+    // Enviar el informe, igual que hace el CRM
+    if (destinatarios.length) {
+      const res = await enviarCorreo(destinatarios.map(u=>u.email), asunto, html);
+      const ok = res.filter(x=>x.ok).map(x=>x.to);
+      const fallo = res.filter(x=>!x.ok);
+      await save("cierres_turno", idCierre, {
+        email_estado: fallo.length ? (ok.length ? "parcial" : "error") : "enviado",
+        email_enviados_a: ok,
+        email_error: fallo.length ? fallo.map(x=>`${x.to}: ${x.detalle}`).join(" · ").slice(0,500) : "",
+        email_at: new Date().toISOString(),
+      });
+      if (fallo.length) {
+        window.alert(ok.length
+          ? `Turno cerrado. El informe ha llegado a ${ok.length} de ${res.length}.\n\nNo ha salido a: ${fallo.map(x=>x.to).join(", ")}`
+          : `Turno cerrado, pero el correo no ha salido.\n\n${fallo[0].detalle}\n\nEl informe está guardado: puedes compartirlo o imprimirlo.`);
+      }
+    }
     setGuardando(false);
     if (accion === "imprimir") imprimirHTML(htmlInforme());
-    if (accion === "correo") {
-      const para = destinatarios.map(u=>u.email).join(",");
-      window.location.href = `mailto:${para}?subject=${encodeURIComponent(`Producción ${turno?.nombre||""} · ${hoy}`)}&body=${encodeURIComponent(textoCorto())}`;
-    }
     if (accion === "compartir") {
       if (navigator.share) { try { await navigator.share({ title:"Informe del turno", text:textoCorto() }); } catch(e){} }
       else { try { await navigator.clipboard.writeText(textoCorto()); window.alert("Informe copiado. Pégalo donde quieras."); } catch(e){} }
@@ -1955,18 +2057,23 @@ function CierreTurno({ ots, partes, productos, mps, centros, centro, turno, hoy,
         </div>
       </BloqueF>
 
-      <div style={{background:C.card2,borderRadius:14,padding:"13px 15px",marginBottom:16,fontSize:14,color:C.mutedD,lineHeight:1.6}}>
+      <div style={{background:destinatarios.length?C.greenBg:C.amberBg,
+        border:`2px solid ${destinatarios.length?C.green:C.amber}`,borderRadius:14,padding:"13px 15px",
+        marginBottom:16,fontSize:14,color:destinatarios.length?C.green:C.amber,lineHeight:1.6,fontWeight:700}}>
         {destinatarios.length
-          ? <>📧 Se enviará a <b style={{color:C.text}}>{destinatarios.map(u=>u.nombre).join(", ")}</b>.</>
-          : <>⚠️ Nadie tiene marcado “recibe el informe de producción” en su ficha de usuario.</>}
+          ? <>📧 Al cerrar se enviará el informe a <b>{destinatarios.map(u=>u.nombre).join(", ")}</b>.</>
+          : <>⚠️ Nadie tiene marcado “recibe el informe de producción” en su ficha. Se guardará el cierre, pero no saldrá ningún correo.</>}
       </div>
 
       <div style={{display:"grid",gap:12}}>
-        <BotonF alto={104} bg={C.green} color="#fff" borde={C.green} disabled={guardando}
-          onClick={()=>cerrarYEnviar("correo")}>{guardando?"Guardando…":"📧 CERRAR Y ENVIAR POR CORREO"}</BotonF>
+        <BotonF alto={110} bg={C.green} color="#fff" borde={C.green} disabled={guardando}
+          onClick={()=>cerrarYEnviar("")}>{guardando?"Cerrando…":"🔒 CERRAR EL TURNO"}</BotonF>
+        <div style={{fontSize:12.5,color:C.mutedD,textAlign:"center",lineHeight:1.5}}>
+          El correo sale solo al cerrar. Estos botones son por si además lo quieres a mano.
+        </div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-          <BotonF alto={88} borde={C.border} disabled={guardando} onClick={()=>cerrarYEnviar("compartir")}>📤 Compartir</BotonF>
-          <BotonF alto={88} borde={C.border} disabled={guardando} onClick={()=>cerrarYEnviar("imprimir")}>🖨️ Imprimir</BotonF>
+          <BotonF alto={80} borde={C.border} disabled={guardando} onClick={()=>cerrarYEnviar("compartir")}>📤 Compartir</BotonF>
+          <BotonF alto={80} borde={C.border} disabled={guardando} onClick={()=>cerrarYEnviar("imprimir")}>🖨️ Imprimir</BotonF>
         </div>
       </div>
     </CapaF>
