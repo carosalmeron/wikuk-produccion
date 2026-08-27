@@ -1315,8 +1315,13 @@ const GRAVEDAD = [["madeja","🟡","Alguna madeja"],["media","🟠","Media parte
 
 function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mps, motivos, moldes=[], usuarios=[], procesos=[] }) {
   const hoy = new Date().toISOString().slice(0,10);
-  const [vista, setVista] = useState("inicio");     // inicio·ordenes·ot·cerradas·incidencias·paradas·informe
-  const [turnoId, setTurnoId] = useState(turnos[0]?.id || "");
+  const [vista, setVista] = useState("inicio");     // inicio·ordenes·ot·cerradas·incidencias·paradas
+  // El centro y el turno salen de la ficha del operario
+  const esOperario = perfil?.rol === "operario";
+  const centro = centros.find(c => c.id === perfil?.centro) || centros[0] || null;
+  const centroId = centro?.id || "";
+  const [turnoId, setTurnoId] = useState(perfil?.turno || turnos[0]?.id || "");
+  useEffect(()=>{ if (perfil?.turno) setTurnoId(perfil.turno); }, [perfil?.turno]);
   const [otSel, setOtSel] = useState(null);         // {linea, producto_id, cantidad, ...}
   const [modal, setModal] = useState(null);
 
@@ -1331,7 +1336,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
 
   // ── Las órdenes del día salen del calendario planificado
   const otsHoy = planesSem
-    .filter(w => w.semana === semanaHoy)
+    .filter(w => w.semana === semanaHoy && (!centroId || w.centro === centroId))
     .flatMap(w => (w.calendario||[])
       .filter(x => x.fecha === hoy && x.turno === claveTurno)
       .map(x => ({ ...x, semana: w.semana })));
@@ -1344,8 +1349,9 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
 
   const prodDe = (pid) => productos.find(p => p.id === pid);
   const nombreMolde = (p) => p?.molde_id ? (moldes.find(m=>m.id===p.molde_id)?.nombre) : p?.molde;
-  const equipo = usuarios.filter(u => u.activo !== false && u.rol === "operario");
-  const gente = equipo.length ? equipo : usuarios;
+  const equipo = usuarios.filter(u => u.activo !== false && u.rol === "operario"
+    && (!centroId || !u.centro || u.centro === centroId));
+  const gente = equipo.length ? equipo : usuarios.filter(u => u.activo !== false);
 
   // ═══ INICIO ═══
   if (vista === "inicio") {
@@ -1354,9 +1360,16 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
     const minHoy = parosHoy.reduce((a,x)=>a+(parseFloat(x.minutos)||0),0);
     return (
       <div style={{background:C.bg,minHeight:"100vh"}}>
-        <CabF titulo={centros[0]?.nombre || "Fábrica"} onSalir={onBack}
-          sub={`${new Date().toLocaleDateString("es-ES",{weekday:"long",day:"numeric",month:"long"})} · ${turno?.nombre||""}`}/>
-        {turnos.length>1 && (
+        <CabF titulo={centro?.nombre || "Fábrica"} onSalir={onBack}
+          sub={`${new Date().toLocaleDateString("es-ES",{weekday:"long",day:"numeric",month:"long"})} · ${turno?.nombre||"sin turno"}`}/>
+        {esOperario && (!perfil?.centro || !perfil?.turno) && (
+          <div style={{margin:"18px 22px 0",background:C.amberBg,border:`2px solid ${C.amber}`,borderRadius:14,
+            padding:"14px 16px",fontSize:15.5,color:C.amber,fontWeight:700,lineHeight:1.55}}>
+            ⚠️ Tu ficha no tiene {!perfil?.centro && "centro"}{(!perfil?.centro && !perfil?.turno) && " ni "}{!perfil?.turno && "turno"} asignado.
+            Se está mostrando {centro?.nombre||"el primer centro"}{turno?` · ${turno.nombre}`:""}. Díselo a tu responsable.
+          </div>
+        )}
+        {turnos.length>1 && !esOperario && (
           <div style={{display:"flex",gap:10,padding:"16px 22px 0"}}>
             {turnos.map(t=>(
               <button key={t.id} onClick={()=>setTurnoId(t.id)}
