@@ -1430,7 +1430,9 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
   const [vista, setVista] = useState("inicio");     // inicio·ordenes·ot·cerradas·incidencias·paradas
   // El centro y el turno salen de la ficha del operario
   const esOperario = perfil?.rol === "operario";
-  const centro = centros.find(c => c.id === perfil?.centro) || centros[0] || null;
+  const centroPropio = centros.find(c => c.id === perfil?.centro) || null;
+  // El operario solo ve su centro. Los demás, el primero mientras no elijan otro.
+  const centro = esOperario ? centroPropio : (centroPropio || centros[0] || null);
   const centroId = centro?.id || "";
   const [turnoId, setTurnoId] = useState(perfil?.turno || turnos[0]?.id || "");
   useEffect(()=>{ if (perfil?.turno) setTurnoId(perfil.turno); }, [perfil?.turno]);
@@ -1480,11 +1482,19 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
       <div style={{background:C.bg,minHeight:"100vh"}}>
         <CabF titulo={centro?.nombre || "Fábrica"} onSalir={onBack}
           sub={`${new Date().toLocaleDateString("es-ES",{weekday:"long",day:"numeric",month:"long"})} · ${turno?.nombre||"sin turno"}`}/>
-        {esOperario && (!perfil?.centro || !perfil?.turno) && (
+        {esOperario && !centroPropio && (
+          <div style={{margin:"18px 22px",background:C.redBg,border:`3px solid ${C.red}`,borderRadius:16,
+            padding:"20px",fontSize:17,color:C.red,fontWeight:700,lineHeight:1.6}}>
+            ⛔ Tu ficha no tiene un centro de trabajo válido, así que no se puede saber qué te toca fabricar.
+            <div style={{fontSize:15,color:C.mutedD,fontWeight:600,marginTop:8}}>
+              Díselo a tu responsable: hay que asignarte un centro en Usuarios.
+            </div>
+          </div>
+        )}
+        {esOperario && centroPropio && !perfil?.turno && (
           <div style={{margin:"18px 22px 0",background:C.amberBg,border:`2px solid ${C.amber}`,borderRadius:14,
             padding:"14px 16px",fontSize:15.5,color:C.amber,fontWeight:700,lineHeight:1.55}}>
-            ⚠️ Tu ficha no tiene {!perfil?.centro && "centro"}{(!perfil?.centro && !perfil?.turno) && " ni "}{!perfil?.turno && "turno"} asignado.
-            Se está mostrando {centro?.nombre||"el primer centro"}{turno?` · ${turno.nombre}`:""}. Díselo a tu responsable.
+            ⚠️ Tu ficha no tiene turno asignado. Se está mostrando {turno?.nombre||"el primero"}. Díselo a tu responsable.
           </div>
         )}
         {turnos.length>1 && !esOperario && (
@@ -1497,6 +1507,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
             ))}
           </div>
         )}
+        {(!esOperario || centroPropio) && (
         <div style={{padding:"24px 22px",display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:20}}>
           {[["📋","Órdenes de trabajo","Lo que se fabrica hoy",
              abiertas.length ? `${abiertas.length} sin cerrar` : "todo cerrado",
@@ -1518,6 +1529,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
             </button>
           ))}
         </div>
+        )}
       </div>
     );
   }
@@ -1526,7 +1538,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
   if (vista === "ordenes") {
     return (
       <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
-        <CabF titulo="Órdenes de trabajo" sub={`${turno?.nombre||""} · toca tu línea`}
+        <CabF titulo="Órdenes de trabajo" sub={`${centro?.nombre||"sin centro"} · ${turno?.nombre||""} · toca tu línea`}
           atras={()=>setVista("inicio")} onSalir={onBack}/>
         <div style={{padding:22}}>
           {reabiertas.length>0 && (
@@ -1561,8 +1573,18 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
             </div>
           )}
 
-          {otsHoy.length===0 && reabiertas.length===0 &&
-            <Empty icon="📋" text="No hay nada planificado para hoy en este turno"/>}
+          {otsHoy.length===0 && reabiertas.length===0 && (
+            <div style={{background:"#fff",border:`2px solid ${C.border}`,borderRadius:18,padding:22,textAlign:"center"}}>
+              <div style={{fontSize:46,marginBottom:8}}>📋</div>
+              <div style={{fontFamily:F.h,fontWeight:800,fontSize:19,color:C.text,marginBottom:6}}>
+                Nada planificado para hoy
+              </div>
+              <div style={{fontSize:15,color:C.mutedD,lineHeight:1.6}}>
+                {centro?.nombre||"—"} · {turno?.nombre||"sin turno"} · {fechaESLarga(hoy)}
+                <div style={{marginTop:8}}>Las órdenes salen del calendario de Planificación. Si debería haber trabajo, díselo a tu responsable.</div>
+              </div>
+            </div>
+          )}
           {otsHoy.length>0 && reabiertas.length>0 && (
             <div style={{fontFamily:F.h,fontWeight:800,fontSize:17,color:C.text,marginBottom:12}}>Hoy</div>
           )}
