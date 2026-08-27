@@ -757,6 +757,77 @@ function SeedScreen({ onBack }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // FASE 2 · ÓRDENES DE PRODUCCIÓN + registro diario
 // ═══════════════════════════════════════════════════════════════════════════════
+// ── Barra de filtros: centro, producto y fechas ────────────────────────────────
+function FiltrosBar({ centros, centroId, setCentroId, texto, setTexto, desde, setDesde, hasta, setHasta, total, mostrados }) {
+  const [abierto, setAbierto] = useState(false);
+  const rango = (dias) => {
+    const h = new Date(); const d = new Date(); d.setDate(h.getDate()-dias);
+    setDesde(d.toISOString().slice(0,10)); setHasta(h.toISOString().slice(0,10));
+  };
+  const hayFiltro = centroId || texto || desde || hasta;
+  return (
+    <Card style={{marginBottom:12}} color={hayFiltro?C.blue+"55":undefined}>
+      {centros.length>1 && (
+        <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:8,marginBottom:8}}>
+          <button onClick={()=>setCentroId("")}
+            style={{flexShrink:0,background:!centroId?C.accent:"#fff",color:!centroId?"#fff":C.mutedD,
+              border:`1.5px solid ${!centroId?C.accent:C.border}`,borderRadius:11,padding:"9px 13px",
+              fontFamily:F.h,fontWeight:700,fontSize:13,cursor:"pointer"}}>Todos</button>
+          {centros.map(c=>(
+            <button key={c.id} onClick={()=>setCentroId(c.id)}
+              style={{flexShrink:0,background:centroId===c.id?C.accent:"#fff",color:centroId===c.id?"#fff":C.mutedD,
+                border:`1.5px solid ${centroId===c.id?C.accent:C.border}`,borderRadius:11,padding:"9px 13px",
+                fontFamily:F.h,fontWeight:700,fontSize:13,cursor:"pointer"}}>🏭 {c.nombre}</button>
+          ))}
+        </div>
+      )}
+      <div style={{display:"flex",gap:8,alignItems:"center"}}>
+        <div style={{flex:1,position:"relative"}}>
+          <span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)",fontSize:15,color:C.muted}}>🔍</span>
+          <input value={texto} onChange={e=>setTexto(e.target.value)} placeholder="Buscar producto, OT…"
+            style={{width:"100%",padding:"12px 12px 12px 36px",borderRadius:12,border:`1.5px solid ${C.border}`,
+              fontSize:14.5,background:"#fff",color:C.text,boxSizing:"border-box"}}/>
+        </div>
+        <button onClick={()=>setAbierto(a=>!a)}
+          style={{flexShrink:0,background:(desde||hasta)?C.blueBg:"#fff",border:`1.5px solid ${(desde||hasta)?C.blue:C.border}`,
+            color:(desde||hasta)?C.blue:C.mutedD,borderRadius:12,padding:"12px 14px",fontFamily:F.h,fontWeight:800,fontSize:13,cursor:"pointer"}}>
+          📅 {desde||hasta ? "Fechas ✓" : "Fechas"}
+        </button>
+      </div>
+
+      {abierto && (
+        <div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${C.border}`}}>
+          <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>
+            {[["Hoy",0],["7 días",7],["30 días",30],["90 días",90]].map(([l,d])=>(
+              <button key={l} onClick={()=>rango(d)}
+                style={{background:"#fff",border:`1.5px solid ${C.border}`,color:C.mutedD,borderRadius:10,
+                  padding:"8px 12px",fontSize:12.5,fontWeight:700,cursor:"pointer"}}>{l}</button>
+            ))}
+            {(desde||hasta) && (
+              <button onClick={()=>{setDesde("");setHasta("");}}
+                style={{background:C.redBg,border:`1.5px solid ${C.red}`,color:C.red,borderRadius:10,
+                  padding:"8px 12px",fontSize:12.5,fontWeight:700,cursor:"pointer"}}>✕ quitar</button>
+            )}
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+            <Field label="Desde" value={desde} onChange={setDesde} type="date"/>
+            <Field label="Hasta" value={hasta} onChange={setHasta} type="date"/>
+          </div>
+        </div>
+      )}
+
+      {hayFiltro && (
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:10,
+          paddingTop:10,borderTop:`1px solid ${C.border}`,fontSize:12.5,color:C.mutedD}}>
+          <span><b style={{color:C.text}}>{mostrados}</b> de {total}</span>
+          <button onClick={()=>{setCentroId("");setTexto("");setDesde("");setHasta("");}}
+            style={{background:"none",border:"none",color:C.blue,fontSize:12.5,fontWeight:800,cursor:"pointer"}}>Quitar filtros</button>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function OrdenesScreen({ onBack, perfil, productos, lineas, turnos, centros, mps, motivos, usuarios }) {
   const [ordenes] = useCol("ordenes", "fecha");
   const [producciones] = useCol("producciones", "fecha");
@@ -764,6 +835,10 @@ function OrdenesScreen({ onBack, perfil, productos, lineas, turnos, centros, mps
   const [editOrden, setEditOrden] = useState(null);
   const [regOrden, setRegOrden] = useState(null); // orden a la que registrar producción
   const [filtro, setFiltro] = useState("activas");
+  const [centroId, setCentroId] = useState("");
+  const [texto, setTexto] = useState("");
+  const [desde, setDesde] = useState("");
+  const [hasta, setHasta] = useState("");
 
   const prodDe = (oid) => producciones.filter(p=>p.orden_id===oid).reduce((s,p)=>s+(parseFloat(p.cantidad)||0),0);
   const estadoDe = (o) => {
@@ -776,10 +851,20 @@ function OrdenesScreen({ onBack, perfil, productos, lineas, turnos, centros, mps
   const EST = { PLANIFICADA:{c:C.muted,bg:C.card2,t:"⚪ Planificada"}, PARCIAL:{c:C.amber,bg:C.amberBg,t:"🟡 En curso"},
                 COMPLETA:{c:C.green,bg:C.greenBg,t:"🟢 Completa"}, CERRADA:{c:C.blue,bg:C.blueBg,t:"✔ Cerrada"} };
 
+  const centroDe = (o) => o.centro || productos.find(p=>p.id===o.producto_id)?.centro || "";
   const visibles = ordenes.filter(o=>{
     const e = estadoDe(o);
-    if (filtro==="activas") return e!=="CERRADA";
-    if (filtro==="cerradas") return e==="CERRADA";
+    if (filtro==="activas" && e==="CERRADA") return false;
+    if (filtro==="cerradas" && e!=="CERRADA") return false;
+    if (centroId && centroDe(o) !== centroId) return false;
+    if (desde && (o.fecha||"") < desde) return false;
+    if (hasta && (o.fecha||"") > hasta) return false;
+    if (texto) {
+      const p = productos.find(z=>z.id===o.producto_id);
+      const q = texto.toLowerCase();
+      const enTexto = [o.numero, p?.nombre, p?.descripcion].filter(Boolean).join(" ").toLowerCase();
+      if (!enTexto.includes(q)) return false;
+    }
     return true;
   }).sort((a,b)=>(b.fecha||"").localeCompare(a.fecha||""));
 
@@ -794,13 +879,17 @@ function OrdenesScreen({ onBack, perfil, productos, lineas, turnos, centros, mps
       <Header title="ÓRDENES DE PRODUCCIÓN" onBack={onBack} sub="Nº OT · producto · cantidad · lo pendiente vive aquí"/>
       <div style={{padding:14}}>
         <Btn onClick={()=>setShowForm(true)}>＋ Nueva Orden</Btn>
-        <div style={{display:"flex",gap:6,margin:"14px 0"}}>
+        <div style={{height:12}}/>
+        <FiltrosBar centros={centros} centroId={centroId} setCentroId={setCentroId}
+          texto={texto} setTexto={setTexto} desde={desde} setDesde={setDesde} hasta={hasta} setHasta={setHasta}
+          total={ordenes.length} mostrados={visibles.length}/>
+        <div style={{display:"flex",gap:6,margin:"0 0 14px"}}>
           {[["activas","Activas"],["cerradas","Cerradas"],["todas","Todas"]].map(([k,l])=>(
             <button key={k} onClick={()=>setFiltro(k)}
               style={{background:filtro===k?C.text:"#fff",color:filtro===k?"#fff":C.muted,border:`1px solid ${filtro===k?C.text:C.border}`,borderRadius:20,padding:"6px 16px",fontSize:13,fontFamily:F.h,fontWeight:700,cursor:"pointer"}}>{l}</button>
           ))}
         </div>
-        {visibles.length===0 && <Empty icon="📋" text="Sin órdenes aquí. Crea la primera con ＋ Nueva Orden."/>}
+        {visibles.length===0 && <Empty icon="📋" text="Ninguna orden con estos filtros"/>}
         <div style={{display:"flex",flexDirection:"column",gap:8}}>
           {visibles.map(o=>{
             const p = productos.find(x=>x.id===o.producto_id);
@@ -2467,14 +2556,30 @@ function AnaliticaScreen({ onBack, productos, mps, lineas, turnos, usuarios, cen
   const [regsOp] = useCol("registros_operario");
   const [cfg] = useCol("config_costes");
   const [tab, setTab] = useState("dx");
+  const [centroId, setCentroId] = useState("");
+  const [texto, setTexto] = useState("");
+  const [desde, setDesde] = useState("");
+  const [hasta, setHasta] = useState("");
 
-  const centro = centros[0];
+  const centro = centros.find(c=>c.id===centroId) || centros[0];
   const estructura = cfg[0] && cfg[0].horas_persona_mes ? cfg[0].fijos_mensuales/cfg[0].horas_persona_mes : 2.45;
   const tarifaCargada = (centro?.tarifa_mo||12.5) + estructura;
   const prodMap = {}; productos.forEach(p=>prodMap[p.id]=p);
   const mpMap = {}; mps.forEach(m=>mpMap[m.id]=m);
   const linMap = {}; lineas.forEach(l=>linMap[l.id]=l);
-  const P2 = producciones.filter(p=>p.fecha && p.cantidad>0);
+  const centroDeParte = (p) => productos.find(z=>z.id===p.producto_id)?.centro || "";
+  const P2 = producciones.filter(p=>{
+    if (!p.fecha || !(p.cantidad>0)) return false;
+    if (centroId && centroDeParte(p) !== centroId) return false;
+    if (desde && p.fecha < desde) return false;
+    if (hasta && p.fecha > hasta) return false;
+    if (texto) {
+      const pr = productos.find(z=>z.id===p.producto_id);
+      const q = texto.toLowerCase();
+      if (!`${pr?.nombre||""} ${pr?.descripcion||""} ${p.linea_nombre||""}`.toLowerCase().includes(q)) return false;
+    }
+    return true;
+  });
 
   const costeReal = (p) => p.n_personas && p.cantidad ? (p.n_personas*(p.horas_equipo||8)*tarifaCargada/p.cantidad) : null;
   const Bar = ({pct,color,label,value}) => (
@@ -2625,13 +2730,16 @@ function AnaliticaScreen({ onBack, productos, mps, lineas, turnos, usuarios, cen
     <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
       <Header title="📊 ANALÍTICA" onBack={onBack} sub={`${P2.length} partes · tarifa cargada ${tarifaCargada.toFixed(2)} €/h (MO ${centro?.tarifa_mo||"?"} + estructura ${estructura.toFixed(2)})`}/>
       <div style={{padding:14}}>
+        <FiltrosBar centros={centros} centroId={centroId} setCentroId={setCentroId}
+          texto={texto} setTexto={setTexto} desde={desde} setDesde={setDesde} hasta={hasta} setHasta={setHasta}
+          total={producciones.filter(p=>p.fecha && p.cantidad>0).length} mostrados={P2.length}/>
         <div style={{display:"flex",gap:6,marginBottom:14,overflowX:"auto",paddingBottom:4}}>
           {TABS.map(([k,l])=>(
             <button key={k} onClick={()=>setTab(k)}
               style={{background:tab===k?C.text:"#fff",color:tab===k?"#fff":C.muted,border:`1px solid ${tab===k?C.text:C.border}`,borderRadius:20,padding:"7px 14px",fontSize:13,fontFamily:F.h,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}}>{l}</button>
           ))}
         </div>
-        {vacio && <Empty icon="📊" text="Sin datos aún. Importa el histórico o registra partes y esto cobra vida."/>}
+        {vacio && <Empty icon="📊" text={(centroId||texto||desde||hasta) ? "Ningún parte con estos filtros" : "Sin datos aún. Importa el histórico o registra partes y esto cobra vida."}/>}
 
         {!vacio && tab==="dx" && <>
           <div style={{background:C.navy,color:"#fff",borderRadius:16,padding:16,marginBottom:12}}>
