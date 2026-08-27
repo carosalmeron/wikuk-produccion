@@ -2003,6 +2003,16 @@ function CierreTurno({ ots, partes, apoyos=[], productos, mps, centros, centro, 
   const benefReal = T.ventaReal - costeReal;
   const desvio    = benefReal - benefObj;
 
+  // ── El desvío tiene dos causas y conviene separarlas:
+  //    lo que se dejó de fabricar, y lo que costó de más lo que sí se fabricó.
+  const costeObjUd = T.plan > 0 ? costeObj / T.plan : 0;          // lo que debería costar cada unidad
+  const costeEsperado = costeObjUd * T.real;                       // lo que debería haber costado lo hecho
+  const desvioCoste = costeReal - costeEsperado;                   // de más (+) o de menos (−)
+  const pvMedio = T.plan > 0 ? T.ventaObj / T.plan : 0;
+  const margenUd = pvMedio - costeObjUd;                           // lo que deja cada unidad si todo va bien
+  const desvioVolumen = (T.real - T.plan) * margenUd;              // margen que se pierde por no fabricar
+  const costeUdReal = T.real > 0 ? costeReal / T.real : 0;
+
   // ── Rendimientos por lote
   const rends = filas.flatMap(f => (f.parte?.consumos||[]).map(c=>{
     const capas = (f.p?.materias_asignadas||[]).find(m=>m.mp_id===c.materia_id)?.capas || 1;
@@ -2115,11 +2125,29 @@ function CierreTurno({ ots, partes, apoyos=[], productos, mps, centros, centro, 
       </table>
 
       <div style="border:3px solid ${desvio>=0?"#16a34a":"#ef4444"};background:${desvio>=0?"#f0fdf4":"#fef2f2"};
-        border-radius:12px;padding:18px;text-align:center">
-        <div style="font-size:12px;color:#555;letter-spacing:.4px">FRENTE AL OBJETIVO DEL TURNO</div>
-        <div style="font-size:34px;font-weight:900;color:${desvio>=0?"#16a34a":"#ef4444"};margin:6px 0">
-          ${desvio>=0?"+":"−"} ${eur(Math.abs(desvio))}</div>
-        <div style="font-size:14px">Hemos ganado ${eur(benefReal)} cuando tocaban ${eur(benefObj)}</div>
+        border-radius:12px;padding:18px">
+        <div style="text-align:center">
+          <div style="font-size:12px;color:#555;letter-spacing:.4px">FRENTE AL OBJETIVO DEL TURNO</div>
+          <div style="font-size:34px;font-weight:900;color:${desvio>=0?"#16a34a":"#ef4444"};margin:6px 0">
+            ${desvio>=0?"+":"−"} ${eur(Math.abs(desvio))}</div>
+          <div style="font-size:14px">Hemos ganado ${eur(benefReal)} cuando tocaban ${eur(benefObj)}</div>
+        </div>
+        <div style="border-top:2px solid ${desvio>=0?"#16a34a":"#ef4444"};margin-top:14px;padding-top:12px;font-size:13px">
+          <div style="font-size:11px;color:#555;font-weight:700;letter-spacing:.4px;margin-bottom:7px">DE DÓNDE SALE LA DIFERENCIA</div>
+          <table style="width:100%;border-collapse:collapse">
+            <tr><td style="padding:4px 0">Por las ${num(Math.abs(T.plan-T.real))} uds que ${T.real<T.plan?"faltan":"sobran"}
+              <div style="font-size:11px;color:#777">a ${margenUd.toFixed(2)} € de margen cada una</div></td>
+              <td style="padding:4px 0;text-align:right;font-weight:800;color:${desvioVolumen>=0?"#16a34a":"#ef4444"}">
+                ${desvioVolumen>=0?"+":"−"} ${eur(Math.abs(desvioVolumen))}</td></tr>
+            <tr><td style="padding:4px 0">Porque lo hecho costó ${desvioCoste>=0?"más":"menos"}
+              <div style="font-size:11px;color:#777">${eur(costeReal)} en vez de ${eur(costeEsperado)} para ${num(T.real)} uds</div></td>
+              <td style="padding:4px 0;text-align:right;font-weight:800;color:${desvioCoste<=0?"#16a34a":"#ef4444"}">
+                ${desvioCoste<=0?"+":"−"} ${eur(Math.abs(desvioCoste))}</td></tr>
+            <tr><td style="padding:6px 0;border-top:1px solid #ccc">Coste por unidad</td>
+              <td style="padding:6px 0;border-top:1px solid #ccc;text-align:right">
+                <b>${costeUdReal.toFixed(2)} €</b> · debería ser ${costeObjUd.toFixed(2)} €</td></tr>
+          </table>
+        </div>
       </div>
 
       <div style="font-size:11px;color:#888;border-top:1px solid #ddd;margin-top:18px;padding-top:8px">
@@ -2138,6 +2166,9 @@ function CierreTurno({ ots, partes, apoyos=[], productos, mps, centros, centro, 
     `\n\nCoste objetivo ${eur(costeObj)} · real ${eur(costeReal)}` +
     `\nBeneficio ${eur(benefReal)} de ${eur(benefObj)} previstos` +
     `\n${desvio>=0?"GANAMOS":"PERDEMOS"} ${eur(Math.abs(desvio))} frente al objetivo` +
+    `\n  · ${eur(Math.abs(desvioVolumen))} por las ${num(Math.abs(T.plan-T.real))} uds que ${T.real<T.plan?"faltan":"sobran"}` +
+    `\n  · ${eur(Math.abs(desvioCoste))} porque lo hecho costó ${desvioCoste>=0?"más":"menos"}` +
+    `\nCoste/ud: ${costeUdReal.toFixed(2)} € (debería ${costeObjUd.toFixed(2)} €)` +
     `\n\nCerrado por ${perfil?.nombre||""}`;
 
   // Mismo sistema que el CRM: una función de Vercel en /api/send-email
@@ -2169,6 +2200,8 @@ function CierreTurno({ ots, partes, apoyos=[], productos, mps, centros, centro, 
       uds_plan: T.plan, uds_real: T.real,
       coste_objetivo: costeObj, coste_real: costeReal,
       beneficio_objetivo: benefObj, beneficio_real: benefReal, desvio,
+      desvio_volumen: desvioVolumen, desvio_coste: desvioCoste,
+      coste_ud_objetivo: costeObjUd, coste_ud_real: costeUdReal,
       min_parados: minParados, n_paradas: paros.length,
       min_apoyo: minApoyo, coste_apoyo: costeApoyo,
       cerrado_por: perfil?.nombre||"", cerrado_at: new Date().toISOString(),
@@ -2277,6 +2310,17 @@ function CierreTurno({ ots, partes, apoyos=[], productos, mps, centros, centro, 
         {fila("Gastos generales", "", eur(ggTurno))}
         {fila("Coste total", eur(costeObj)+" →", eur(costeReal), (costeReal-costeObj>=0?"+":"")+eur(costeReal-costeObj))}
 
+        <div style={{background:C.card2,borderRadius:12,padding:"12px 14px",marginTop:12,fontSize:14,lineHeight:1.7}}>
+          <div style={{fontFamily:F.h,fontWeight:800,fontSize:12.5,color:C.mutedD,marginBottom:5}}>COSTE POR UNIDAD</div>
+          <div style={{display:"flex",justifyContent:"space-between"}}>
+            <span style={{color:C.mutedD}}>Debería costar cada una</span><b>{costeObjUd.toFixed(2)} €</b>
+          </div>
+          <div style={{display:"flex",justifyContent:"space-between"}}>
+            <span style={{color:C.mutedD}}>Ha costado cada una</span>
+            <b style={{color:costeUdReal>costeObjUd?C.red:C.green}}>{costeUdReal.toFixed(2)} €</b>
+          </div>
+        </div>
+
         <div style={{background:desvio>=0?C.greenBg:C.redBg,border:`3px solid ${desvio>=0?C.green:C.red}`,
           borderRadius:16,padding:20,textAlign:"center",marginTop:14}}>
           <div style={{fontSize:13.5,color:C.mutedD,fontWeight:800,letterSpacing:0.4}}>FRENTE AL OBJETIVO DEL TURNO</div>
@@ -2285,6 +2329,30 @@ function CierreTurno({ ots, partes, apoyos=[], productos, mps, centros, centro, 
           </div>
           <div style={{fontSize:15,color:C.text,fontWeight:700}}>
             Hemos ganado {eur(benefReal)} cuando tocaban {eur(benefObj)}
+          </div>
+
+          <div style={{borderTop:`2px solid ${desvio>=0?C.green:C.red}`,marginTop:14,paddingTop:12,textAlign:"left"}}>
+            <div style={{fontFamily:F.h,fontWeight:800,fontSize:12.5,color:C.mutedD,marginBottom:7}}>DE DÓNDE SALE LA DIFERENCIA</div>
+            <div style={{display:"flex",justifyContent:"space-between",gap:10,fontSize:14,marginBottom:6}}>
+              <span style={{color:C.text}}>
+                Por las {num(Math.abs(T.plan-T.real))} uds que {T.real<T.plan?"faltan":"sobran"}
+                <div style={{fontSize:12,color:C.mutedD}}>a {margenUd.toFixed(2)} € de margen cada una</div>
+              </span>
+              <b style={{flexShrink:0,color:desvioVolumen>=0?C.green:C.red}}>
+                {desvioVolumen>=0?"+":"−"} {eur(Math.abs(desvioVolumen))}
+              </b>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",gap:10,fontSize:14}}>
+              <span style={{color:C.text}}>
+                Porque lo hecho costó {desvioCoste>=0?"más":"menos"}
+                <div style={{fontSize:12,color:C.mutedD}}>
+                  {eur(costeReal)} en vez de {eur(costeEsperado)} para {num(T.real)} uds
+                </div>
+              </span>
+              <b style={{flexShrink:0,color:desvioCoste<=0?C.green:C.red}}>
+                {desvioCoste<=0?"+":"−"} {eur(Math.abs(desvioCoste))}
+              </b>
+            </div>
           </div>
         </div>
       </BloqueF>
@@ -2324,8 +2392,17 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
   const esReabierta = !!parte?.reabierta;
 
   const [total, setTotal] = useState(parte ? String(parte.cantidad) : "");
-  const [consumos, setConsumos] = useState(parte?.consumos || (p?.materias_asignadas||[]).map(m=>({
-    materia_id: m.mp_id, capas: toNum(m.capas), lote: "", metros_consumidos: 0 })));
+  // Las capas salen siempre de la ficha del producto, aunque el parte no las guardara
+  const capasDe = (mpId) => toNum((p?.materias_asignadas||[]).find(m=>m.mp_id===mpId)?.capas) || 1;
+  const [consumos, setConsumos] = useState(() => {
+    const base = (p?.materias_asignadas||[]).map(m=>({
+      materia_id: m.mp_id, capas: toNum(m.capas)||1, lote: "", metros_consumidos: 0 }));
+    if (!parte?.consumos?.length) return base;
+    // Un parte reabierto: se recuperan sus datos y se les devuelven las capas
+    const guardados = parte.consumos.map(c=>({ ...c, capas: toNum(c.capas) || capasDe(c.materia_id) }));
+    const faltan = base.filter(b => !guardados.some(g => g.materia_id === b.materia_id));
+    return [...guardados, ...faltan];
+  });
   // Las tareas de apoyo (desalado y similares) no van aquí: tienen su propia entrada
   const enLineaSolo = (lista) => lista.filter(x => !procesos.find(z=>z.id===x.proceso_id)?.apoyo);
   const [tareas, setTareas] = useState(enLineaSolo(parte?.procesos_realizados || (p?.procesos_asignados||[]).map(x=>({
@@ -2363,7 +2440,8 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
       n_personas: [...new Set(tareas.map(t=>t.persona_id).filter(Boolean))].length || 3,
       horas_equipo: 8,
       consumos: consumos.filter(c=>c.lote || toNum(c.metros_consumidos)).map(c=>({
-        materia_id: c.materia_id, lote: c.lote||"", metros_consumidos: toNum(c.metros_consumidos) })),
+        materia_id: c.materia_id, lote: c.lote||"", metros_consumidos: toNum(c.metros_consumidos),
+        capas: toNum(c.capas)||1 })),
       procesos_realizados: tareas.filter(t=>toNum(t.cantidad)>0).map(t=>({
         proceso_id: t.proceso_id, cantidad: toNum(t.cantidad), persona_id: t.persona_id||"" })),
       paros, observacion: nota.trim(), origen: "terminal",
@@ -2435,8 +2513,17 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
                 <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap",marginBottom:10}}>
                   <span style={{flex:1,minWidth:150}}>
                     <b style={{fontSize:18,color:C.text}}>{mp?.nombre||"?"}</b>
-                    <div style={{fontSize:13,color:C.mutedD}}>
-                      {c.capas} capa{c.capas!==1?"s":""}{hecho>0 && ` · teórico ${num(teoricoDe(c))} m para ${num(hecho)} uds`}
+                    <div style={{fontSize:13,color:C.mutedD,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap",marginTop:3}}>
+                      <button onClick={()=>setModal({tipo:"num",titulo:`Capas de ${mp?.nombre||""}`,
+                        valor:String(toNum(c.capas)||""), onOk:v=>setCons(i,"capas",toNum(v))})}
+                        style={{background:toNum(c.capas)?C.card2:C.amberBg,border:`1.5px solid ${toNum(c.capas)?C.border:C.amber}`,
+                          borderRadius:9,padding:"5px 10px",fontSize:13,fontWeight:800,
+                          color:toNum(c.capas)?C.text:C.amber,cursor:"pointer"}}>
+                        {toNum(c.capas) ? `${toNum(c.capas)} capa${toNum(c.capas)!==1?"s":""}` : "＋ capas"}
+                      </button>
+                      {toNum(p?.metros_finales)>0
+                        ? <span>× {num(toNum(p.metros_finales))} m/ud{hecho>0 && teoricoDe(c)>0 && ` × ${num(hecho)} = teórico ${num(teoricoDe(c))} m`}</span>
+                        : <span style={{color:C.amber,fontWeight:700}}>⚠️ falta “metros finales/ud” en la ficha del producto</span>}
                     </div>
                   </span>
                   <CampoF value={c.metros_consumidos?num(c.metros_consumidos):""} suf="m"
@@ -2455,7 +2542,11 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
                   border: r==null?"none":`2px solid ${bien?C.green:C.red}`,
                   color: r==null?C.mutedD : bien?C.green:C.red}}>
                   {r==null
-                    ? "Sin metros o sin producción: no se puede calcular el rendimiento."
+                    ? (hecho<=0 ? "Pon primero las unidades fabricadas arriba."
+                      : !toNum(c.metros_consumidos) ? "Pon los metros gastados para ver el rendimiento."
+                      : !toNum(c.capas) ? "⚠️ Falta el número de capas: tócalo arriba y ponlo."
+                      : !(toNum(p?.metros_finales)>0) ? "⚠️ Este producto no tiene metros finales por unidad en su ficha."
+                      : "No se puede calcular el rendimiento.")
                     : <>Rendimiento <b style={{fontSize:19}}>{Math.round(r)}%</b> · el objetivo es {obj}% —
                         <span style={{fontWeight:600}}> gastados {num(c.metros_consumidos)} m para {num(teoricoDe(c))} m de producto</span></>}
                 </div>
