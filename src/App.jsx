@@ -1345,7 +1345,11 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
     && p.turno_clave===claveTurno && p.producto_id===ot.producto_id);
   const abiertas = otsHoy.filter(ot => !parteDe(ot));
   const cerradasHoy = otsHoy.filter(ot => parteDe(ot));
-  const cerradasTodas = prods.filter(p => p.origen==="terminal").slice(0, 30);
+  const cerradasTodas = prods.filter(p => p.origen==="terminal" && !p.reabierta).slice(0, 30);
+  // Reabiertas: hay que volver a cerrarlas, sean del día que sean
+  const reabiertas = prods.filter(p => p.reabierta && (!centroId || !p.centro || p.centro === centroId));
+  const otDeParte = (p) => ({ linea: p.linea_nombre, producto_id: p.producto_id,
+    cantidad: p.objetivo_ot || p.cantidad, fecha: p.fecha, turno: p.turno_clave, parte: p });
 
   const prodDe = (pid) => productos.find(p => p.id === pid);
   const nombreMolde = (p) => p?.molde_id ? (moldes.find(m=>m.id===p.molde_id)?.nombre) : p?.molde;
@@ -1411,7 +1415,43 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
         <CabF titulo="Órdenes de trabajo" sub={`${turno?.nombre||""} · toca tu línea`}
           atras={()=>setVista("inicio")} onSalir={onBack}/>
         <div style={{padding:22}}>
-          {otsHoy.length===0 && <Empty icon="📋" text="No hay nada planificado para hoy en este turno"/>}
+          {reabiertas.length>0 && (
+            <div style={{marginBottom:22}}>
+              <div style={{fontFamily:F.h,fontWeight:800,fontSize:17,color:C.amber,marginBottom:4}}>↺ Reabiertas · hay que volver a cerrarlas</div>
+              <div style={{fontSize:14,color:C.mutedD,lineHeight:1.55,marginBottom:12}}>
+                Se reabrieron para corregir algo. Hasta que no se cierren, sus números no cuentan.
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:16}}>
+                {reabiertas.map(p=>{
+                  const pr = prodDe(p.producto_id);
+                  return (
+                    <button key={p.id} onClick={()=>{ setOtSel(otDeParte(p)); setVista("ot"); }}
+                      style={{background:C.amberBg,border:`3px solid ${C.amber}`,borderRadius:18,padding:18,
+                        cursor:"pointer",textAlign:"left",width:"100%"}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:8}}>
+                        <span style={{fontFamily:F.h,fontWeight:800,fontSize:23,color:C.text}}>⚙️ {p.linea_nombre}</span>
+                        <span style={{flexShrink:0,fontSize:13,fontWeight:800,borderRadius:20,padding:"6px 12px",
+                          background:C.amber,color:"#fff"}}>↺ REABIERTA</span>
+                      </div>
+                      <div style={{fontSize:19,fontWeight:700,color:C.text,marginBottom:4}}>{pr?.nombre||"?"}</div>
+                      <div style={{fontSize:14,color:C.mutedD}}>
+                        {p.fecha===hoy?"hoy":p.fecha} · {num(p.cantidad)} uds registradas
+                      </div>
+                      <div style={{fontSize:14,color:C.amber,fontWeight:700,marginTop:6}}>
+                        {p.reabierta_motivo} — {p.reabierta_por}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {otsHoy.length===0 && reabiertas.length===0 &&
+            <Empty icon="📋" text="No hay nada planificado para hoy en este turno"/>}
+          {otsHoy.length>0 && reabiertas.length>0 && (
+            <div style={{fontFamily:F.h,fontWeight:800,fontSize:17,color:C.text,marginBottom:12}}>Hoy</div>
+          )}
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:16}}>
             {otsHoy.map((ot,i)=>{
               const p = prodDe(ot.producto_id);
@@ -1497,7 +1537,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
         </div>
         {modal?.tipo==="reabrir" && <HojaReabrir parte={modal.parte} perfil={perfil}
           onCerrar={()=>setModal(null)}
-          onHecho={()=>{ setModal(null); setVista("ordenes"); }}/>}
+          onHecho={(p)=>{ setModal(null); setOtSel(otDeParte(p)); setVista("ot"); }}/>}
       </div>
     );
   }
@@ -1578,6 +1618,10 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
   const p = productos.find(x => x.id === ot?.producto_id);
   const parte = ot?.parte;
   const objetivo = toNum(ot?.cantidad);
+  // Una orden reabierta conserva su fecha y su turno originales
+  const fechaOT = ot?.fecha || hoy;
+  const claveOT = ot?.turno || claveTurno;
+  const esReabierta = !!parte?.reabierta;
 
   const [total, setTotal] = useState(parte ? String(parte.cantidad) : "");
   const [consumos, setConsumos] = useState(parte?.consumos || (p?.materias_asignadas||[]).map(m=>({
@@ -1611,7 +1655,7 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
     setGuardando(true);
     const id = parte?.id || uid();
     await save("producciones", id, {
-      producto_id: ot.producto_id, fecha: hoy, turno_id: turno?.id || "", turno_clave: claveTurno,
+      producto_id: ot.producto_id, fecha: fechaOT, turno_id: parte?.turno_id || turno?.id || "", turno_clave: claveOT,
       linea_nombre: ot.linea, cantidad: hecho, objetivo_ot: objetivo,
       n_personas: [...new Set(tareas.map(t=>t.persona_id).filter(Boolean))].length || 3,
       horas_equipo: 8,
@@ -1620,12 +1664,11 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
       procesos_realizados: tareas.filter(t=>toNum(t.cantidad)>0).map(t=>({
         proceso_id: t.proceso_id, cantidad: toNum(t.cantidad), persona_id: t.persona_id||"" })),
       paros, observacion: nota.trim(), origen: "terminal",
-      cerrado_por: quien, cerrado_at: new Date().toISOString(),
-      ...(parte ? { reabierta: false } : {}),
+      cerrado_por: quien, cerrado_at: new Date().toISOString(), reabierta: false,
     });
     for (const c of consumos) if (c.lote) {
       const lid = (c.materia_id+"_"+c.lote).replace(/[^a-zA-Z0-9_-]/g,"_");
-      await save("lotes", lid, { materia_id: c.materia_id, codigo: c.lote, ultima_fecha: hoy });
+      await save("lotes", lid, { materia_id: c.materia_id, codigo: c.lote, ultima_fecha: fechaOT });
     }
     setGuardando(false);
     setModal({ tipo:"hecho", quien });
@@ -1641,8 +1684,16 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
   return (
     <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
       <CabF titulo={p.nombre} atras={onVolver} onSalir={onSalir}
-        sub={`${ot.linea} · ${turno?.nombre||""} · objetivo ${num(objetivo)} ${p.unidad||"uds"}`}/>
+        color={esReabierta ? C.amber : C.navy}
+        sub={`${ot.linea} · ${fechaOT===hoy?"hoy":fechaOT} · objetivo ${num(objetivo)} ${p.unidad||"uds"}`}/>
       <div style={{padding:22}}>
+        {esReabierta && (
+          <div style={{background:C.amberBg,border:`2px solid ${C.amber}`,borderRadius:14,padding:"14px 16px",
+            marginBottom:16,fontSize:15,color:C.amber,fontWeight:700,lineHeight:1.55}}>
+            ↺ Orden reabierta por {parte.reabierta_por} — {parte.reabierta_motivo}.
+            Corrige lo que haga falta y vuelve a cerrarla.
+          </div>
+        )}
 
         {/* PRODUCCIÓN */}
         <BloqueF titulo="✅ Producción de la línea" borde={C.blue}
@@ -2159,8 +2210,7 @@ function HojaReabrir({ parte, perfil, onCerrar, onHecho }) {
       reabierta_motivo: motivo, reabierta_at: new Date().toISOString(),
       cerrado_por: "", cerrado_at: "",
     });
-    window.alert("Orden reabierta. Vuelve a Órdenes de trabajo para editarla.");
-    onHecho();
+    onHecho({ ...parte, reabierta:true, reabierta_por: perfil?.nombre||"terminal", reabierta_motivo: motivo });
   };
   return (
     <CapaF titulo="¿Reabrir esta orden?" sub={`${parte.linea_nombre} · ${parte.fecha}`} onCerrar={onCerrar} color={C.amber}>
