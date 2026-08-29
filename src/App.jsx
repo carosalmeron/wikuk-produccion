@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v3.13.1";
+const APP_VERSION = "v3.16.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -897,7 +897,7 @@ function OrdenesScreen({ onBack, perfil, productos, lineas, turnos, centros, mps
   }).sort((a,b)=>(b.fecha||"").localeCompare(a.fecha||""));
 
   if (showForm || editOrden) return <OrdenForm onBack={()=>{setShowForm(false);setEditOrden(null);}} ep={editOrden}
-    productos={productos} lineas={lineas} turnos={turnos} centros={centros}/>;
+    productos={productos} lineas={lineas} turnos={turnos} centros={centros} ordenes={ordenes}/>;
   if (regOrden) return <RegistrarProduccion onBack={()=>setRegOrden(null)} orden={regOrden} perfil={perfil}
     turnos={turnos} hechas={prodDe(regOrden.id)} producciones={producciones.filter(p=>p.orden_id===regOrden.id)}
     productos={productos} mps={mps} motivos={motivos} usuarios={usuarios}/>;
@@ -972,9 +972,19 @@ function OrdenesScreen({ onBack, perfil, productos, lineas, turnos, centros, mps
   );
 }
 
-function OrdenForm({ onBack, ep, productos, lineas, turnos, centros }) {
+// Siguiente número libre: 26-0001, 26-0002… (año de dos cifras + correlativo)
+const siguienteOT = (ordenes) => {
+  const anio = String(new Date().getFullYear()).slice(-2);
+  const n = ordenes
+    .map(o => String(o.numero||"").match(new RegExp(`^${anio}-(\\d+)$`)))
+    .filter(Boolean)
+    .reduce((max, m) => Math.max(max, parseInt(m[1])||0), 0);
+  return `${anio}-${String(n+1).padStart(4,"0")}`;
+};
+
+function OrdenForm({ onBack, ep, productos, lineas, turnos, centros, ordenes=[] }) {
   const hoy = new Date().toISOString().slice(0,10);
-  const [numero, setNumero] = useState(ep?.numero||"");
+  const [numero, setNumero] = useState(ep?.numero || siguienteOT(ordenes));
   const [tipo, setTipo] = useState(ep?.tipo||"Plan");
   const [cliente, setCliente] = useState(ep?.cliente||"");
   const [productoId, setProductoId] = useState(ep?.producto_id||"");
@@ -1004,7 +1014,13 @@ function OrdenForm({ onBack, ep, productos, lineas, turnos, centros }) {
       <div style={{padding:14}}>
         <Card style={{marginBottom:14}}>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-            <Field label="Nº OT (SAP)" value={numero} onChange={setNumero} placeholder="1936"/>
+            <div>
+              <Field label="Nº OT" value={numero} onChange={setNumero} placeholder="26-0001"/>
+              <div style={{fontSize:11.5,color:C.mutedD,lineHeight:1.5,marginTop:-8,marginBottom:14}}>
+                {ep ? "Cámbialo solo si hace falta."
+                  : <>Se ha puesto el siguiente libre. Si la orden viene de SAP, escribe su número.</>}
+              </div>
+            </div>
             <Sel label="Tipo" value={tipo} onChange={setTipo}
               options={[{value:"Plan",label:"Plan"},{value:"Pedido",label:"Pedido"},{value:"Encargo",label:"Encargo cliente"}]}/>
           </div>
@@ -1667,7 +1683,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
 
           {modal?.tipo==="cierreTurno" && (
             <CierreTurno ots={otsHoy} partes={prods.filter(p=>p.fecha===hoy)}
-              apoyos={apoyos.filter(a=>a.fecha===hoy && a.turno_clave===claveTurno && (!centroId || !a.centro || a.centro===centroId))}
+              apoyos={apoyos.filter(a=>a.fecha===hoy && !a.cierre_id && (!centroId || !a.centro || a.centro===centroId))}
               productos={productos} mps={mps}
               centros={centros} centro={centro} turno={turno} hoy={hoy} perfil={perfil} usuarios={usuarios}
               ggMes={ggMes} onCerrar={()=>setModal(null)} onHecho={()=>{ setModal(null); setVista("inicio"); }}/>
@@ -1788,8 +1804,8 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
           atras={()=>setVista("inicio")} onSalir={onBack}/>
         <div style={{padding:22}}>
           <div style={{fontSize:15,color:C.mutedD,lineHeight:1.6,marginBottom:18}}>
-            El desalado y demás trabajo fuera de línea no pertenece a ninguna orden: sirve para varios productos,
-            líneas y turnos. Se anota aquí suelto y al cerrar el turno se suma al coste.
+            El desalado y demás trabajo fuera de línea no pertenece a ninguna orden ni a ningún turno:
+            sirve para varios productos y líneas. Se anota aquí suelto y se suma al coste del primer turno que se cierre.
           </div>
           <div style={{marginBottom:20}}>
             <BotonF alto={96} borde={C.blue} color={C.blue} onClick={()=>setModal({tipo:"apoyo"})}>＋ Anotar trabajo de apoyo</BotonF>
@@ -1806,8 +1822,9 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                 </div>
               </div>
               <div style={{textAlign:"right",flexShrink:0}}>
-                <div style={{fontFamily:F.h,fontWeight:900,fontSize:22,color:C.blue}}>{Math.round(toNum(a.minutos))}</div>
+                <div style={{fontFamily:F.h,fontWeight:900,fontSize:22,color:a.cierre_id?C.mutedD:C.blue}}>{Math.round(toNum(a.minutos))}</div>
                 <div style={{fontSize:12,color:C.mutedD}}>min</div>
+                {a.cierre_id && <div style={{fontSize:10.5,color:C.green,fontWeight:700}}>✔ imputado</div>}
               </div>
             </div>
           ))}
@@ -1856,6 +1873,7 @@ function HojaApoyo({ procesos, mps, gente, perfil, centroId, claveTurno, hoy, on
   const apoyos = procesos.filter(p => p.apoyo);
   const [procId, setProcId] = useState(apoyos.length === 1 ? apoyos[0].id : "");
   const [cant, setCant] = useState("");
+  const [minReales, setMinReales] = useState("");
   const [lote, setLote] = useState("");
   const [mpId, setMpId] = useState("");
   const [quien, setQuien] = useState("");
@@ -1876,7 +1894,9 @@ function HojaApoyo({ procesos, mps, gente, perfil, centroId, claveTurno, hoy, on
       fecha: hoy, turno_clave: claveTurno, centro: centroId,
       proceso_id: procId, proceso: proc?.nombre || "",
       base: porMetro ? "m" : "ud", cantidad: toNum(cant),
-      minutos: Math.round(minutos), materia_id: mpId, lote: lote.trim(),
+      minutos: Math.round(toNum(minReales) || minutos),   // los que se han tardado
+      minutos_teoricos: Math.round(minutos),              // los que debería haber tardado
+      materia_id: mpId, lote: lote.trim(),
       persona_id: quien, persona: gente.find(u => u.id === quien)?.nombre || "",
       registrado_por: perfil?.nombre || "terminal", registrado_at: new Date().toISOString(),
     });
@@ -1912,6 +1932,24 @@ function HojaApoyo({ procesos, mps, gente, perfil, centroId, claveTurno, hoy, on
             <span style={{fontSize:15,color:C.mutedD,lineHeight:1.5}}>
               son <b style={{color:C.text,fontSize:19}}>{Math.round(minutos)} min</b> de trabajo
               <div style={{fontSize:12.5}}>{tiempo} min/{porMetro?"m":"ud"} × {num(toNum(cant))}</div>
+            </span>
+          )}
+        </div>
+      </BloqueF>
+
+      <BloqueF titulo="⏱️ ¿Cuánto se ha tardado?" sub="En minutos. Si lo dejas vacío se cuenta el tiempo teórico.">
+        <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
+          <CampoF value={minReales} suf="min" ancho={130}
+            onTocar={()=>setModal({tipo:"num",titulo:"Minutos que se ha tardado",valor:minReales,onOk:v=>setMinReales(v)})}/>
+          {minutos>0 && (
+            <span style={{fontSize:14,color:C.mutedD,lineHeight:1.5}}>
+              teórico <b style={{color:C.text}}>{Math.round(minutos)} min</b>
+              {toNum(minReales)>0 && (() => {
+                const d = toNum(minReales) - minutos;
+                return <div style={{color:Math.abs(d)<1?C.green:d>0?C.red:C.green,fontWeight:700}}>
+                  {Math.abs(d)<1 ? "clavado" : `${Math.abs(Math.round(d))} min ${d>0?"de más":"de menos"}`}
+                </div>;
+              })()}
             </span>
           )}
         </div>
@@ -2007,15 +2045,18 @@ function CierreTurno({ ots, partes, apoyos=[], productos, mps, centros, centro, 
     ventaObj:a.ventaObj+f.ventaObj, ventaReal:a.ventaReal+f.ventaReal,
   }), {plan:0,real:0,objMat:0,objMO:0,realMat:0,realMO:0,ventaObj:0,ventaReal:0});
 
-  // Trabajo de apoyo: no es de ninguna línea, pero cuesta y hay que sumarlo
-  const minApoyo = apoyos.reduce((a,x)=>a+toNum(x.minutos), 0);
-  const costeApoyo = (minApoyo/60) * TARIFA_MO;
+  // ── El trabajo de apoyo lleva su propia cuenta: lo de hoy puede ser para mañana
+  const minApoyo    = apoyos.reduce((a,x)=>a+toNum(x.minutos), 0);
+  const minApoyoTeo = apoyos.reduce((a,x)=>a+(toNum(x.minutos_teoricos)||toNum(x.minutos)), 0);
+  const costeApoyo    = (minApoyo/60) * TARIFA_MO;
+  const costeApoyoTeo = (minApoyoTeo/60) * TARIFA_MO;
+  const desvioApoyo   = costeApoyo - costeApoyoTeo;
 
   // Generales que le tocan al turno: el mes entre días laborables y turnos abiertos
   const turnosAb = parseInt(centro?.turnos_abiertos) || 2;
   const ggTurno = ggMes / 21 / turnosAb;
   const costeObj  = T.objMat + T.objMO + ggTurno;
-  const costeReal = T.realMat + T.realMO + costeApoyo + ggTurno;
+  const costeReal = T.realMat + T.realMO + ggTurno;
   const benefObj  = T.ventaObj - costeObj;
   const benefReal = T.ventaReal - costeReal;
   const desvio    = benefReal - benefObj;
@@ -2130,12 +2171,24 @@ function CierreTurno({ ots, partes, apoyos=[], productos, mps, centros, centro, 
       <div style="font-size:13px;line-height:1.8;margin-bottom:18px;color:#555">
         ${notas.map(x=>`${esc(x.linea)}: <i>“${esc(x.txt)}”</i>`).join("<br/>")}</div>` : ""}
 
+      ${apoyos.length ? `<h3 style="font-size:13px;text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid #111;padding-bottom:4px">Trabajo de apoyo</h3>
+      <div style="font-size:12px;color:#777;margin-bottom:8px">Cuenta aparte: lo desalado hoy puede ser para mañana.</div>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:18px">
+        <tr><th ${th}>Tarea</th><th ${th}>Cantidad</th><th ${th}>Quién</th><th ${th}>Teórico</th><th ${th}>Real</th></tr>
+        ${apoyos.map(a=>{ const teo=toNum(a.minutos_teoricos)||toNum(a.minutos), real=toNum(a.minutos);
+          return `<tr><td ${est}>${esc(a.proceso)}</td><td ${n}>${num(a.cantidad)} ${a.base==="m"?"m":"uds"}</td>
+            <td ${est}>${esc(a.persona||"—")}</td><td ${n}>${Math.round(teo)} min</td>
+            <td ${n}><b style="color:${real>teo+1?"#b45309":"#111"}">${Math.round(real)} min</b></td></tr>`;}).join("")}
+        <tr><td ${est} colspan="3"><b>COSTE DEL APOYO</b></td><td ${n}><b>${eur(costeApoyoTeo)}</b></td>
+          <td ${n}><b style="color:${desvioApoyo>0?"#ef4444":"#16a34a"}">${eur(costeApoyo)}</b></td></tr>
+      </table>` : ""}
+
       <h3 style="font-size:13px;text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid #111;padding-bottom:4px">Lo que ha costado el turno</h3>
+      <div style="font-size:12px;color:#777;margin-bottom:8px">Solo trabajo de línea. El apoyo va aparte.</div>
       <table style="width:100%;border-collapse:collapse;margin-bottom:18px">
         <tr><th ${th}>Concepto</th><th ${th}>Objetivo</th><th ${th}>Real</th><th ${th}>Desvío</th></tr>
         <tr><td ${est}>Materia prima</td><td ${n}>${eur(T.objMat)}</td><td ${n}>${eur(T.realMat)}</td><td ${n}>${T.realMat-T.objMat>=0?"+":""}${eur(T.realMat-T.objMat)}</td></tr>
         <tr><td ${est}>Mano de obra</td><td ${n}>${eur(T.objMO)}</td><td ${n}>${eur(T.realMO)}</td><td ${n}>${T.realMO-T.objMO>=0?"+":""}${eur(T.realMO-T.objMO)}</td></tr>
-        ${minApoyo>0?`<tr><td ${est}>Trabajo de apoyo (${Math.round(minApoyo)} min)</td><td ${n}>—</td><td ${n}>${eur(costeApoyo)}</td><td ${n}>+${eur(costeApoyo)}</td></tr>`:""}
         <tr><td ${est}>Gastos generales</td><td ${n}>${eur(ggTurno)}</td><td ${n}>${eur(ggTurno)}</td><td ${n}>—</td></tr>
         <tr><td ${est}><b>COSTE TOTAL</b></td><td ${n}><b>${eur(costeObj)}</b></td><td ${n}><b>${eur(costeReal)}</b></td>
           <td ${n}><b>${costeReal-costeObj>=0?"+":""}${eur(costeReal-costeObj)}</b></td></tr>
@@ -2179,7 +2232,7 @@ function CierreTurno({ ots, partes, apoyos=[], productos, mps, centros, centro, 
     filas.map(f=>`${f.ot.linea}: ${f.p?.nombre} ${num(f.real)}/${num(f.plan)} (${f.plan>0?Math.round(f.real/f.plan*100):0}%)`).join("\n") +
     `\n\nTOTAL ${num(T.real)}/${num(T.plan)} uds` +
     (paros.length?`\nParadas: ${paros.length} · ${Math.round(minParados)} min`:"") +
-    (minApoyo>0?`\nApoyo: ${Math.round(minApoyo)} min (${eur(costeApoyo)})`:"") +
+    (minApoyo>0?`\nApoyo (aparte): ${Math.round(minApoyo)} min · ${eur(costeApoyo)} de ${eur(costeApoyoTeo)} teóricos`:"") +
     (rends.length?`\nRendimiento: ${rends.map(x=>`${x.lote} ${Math.round(x.r)}%`).join(", ")}`:"") +
     `\n\nCoste objetivo ${eur(costeObj)} · real ${eur(costeReal)}` +
     `\nBeneficio ${eur(benefReal)} de ${eur(benefObj)} previstos` +
@@ -2221,7 +2274,8 @@ function CierreTurno({ ots, partes, apoyos=[], productos, mps, centros, centro, 
       desvio_volumen: desvioVolumen, desvio_coste: desvioCoste,
       coste_ud_objetivo: costeObjUd, coste_ud_real: costeUdReal,
       min_parados: minParados, n_paradas: paros.length,
-      min_apoyo: minApoyo, coste_apoyo: costeApoyo,
+      min_apoyo: minApoyo, min_apoyo_teorico: minApoyoTeo,
+      coste_apoyo: costeApoyo, coste_apoyo_teorico: costeApoyoTeo, desvio_apoyo: desvioApoyo,
       cerrado_por: perfil?.nombre||"", cerrado_at: new Date().toISOString(),
       // Lo que necesita el servidor para enviarlo solo
       destinatarios: destinatarios.map(u=>u.email),
@@ -2246,6 +2300,9 @@ function CierreTurno({ ots, partes, apoyos=[], productos, mps, centros, centro, 
           : `Turno cerrado, pero el correo no ha salido.\n\n${fallo[0].detalle}\n\nEl informe está guardado: puedes compartirlo o imprimirlo.`);
       }
     }
+    // El apoyo imputado queda marcado: si hay otro turno, no se cuenta dos veces
+    for (const a of apoyos) if (a.id) await save("apoyos", a.id, { cierre_id: idCierre });
+
     setGuardando(false);
     if (accion === "imprimir") imprimirHTML(htmlInforme());
     if (accion === "compartir") {
@@ -2310,21 +2367,53 @@ function CierreTurno({ ots, partes, apoyos=[], productos, mps, centros, centro, 
         </BloqueF>
       )}
 
+      {apoyos.length===0 && (
+        <div style={{background:C.amberBg,border:`2px solid ${C.amber}`,borderRadius:14,padding:"13px 15px",
+          marginBottom:16,fontSize:14,color:C.amber,fontWeight:700,lineHeight:1.55}}>
+          🤝 No hay trabajo de apoyo anotado hoy. Si se ha desalado, anótalo antes de cerrar.
+        </div>
+      )}
       {apoyos.length>0 && (
-        <BloqueF titulo={`🤝 Trabajo de apoyo · ${Math.round(minApoyo)} min`}>
-          {apoyos.map((a,i)=>(
-            <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"7px 0",fontSize:14.5}}>
-              <span style={{color:C.mutedD}}>{a.proceso} · {num(a.cantidad)} {a.base==="m"?"m":"uds"} · {a.persona||"—"}</span>
-              <b style={{color:C.text,flexShrink:0}}>{Math.round(toNum(a.minutos))} min</b>
+        <BloqueF titulo="🤝 Trabajo de apoyo" borde={desvioApoyo>0?C.amber:C.green}
+          sub="Cuenta aparte: lo desalado hoy puede ser para mañana, así que no se reparte entre estas órdenes.">
+          {apoyos.map((a,i)=>{
+            const teo = toNum(a.minutos_teoricos)||toNum(a.minutos), real = toNum(a.minutos);
+            return (
+              <div key={i} style={{padding:"8px 0",borderBottom:i<apoyos.length-1?`1px solid ${C.card2}`:"none"}}>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:14.5,gap:10}}>
+                  <span style={{color:C.text,minWidth:0}}>{a.proceso}
+                    <div style={{fontSize:12.5,color:C.mutedD}}>{num(a.cantidad)} {a.base==="m"?"m":"uds"} · {a.persona||"—"}
+                      {a.lote?` · 📦 ${a.lote}`:""}</div>
+                  </span>
+                  <span style={{flexShrink:0,textAlign:"right"}}>
+                    <b style={{color:real>teo+1?C.amber:C.text}}>{Math.round(real)} min</b>
+                    {Math.abs(real-teo)>1 && <div style={{fontSize:11.5,color:C.mutedD}}>teórico {Math.round(teo)}</div>}
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+          <div style={{background:C.card2,borderRadius:11,padding:"11px 13px",marginTop:10,fontSize:14,lineHeight:1.7}}>
+            <div style={{display:"flex",justifyContent:"space-between"}}>
+              <span style={{color:C.mutedD}}>Debería haber costado</span><b>{eur(costeApoyoTeo)}</b>
             </div>
-          ))}
+            <div style={{display:"flex",justifyContent:"space-between"}}>
+              <span style={{color:C.mutedD}}>Ha costado</span>
+              <b style={{color:desvioApoyo>0?C.amber:C.green}}>{eur(costeApoyo)}</b>
+            </div>
+            {Math.abs(desvioApoyo)>0.5 && (
+              <div style={{display:"flex",justifyContent:"space-between",borderTop:`1px solid ${C.border}`,marginTop:5,paddingTop:5}}>
+                <span style={{color:C.text,fontWeight:700}}>{desvioApoyo>0?"De más":"De menos"}</span>
+                <b style={{color:desvioApoyo>0?C.red:C.green}}>{desvioApoyo>0?"+":"−"} {eur(Math.abs(desvioApoyo))}</b>
+              </div>
+            )}
+          </div>
         </BloqueF>
       )}
 
       <BloqueF titulo="Lo que ha costado el turno" borde={desvio>=0?C.green:C.red}>
         {fila("Materia prima", eur(T.objMat)+" →", eur(T.realMat), (T.realMat-T.objMat>=0?"+":"")+eur(T.realMat-T.objMat))}
         {fila("Mano de obra", eur(T.objMO)+" →", eur(T.realMO), (T.realMO-T.objMO>=0?"+":"")+eur(T.realMO-T.objMO))}
-        {minApoyo>0 && fila("Trabajo de apoyo", `${Math.round(minApoyo)} min →`, eur(costeApoyo), "+"+eur(costeApoyo))}
         {fila("Gastos generales", "", eur(ggTurno))}
         {fila("Coste total", eur(costeObj)+" →", eur(costeReal), (costeReal-costeObj>=0?"+":"")+eur(costeReal-costeObj))}
 
@@ -5858,7 +5947,12 @@ function CierresScreen({ onBack, centros, usuarios, perfil, centroFijo="" }) {
                     <div style={{fontSize:12.5,color:C.mutedD,lineHeight:1.7,marginBottom:10}}>
                       Coste por unidad <b style={{color:C.text}}>{toNum(c.coste_ud_real).toFixed(2)} €</b> cuando
                       debería ser <b style={{color:C.text}}>{toNum(c.coste_ud_objetivo).toFixed(2)} €</b>.
-                      {toNum(c.min_apoyo)>0 && <> Incluye {Math.round(toNum(c.min_apoyo))} min de trabajo de apoyo.</>}
+                      {toNum(c.min_apoyo)>0 && (
+                        <div style={{marginTop:4}}>
+                          🤝 Apoyo aparte: {Math.round(toNum(c.min_apoyo))} min · <b style={{color:C.text}}>{eur(c.coste_apoyo)}</b>
+                          {toNum(c.coste_apoyo_teorico)>0 && <> de {eur(c.coste_apoyo_teorico)} teóricos</>}
+                        </div>
+                      )}
                     </div>
                   )}
                   {(c.email_enviados_a||[]).length>0 && (
