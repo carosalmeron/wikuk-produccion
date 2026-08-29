@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v3.12.0";
+const APP_VERSION = "v3.13.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -1448,6 +1448,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
   const [prods]     = useCol("producciones");
   const [incid]     = useCol("incidencias");
   const [apoyos]    = useCol("apoyos");
+  const [cierres]   = useCol("cierres_turno", "fecha");
   const [costesCfg] = useCol("config_costes");
   const [ordenes]   = useCol("ordenes");
   const ggMes = toNum(costesCfg.find(c=>c.id===centroId)?.fijos_mensuales);
@@ -1502,6 +1503,8 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
     const minHoy = parosHoy.reduce((a,x)=>a+(parseFloat(x.minutos)||0),0);
     const apoyosHoy = apoyos.filter(a=>a.fecha===hoy && (!centroId || !a.centro || a.centro===centroId));
     const minApoyoHoy = apoyosHoy.reduce((a,x)=>a+toNum(x.minutos),0);
+    const hace7 = new Date(Date.now()-7*864e5).toISOString().slice(0,10);
+    const cierresRecientes = cierres.filter(c => (c.fecha||"") >= hace7 && (!centroId || c.centro === centroId));
     return (
       <div style={{background:C.bg,minHeight:"100vh"}}>
         <CabF titulo={centro?.nombre || "Fábrica"} onSalir={onBack}
@@ -1542,7 +1545,10 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
              minHoy ? `${parosHoy.length} hoy · ${Math.round(minHoy)} min` : "ninguna hoy", C.mutedD, ()=>setVista("paradas")],
             ["🤝","Apoyo","Desalado y similares",
              apoyosHoy.length ? `${apoyosHoy.length} hoy · ${Math.round(minApoyoHoy)} min` : "nada hoy",
-             apoyosHoy.length?C.blue:C.mutedD, ()=>setVista("apoyo")]
+             apoyosHoy.length?C.blue:C.mutedD, ()=>setVista("apoyo")],
+            ["🔒","Turnos cerrados","Informes y reenvío",
+             cierresRecientes.length ? `${cierresRecientes.length} esta semana` : "ninguno aún",
+             cierresRecientes.length?C.green:C.mutedD, ()=>setVista("cierresTurno")]
           ].map(([ic,t,s2,n,col,fn],i)=>(
             <button key={i} onClick={fn}
               style={{minHeight:200,borderRadius:22,border:`4px solid ${C.border}`,background:"#fff",cursor:"pointer",
@@ -1657,9 +1663,6 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
               </>
             )}
             <BotonF alto={88} borde={C.border} onClick={()=>setVista("cerradas")}>🗂️ Ver órdenes cerradas</BotonF>
-            {!esOperario && (
-              <BotonF alto={88} borde={C.border} onClick={()=>setVista("cierresTurno")}>📧 Cierres de turno e informes</BotonF>
-            )}
           </div>
 
           {modal?.tipo==="cierreTurno" && (
@@ -1771,7 +1774,8 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
 
   // ═══ CIERRES DE TURNO ═══
   if (vista === "cierresTurno") {
-    return <CierresScreen onBack={()=>setVista("ordenes")} centros={centros} usuarios={usuarios} perfil={perfil}/>;
+    return <CierresScreen onBack={()=>setVista("inicio")} centros={centros} usuarios={usuarios} perfil={perfil}
+      centroFijo={esOperario ? centroId : ""}/>;
   }
 
   // ═══ TRABAJO DE APOYO ═══
@@ -5710,9 +5714,10 @@ function LineaEditor({ it, productos, otros, onGuardar, onQuitar, onCerrar }) {
 }
 
 // ── CIERRES DE TURNO: consultar y reenviar informes ────────────────────────────
-function CierresScreen({ onBack, centros, usuarios, perfil }) {
+function CierresScreen({ onBack, centros, usuarios, perfil, centroFijo="" }) {
   const [cierres] = useCol("cierres_turno", "fecha");
-  const [centroId, setCentroId] = useState("");
+  const [centroId, setCentroId] = useState(centroFijo);
+  const soloLectura = perfil?.rol === "operario";
   const [texto, setTexto] = useState("");
   const [desde, setDesde] = useState("");
   const [hasta, setHasta] = useState("");
@@ -5778,11 +5783,25 @@ function CierresScreen({ onBack, centros, usuarios, perfil }) {
       <Header title="🔒 CIERRES DE TURNO" onBack={onBack}
         sub={`${lista.length} cierres · consulta y reenvío de informes`}/>
       <div style={{padding:14}}>
-        <FiltrosBar centros={centros} centroId={centroId} setCentroId={setCentroId}
+        <FiltrosBar centros={centroFijo ? centros.filter(c=>c.id===centroFijo) : centros}
+          centroId={centroId} setCentroId={centroFijo ? ()=>{} : setCentroId}
           texto={texto} setTexto={setTexto} desde={desde} setDesde={setDesde} hasta={hasta} setHasta={setHasta}
           total={cierres.length} mostrados={lista.length}/>
 
-        {lista.length===0 && <Empty icon="🔒" text={cierres.length ? "Ningún cierre con estos filtros" : "Todavía no se ha cerrado ningún turno"}/>}
+        {lista.length===0 && (
+          <div style={{background:"#fff",border:`1px solid ${C.border}`,borderRadius:16,padding:22,textAlign:"center"}}>
+            <div style={{fontSize:40,marginBottom:8}}>🔒</div>
+            <div style={{fontFamily:F.h,fontWeight:800,fontSize:16,color:C.text,marginBottom:6}}>
+              {cierres.length ? "Ningún cierre con estos filtros" : "Todavía no se ha cerrado ningún turno"}
+            </div>
+            {!cierres.length && (
+              <div style={{fontSize:13.5,color:C.mutedD,lineHeight:1.6}}>
+                Un turno se cierra desde Órdenes de trabajo, con el botón 🔒 CERRAR EL TURNO,
+                cuando todas las líneas están cerradas. Ahí se genera el informe y sale el correo.
+              </div>
+            )}
+          </div>
+        )}
 
         {lista.map(c=>{
           const est = ESTADOS[c.email_estado] || ESTADOS.sin_destinatarios;
@@ -5850,10 +5869,12 @@ function CierresScreen({ onBack, centros, usuarios, perfil }) {
                     <div style={{background:C.redBg,borderRadius:9,padding:"9px 11px",marginBottom:10,
                       fontSize:12,color:C.red,lineHeight:1.5}}>{c.email_error}</div>
                   )}
-                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:8}}>
-                    <Btn v="secondary" onClick={()=>setDestinos(c)} disabled={enviando===c.id}>
-                      {enviando===c.id ? "Enviando…" : "📧 Reenviar"}
-                    </Btn>
+                  <div style={{display:"grid",gridTemplateColumns:soloLectura?"1fr":"repeat(auto-fit,minmax(140px,1fr))",gap:8}}>
+                    {!soloLectura && (
+                      <Btn v="secondary" onClick={()=>setDestinos(c)} disabled={enviando===c.id}>
+                        {enviando===c.id ? "Enviando…" : "📧 Reenviar"}
+                      </Btn>
+                    )}
                     <Btn v="ghost" onClick={()=>verInforme(c)}>🖨️ Ver informe</Btn>
                   </div>
                 </div>
