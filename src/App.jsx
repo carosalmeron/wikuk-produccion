@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v3.13.0";
+const APP_VERSION = "v3.13.1";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -5717,7 +5717,8 @@ function LineaEditor({ it, productos, otros, onGuardar, onQuitar, onCerrar }) {
 function CierresScreen({ onBack, centros, usuarios, perfil, centroFijo="" }) {
   const [cierres] = useCol("cierres_turno", "fecha");
   const [centroId, setCentroId] = useState(centroFijo);
-  const soloLectura = perfil?.rol === "operario";
+  const soloLectura = perfil?.rol === "operario";   // no elige destinatarios, usa los fijos
+  const fijos = usuarios.filter(u => u.recibe_informe && u.email).map(u => u.email);
   const [texto, setTexto] = useState("");
   const [desde, setDesde] = useState("");
   const [hasta, setHasta] = useState("");
@@ -5869,12 +5870,18 @@ function CierresScreen({ onBack, centros, usuarios, perfil, centroFijo="" }) {
                     <div style={{background:C.redBg,borderRadius:9,padding:"9px 11px",marginBottom:10,
                       fontSize:12,color:C.red,lineHeight:1.5}}>{c.email_error}</div>
                   )}
-                  <div style={{display:"grid",gridTemplateColumns:soloLectura?"1fr":"repeat(auto-fit,minmax(140px,1fr))",gap:8}}>
-                    {!soloLectura && (
-                      <Btn v="secondary" onClick={()=>setDestinos(c)} disabled={enviando===c.id}>
-                        {enviando===c.id ? "Enviando…" : "📧 Reenviar"}
-                      </Btn>
-                    )}
+                  {fijos.length===0 && (
+                    <div style={{background:C.amberBg,border:`1.5px solid ${C.amber}`,borderRadius:10,padding:"10px 12px",
+                      marginBottom:10,fontSize:12.5,color:C.amber,fontWeight:700,lineHeight:1.55}}>
+                      ⚠️ Nadie tiene marcada la casilla “Recibe el informe de producción”.
+                      {!soloLectura && " Márcala en Usuarios, o elige a quién mandarlo con el botón de abajo."}
+                    </div>
+                  )}
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:8}}>
+                    <Btn v="secondary" disabled={enviando===c.id || (soloLectura && !fijos.length)}
+                      onClick={()=> soloLectura ? reenviar(c, fijos) : setDestinos(c)}>
+                      {enviando===c.id ? "Enviando…" : soloLectura ? `📧 Reenviar a ${fijos.length}` : "📧 Reenviar"}
+                    </Btn>
                     <Btn v="ghost" onClick={()=>verInforme(c)}>🖨️ Ver informe</Btn>
                   </div>
                 </div>
