@@ -1,5 +1,5 @@
 // Vercel Serverless Function — Envío de emails via Microsoft 365 SMTP
-// Versión para proyectos con "type": "module" en package.json (Vite y similares).
+// Proyecto Create React App (CommonJS): se usa require, no import.
 //
 // Variables de entorno en Vercel → Settings → Environment Variables:
 //   SMTP_HOST = smtp.office365.com
@@ -8,7 +8,7 @@
 //   SMTP_PASS = (la contraseña del CRM)
 //   SMTP_FROM = Wikuk Producción <el mismo correo>
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -17,12 +17,16 @@ export default async function handler(req, res) {
 
   // Comprobación rápida abriendo la URL en el navegador
   if (req.method === 'GET') {
+    let libreria = 'ok';
+    try { require('nodemailer'); } catch (e) { libreria = 'FALTA nodemailer en package.json'; }
     return res.status(200).json({
       ok: true,
       mensaje: 'La función responde. Envía un POST para mandar correo.',
+      nodemailer: libreria,
       smtp_configurado: !!(process.env.SMTP_USER && process.env.SMTP_PASS),
       host: process.env.SMTP_HOST || 'sin definir',
-      usuario: process.env.SMTP_USER ? 'definido' : 'sin definir',
+      usuario: process.env.SMTP_USER ? 'definido' : 'SIN DEFINIR',
+      remitente: process.env.SMTP_FROM || '(usará SMTP_USER)',
     });
   }
 
@@ -36,7 +40,7 @@ export default async function handler(req, res) {
 
   try {
     // Se carga aquí dentro: si falta la librería, se ve el error en vez de crashear
-    const { default: nodemailer } = await import('nodemailer');
+    const nodemailer = require('nodemailer');
 
     const transporter = nodemailer.createTransport({
       host: process.env.SMTP_HOST || 'smtp.office365.com',
@@ -60,4 +64,4 @@ export default async function handler(req, res) {
     console.error('[EMAIL] Error:', error.message);
     return res.status(500).json({ error: error.message });
   }
-}
+};
