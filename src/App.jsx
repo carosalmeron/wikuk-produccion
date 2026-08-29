@@ -1657,6 +1657,9 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
               </>
             )}
             <BotonF alto={88} borde={C.border} onClick={()=>setVista("cerradas")}>🗂️ Ver órdenes cerradas</BotonF>
+            {!esOperario && (
+              <BotonF alto={88} borde={C.border} onClick={()=>setVista("cierresTurno")}>📧 Cierres de turno e informes</BotonF>
+            )}
           </div>
 
           {modal?.tipo==="cierreTurno" && (
@@ -1764,6 +1767,11 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
           onCerrar={()=>setModal(null)} onHecho={()=>setModal(null)}/>}
       </div>
     );
+  }
+
+  // ═══ CIERRES DE TURNO ═══
+  if (vista === "cierresTurno") {
+    return <CierresScreen onBack={()=>setVista("ordenes")} centros={centros} usuarios={usuarios} perfil={perfil}/>;
   }
 
   // ═══ TRABAJO DE APOYO ═══
@@ -5701,6 +5709,201 @@ function LineaEditor({ it, productos, otros, onGuardar, onQuitar, onCerrar }) {
   );
 }
 
+// ── CIERRES DE TURNO: consultar y reenviar informes ────────────────────────────
+function CierresScreen({ onBack, centros, usuarios, perfil }) {
+  const [cierres] = useCol("cierres_turno", "fecha");
+  const [centroId, setCentroId] = useState("");
+  const [texto, setTexto] = useState("");
+  const [desde, setDesde] = useState("");
+  const [hasta, setHasta] = useState("");
+  const [abierto, setAbierto] = useState(null);
+  const [enviando, setEnviando] = useState(null);
+  const [destinos, setDestinos] = useState(null);   // cierre al que elegir destinatarios
+
+  const lista = cierres
+    .filter(c => {
+      if (centroId && c.centro !== centroId) return false;
+      if (desde && (c.fecha||"") < desde) return false;
+      if (hasta && (c.fecha||"") > hasta) return false;
+      if (texto) {
+        const q = texto.toLowerCase();
+        if (!`${c.turno_nombre||""} ${c.centro_nombre||""} ${c.cerrado_por||""}`.toLowerCase().includes(q)) return false;
+      }
+      return true;
+    })
+    .sort((a,b) => (b.fecha||"").localeCompare(a.fecha||"") || (b.cerrado_at||"").localeCompare(a.cerrado_at||""));
+
+  const reenviar = async (c, correos) => {
+    if (!correos.length) { window.alert("Elige al menos una persona"); return; }
+    if (!c.informe_html) { window.alert("Este cierre es anterior al informe automático: no tiene el correo guardado.\n\nSe puede volver a generar cerrando de nuevo el turno."); return; }
+    setEnviando(c.id);
+    const res = [];
+    for (const to of correos) {
+      try {
+        const r = await fetch(API_CORREO || "/api/send-email", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ to, subject: c.asunto || `Producción ${c.fecha}`, html: c.informe_html, text: c.resumen || "" }),
+        });
+        res.push({ to, ok: r.ok, detalle: r.ok ? "" : (await r.text()).slice(0,200) });
+      } catch (e) { res.push({ to, ok:false, detalle:String(e).slice(0,200) }); }
+    }
+    const ok = res.filter(x=>x.ok).map(x=>x.to), fallo = res.filter(x=>!x.ok);
+    await save("cierres_turno", c.id, {
+      email_estado: fallo.length ? (ok.length ? "parcial" : "error") : "enviado",
+      email_enviados_a: [...new Set([...(c.email_enviados_a||[]), ...ok])],
+      reenviado_por: perfil?.nombre || "", reenviado_at: new Date().toISOString(),
+      email_error: fallo.length ? fallo.map(x=>`${x.to}: ${x.detalle}`).join(" · ").slice(0,500) : "",
+    });
+    setEnviando(null); setDestinos(null);
+    window.alert(fallo.length
+      ? `Enviado a ${ok.length} de ${res.length}.\n\nNo ha salido a: ${fallo.map(x=>x.to).join(", ")}`
+      : `Informe reenviado a ${ok.join(", ")}`);
+  };
+
+  const verInforme = (c) => {
+    if (!c.informe_html) { window.alert("Este cierre no tiene informe guardado."); return; }
+    imprimirHTML(c.informe_html);
+  };
+
+  const ESTADOS = {
+    enviado: ["✔ Enviado", C.green, C.greenBg],
+    parcial: ["⚠️ Enviado a medias", C.amber, C.amberBg],
+    error: ["⛔ No salió", C.red, C.redBg],
+    sin_destinatarios: ["Sin destinatarios", C.mutedD, C.card2],
+    enviando: ["Enviando…", C.mutedD, C.card2],
+  };
+
+  return (
+    <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
+      <Header title="🔒 CIERRES DE TURNO" onBack={onBack}
+        sub={`${lista.length} cierres · consulta y reenvío de informes`}/>
+      <div style={{padding:14}}>
+        <FiltrosBar centros={centros} centroId={centroId} setCentroId={setCentroId}
+          texto={texto} setTexto={setTexto} desde={desde} setDesde={setDesde} hasta={hasta} setHasta={setHasta}
+          total={cierres.length} mostrados={lista.length}/>
+
+        {lista.length===0 && <Empty icon="🔒" text={cierres.length ? "Ningún cierre con estos filtros" : "Todavía no se ha cerrado ningún turno"}/>}
+
+        {lista.map(c=>{
+          const est = ESTADOS[c.email_estado] || ESTADOS.sin_destinatarios;
+          const pct = toNum(c.uds_plan)>0 ? toNum(c.uds_real)/toNum(c.uds_plan) : 0;
+          const ineficiencia = toNum(c.desvio_coste);
+          const abiertoAqui = abierto === c.id;
+          return (
+            <Card key={c.id} style={{marginBottom:10}} color={ineficiencia>0?C.red+"44":C.green+"44"}>
+              <div onClick={()=>setAbierto(abiertoAqui?null:c.id)} style={{cursor:"pointer"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10}}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontFamily:F.h,fontWeight:800,fontSize:15.5,color:C.text}}>
+                      {fechaES(c.fecha)} · {c.turno_nombre||"—"}
+                    </div>
+                    <div style={{fontSize:12.5,color:C.mutedD,marginTop:2}}>
+                      {c.centro_nombre||"—"} · cerró {c.cerrado_por||"—"}
+                      {c.reenviado_por && ` · reenviado por ${c.reenviado_por}`}
+                    </div>
+                  </div>
+                  <span style={{flexShrink:0,fontSize:11,fontWeight:800,borderRadius:20,padding:"5px 11px",
+                    background:est[2],color:est[1]}}>{est[0]}</span>
+                </div>
+
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(110px,1fr))",gap:8,marginTop:10}}>
+                  <div style={{background:C.card2,borderRadius:10,padding:"9px 6px",textAlign:"center"}}>
+                    <div style={{fontFamily:F.h,fontWeight:900,fontSize:16,color:pct>=1?C.green:pct>=0.9?C.amber:C.red}}>
+                      {num(c.uds_real)}/{num(c.uds_plan)}
+                    </div>
+                    <div style={{fontSize:10,color:C.mutedD}}>uds · {Math.round(pct*100)}%</div>
+                  </div>
+                  <div style={{background:C.card2,borderRadius:10,padding:"9px 6px",textAlign:"center"}}>
+                    <div style={{fontFamily:F.h,fontWeight:900,fontSize:16,color:ineficiencia>0?C.red:C.green}}>
+                      {ineficiencia>0?"−":"+"}{eur(Math.abs(ineficiencia))}
+                    </div>
+                    <div style={{fontSize:10,color:C.mutedD}}>{ineficiencia>0?"ineficiencia":"ahorro"}</div>
+                  </div>
+                  <div style={{background:C.card2,borderRadius:10,padding:"9px 6px",textAlign:"center"}}>
+                    <div style={{fontFamily:F.h,fontWeight:900,fontSize:16,color:C.text}}>{eur(c.beneficio_real)}</div>
+                    <div style={{fontSize:10,color:C.mutedD}}>de {eur(c.beneficio_objetivo)}</div>
+                  </div>
+                  <div style={{background:C.card2,borderRadius:10,padding:"9px 6px",textAlign:"center"}}>
+                    <div style={{fontFamily:F.h,fontWeight:900,fontSize:16,color:toNum(c.min_parados)?C.amber:C.green}}>
+                      {Math.round(toNum(c.min_parados))}
+                    </div>
+                    <div style={{fontSize:10,color:C.mutedD}}>min parados</div>
+                  </div>
+                </div>
+              </div>
+
+              {abiertoAqui && (
+                <div style={{marginTop:12,paddingTop:12,borderTop:`1px solid ${C.border}`}}>
+                  {toNum(c.coste_ud_real)>0 && (
+                    <div style={{fontSize:12.5,color:C.mutedD,lineHeight:1.7,marginBottom:10}}>
+                      Coste por unidad <b style={{color:C.text}}>{toNum(c.coste_ud_real).toFixed(2)} €</b> cuando
+                      debería ser <b style={{color:C.text}}>{toNum(c.coste_ud_objetivo).toFixed(2)} €</b>.
+                      {toNum(c.min_apoyo)>0 && <> Incluye {Math.round(toNum(c.min_apoyo))} min de trabajo de apoyo.</>}
+                    </div>
+                  )}
+                  {(c.email_enviados_a||[]).length>0 && (
+                    <div style={{fontSize:12,color:C.mutedD,marginBottom:10}}>
+                      📧 Ya se envió a: {(c.email_enviados_a||[]).join(", ")}
+                    </div>
+                  )}
+                  {c.email_error && (
+                    <div style={{background:C.redBg,borderRadius:9,padding:"9px 11px",marginBottom:10,
+                      fontSize:12,color:C.red,lineHeight:1.5}}>{c.email_error}</div>
+                  )}
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:8}}>
+                    <Btn v="secondary" onClick={()=>setDestinos(c)} disabled={enviando===c.id}>
+                      {enviando===c.id ? "Enviando…" : "📧 Reenviar"}
+                    </Btn>
+                    <Btn v="ghost" onClick={()=>verInforme(c)}>🖨️ Ver informe</Btn>
+                  </div>
+                </div>
+              )}
+            </Card>
+          );
+        })}
+      </div>
+
+      {destinos && <HojaDestinatarios cierre={destinos} usuarios={usuarios}
+        onCerrar={()=>setDestinos(null)} onEnviar={(correos)=>reenviar(destinos, correos)}/>}
+    </div>
+  );
+}
+
+// ── A quién se reenvía
+function HojaDestinatarios({ cierre, usuarios, onCerrar, onEnviar }) {
+  const conCorreo = usuarios.filter(u => u.email && u.activo !== false);
+  const [sel, setSel] = useState(usuarios.filter(u=>u.recibe_informe && u.email).map(u=>u.email));
+  const alternar = (m) => setSel(s => s.includes(m) ? s.filter(x=>x!==m) : [...s, m]);
+  return (
+    <div onClick={onCerrar} style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.55)",zIndex:50,display:"flex",alignItems:"flex-end"}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"#fff",width:"100%",borderRadius:"20px 20px 0 0",padding:18,maxHeight:"86vh",overflowY:"auto"}}>
+        <div style={{width:40,height:4,background:C.border,borderRadius:2,margin:"0 auto 14px"}}/>
+        <div style={{fontFamily:F.h,fontWeight:800,fontSize:17,color:C.text,marginBottom:3}}>¿A quién se lo mandamos?</div>
+        <div style={{fontSize:12.5,color:C.mutedD,lineHeight:1.55,marginBottom:14}}>
+          Informe de {fechaES(cierre.fecha)} · {cierre.turno_nombre||""}. Vienen marcados los que lo reciben siempre.
+        </div>
+        {conCorreo.length===0 && <Empty icon="👥" text="Nadie tiene correo en su ficha"/>}
+        <div style={{display:"grid",gap:8,marginBottom:14}}>
+          {conCorreo.map(u=>{
+            const on = sel.includes(u.email);
+            return (
+              <button key={u.id} onClick={()=>alternar(u.email)}
+                style={{textAlign:"left",background:on?C.greenBg:"#fff",border:`1.5px solid ${on?C.green:C.border}`,
+                  borderRadius:12,padding:"12px 14px",cursor:"pointer"}}>
+                <div style={{fontFamily:F.h,fontWeight:700,fontSize:14.5,color:C.text}}>
+                  {on?"✔ ":"◯ "}{u.nombre}{u.recibe_informe?" ⭐":""}
+                </div>
+                <div style={{fontSize:12,color:C.mutedD,marginTop:2}}>{u.email}</div>
+              </button>
+            );
+          })}
+        </div>
+        <Btn onClick={()=>onEnviar(sel)} disabled={!sel.length}>📧 Enviar a {sel.length} persona{sel.length!==1?"s":""}</Btn>
+      </div>
+    </div>
+  );
+}
+
 // ── TAB: RESUMEN DEL MES ───────────────────────────────────────────────────────
 function ResumenMesTab({ periodo, semanas, planMes, planesSem, productos, mps, moldes=[], procesos=[],
                          slotsDia=SLOTS_DIA, persLinea=3, persDia=12, turnosCentro=2, ggMes=0, centroNombre="", perfil }) {
@@ -7708,6 +7911,7 @@ function Home({ perfil, onGo, onLogout, counts, ordenes=[], producciones=[], pro
   const esGerencia = perfil.rol === "gerencia";
   const tiles = [
     { id:"planificacion", grupo:"proc", icon:"📅", bg:"#EEF2FF", label:"Planificación", sub:"Mes · semana · cuadre · cierre", roles:["gerencia","sup_fabrica"] },
+    { id:"cierres",   grupo:"proc", icon:"🔒", bg:"#F0FDF4", label:"Cierres de turno",    sub:"Consulta y reenvío de informes",     roles:["gerencia","sup_fabrica","sup_oficina"] },
     { id:"terminal",  grupo:"proc", icon:"🖥️", bg:"#ECFDF5", label:"Terminal de Planta",   sub:"Pantalla táctil del obrador",        roles:["gerencia","sup_fabrica","sup_oficina","operario"] },
     { id:"ordenes",   grupo:"proc", icon:"📋", bg:"#ECFDF5", label:"Órdenes de Producción", sub:"Planificar y registrar",     roles:["gerencia","sup_fabrica","sup_oficina"] },
     { id:"diario",    grupo:"proc", icon:"📖", bg:"#EFF6FF", label:"Diario de Fabricación", sub:"El parte oficial del día",          roles:["gerencia","sup_fabrica","sup_oficina"] },
@@ -7948,6 +8152,7 @@ export default function App() {
       <style>{STYLES}</style>
       {view==="home"      && <Home perfil={perfil} onGo={setView} onLogout={()=>signOut(auth)} counts={counts} ordenes={ordenesRoot} producciones={produccionesRoot} productos={productos}/>}
       {view==="moldes"    && <MoldesScreen onBack={back} productos={productos}/>}
+      {view==="cierres"   && <CierresScreen onBack={back} centros={centros} usuarios={usuarios} perfil={perfil}/>}
       {view==="terminal"  && <TerminalPlanta onBack={back} perfil={perfil} productos={productos} lineas={lineas}
         turnos={turnos} centros={centros} mps={mps} motivos={motivos} moldes={moldes}
         usuarios={usuarios} procesos={procesos}/>}
