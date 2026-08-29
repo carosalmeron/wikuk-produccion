@@ -65,6 +65,11 @@ const fechaESLarga = (f) => fechaES(f, { weekday:"long", day:"numeric", month:"l
 const fechaESCorta = (f) => fechaES(f, { day:"2-digit", month:"2-digit", year:"2-digit" });
 // Los operarios entran con usuario y clave; por dentro se traduce a un correo interno
 const DOMINIO_OPERARIO = "operario.wikuk";
+// ── DE DÓNDE SE ENVÍAN LOS CORREOS ───────────────────────────────────────────
+// "" = la función de este mismo proyecto (/api/send-email), lo normal.
+// Mientras producción no tenga sus credenciales SMTP, se usa la del CRM,
+// que acepta llamadas de fuera. Para cambiarlo, deja la constante vacía.
+const API_CORREO = "https://crmwikuk.vercel.app/api/send-email";
 const correoDeUsuario = (u) => `${(u||"").trim().toLowerCase().replace(/[^a-z0-9._-]/g,"")}@${DOMINIO_OPERARIO}`;
 // Acepta coma o punto como separador decimal (teclados móviles españoles)
 const toNum = (v) => {
@@ -2177,7 +2182,7 @@ function CierreTurno({ ots, partes, apoyos=[], productos, mps, centros, centro, 
     const resultados = [];
     for (const to of para) {
       try {
-        const r = await fetch("/api/send-email", {
+        const r = await fetch(API_CORREO || "/api/send-email", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ to, subject: asunto, html }),
