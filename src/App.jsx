@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v3.21.0";
+const APP_VERSION = "v3.21.1";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -1582,9 +1582,18 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
           const actual = pasos.find(p=>!p.ok);
           return (
           <>
-          {otsHoy.length>0 && (
-            <div style={{padding:"18px 22px 0"}}>
-              <div style={{background:"#fff",border:`2px solid ${C.border}`,borderRadius:18,padding:16}}>
+          <div style={{padding:"18px 22px 0"}}>
+            <div style={{background:"#fff",border:`2px solid ${C.border}`,borderRadius:18,padding:16}}>
+              {otsHoy.length===0 ? (
+                <div style={{fontSize:14.5,color:C.mutedD,lineHeight:1.6}}>
+                  <b style={{color:C.text,fontSize:15.5}}>Hoy no hay nada planificado</b>
+                  <div style={{marginTop:4}}>
+                    Sin órdenes para {turno?.nombre||"este turno"} no hay pasos que dar.
+                    Si debería haber trabajo, díselo a tu responsable.
+                  </div>
+                </div>
+              ) : (
+              <>
                 <div style={{fontFamily:F.h,fontWeight:800,fontSize:15,color:C.text,marginBottom:12}}>
                   {actual ? `Ahora toca: ${actual.t}` : "✔ El turno está cerrado"}
                 </div>
@@ -1611,9 +1620,10 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                     );
                   })}
                 </div>
-              </div>
+              </>
+              )}
             </div>
-          )}
+          </div>
           <div style={{padding:"24px 22px",display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:20}}>
           {[["📋","Órdenes de trabajo","Lo que se fabrica hoy",
              abiertas.length ? `${abiertas.length} sin cerrar` : "todo cerrado",
@@ -1626,8 +1636,8 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
              apoyosHoy.length ? `${apoyosHoy.length} hoy · ${Math.round(minApoyoHoy)} min` : "nada hoy",
              apoyosHoy.length?C.blue:C.mutedD, ()=>setVista("apoyo")],
             ["🔒","Turnos cerrados","Informes y reenvío",
-             cierresRecientes.length ? `${cierresRecientes.length} esta semana` : "ninguno aún",
-             cierresRecientes.length?C.green:C.mutedD, ()=>setVista("cierresTurno")]
+             (cierresRecientes||[]).length ? `${cierresRecientes.length} esta semana` : "ninguno aún",
+             (cierresRecientes||[]).length?C.green:C.mutedD, ()=>setVista("cierresTurno")]
           ].map(([ic,t,s2,n,col,fn],i)=>(
             <button key={i} onClick={fn}
               style={{minHeight:200,borderRadius:22,border:`4px solid ${C.border}`,background:"#fff",cursor:"pointer",
