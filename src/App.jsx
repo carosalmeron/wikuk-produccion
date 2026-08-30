@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v3.19.1";
+const APP_VERSION = "v3.21.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -1550,8 +1550,71 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
             ))}
           </div>
         )}
-        {(!esOperario || centroPropio) && (
-        <div style={{padding:"24px 22px",display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:20}}>
+        {(!esOperario || centroPropio) && (() => {
+          // ── Los tres pasos del día
+          const apoyoPend = (() => {
+            const acum = {};
+            otsHoy.forEach(ot => {
+              const p = productos.find(z=>z.id===ot.producto_id);
+              (p?.procesos_asignados||[]).forEach(pa => {
+                const cat = procesos.find(z=>z.id===pa.proceso_id);
+                if (!cat?.apoyo) return;
+                const base = pa.base_tiempo || cat.base_tiempo || "ud";
+                const parte = prods.find(z => z.fecha===hoy && z.linea_nombre===ot.linea && z.producto_id===ot.producto_id);
+                const uds = toNum(parte?.cantidad) || toNum(ot.cantidad);
+                acum[cat.id] = (acum[cat.id]||0) + (base==="m" ? toNum(p?.metros_finales)*(toNum(pa.capas)||1)*uds : uds);
+              });
+            });
+            return Object.entries(acum).filter(([pid, total]) => {
+              const ya = apoyos.filter(a=>a.fecha===hoy && a.proceso_id===pid).reduce((a,z)=>a+toNum(z.cantidad),0);
+              return ya < total - 0.5;
+            }).length;
+          })();
+          const turnoCerrado = cierres.some(c => c.fecha===hoy && c.turno_id===turnoId && (!centroId || c.centro===centroId));
+          const pasos = [
+            { n:1, t:"Cerrar las líneas", sub: abiertas.length ? `faltan ${abiertas.length}` : "todas cerradas",
+              ok: otsHoy.length>0 && abiertas.length===0, ir:()=>setVista("ordenes") },
+            { n:2, t:"Anotar el apoyo", sub: apoyoPend ? `${apoyoPend} sin terminar` : "al día",
+              ok: apoyoPend===0, ir:()=>setVista("apoyo") },
+            { n:3, t:"Cerrar el turno", sub: turnoCerrado ? "hecho, informe enviado" : "genera el informe",
+              ok: turnoCerrado, ir:()=>setVista("ordenes") },
+          ];
+          const actual = pasos.find(p=>!p.ok);
+          return (
+          <>
+          {otsHoy.length>0 && (
+            <div style={{padding:"18px 22px 0"}}>
+              <div style={{background:"#fff",border:`2px solid ${C.border}`,borderRadius:18,padding:16}}>
+                <div style={{fontFamily:F.h,fontWeight:800,fontSize:15,color:C.text,marginBottom:12}}>
+                  {actual ? `Ahora toca: ${actual.t}` : "✔ El turno está cerrado"}
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:12}}>
+                  {pasos.map(p=>{
+                    const esActual = actual?.n === p.n;
+                    return (
+                      <button key={p.n} onClick={p.ir}
+                        style={{display:"flex",alignItems:"center",gap:12,textAlign:"left",cursor:"pointer",
+                          background: p.ok?C.greenBg : esActual?C.blueBg : "#fff",
+                          border:`${esActual?3:2}px solid ${p.ok?C.green : esActual?C.blue : C.border}`,
+                          borderRadius:14,padding:"14px 15px"}}>
+                        <span style={{width:44,height:44,borderRadius:22,flexShrink:0,fontSize:20,fontWeight:900,
+                          display:"flex",alignItems:"center",justifyContent:"center",
+                          background: p.ok?C.green : esActual?C.blue : C.card2,
+                          color: (p.ok||esActual)?"#fff":C.mutedD, fontFamily:F.h}}>
+                          {p.ok ? "✔" : p.n}
+                        </span>
+                        <span style={{minWidth:0}}>
+                          <div style={{fontFamily:F.h,fontWeight:800,fontSize:15.5,color:C.text}}>{p.t}</div>
+                          <div style={{fontSize:13,color: p.ok?C.green : esActual?C.blue : C.mutedD, fontWeight:600}}>{p.sub}</div>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
+          <div style={{padding:"24px 22px",display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:20}}>
           {[["📋","Órdenes de trabajo","Lo que se fabrica hoy",
              abiertas.length ? `${abiertas.length} sin cerrar` : "todo cerrado",
              abiertas.length?C.amber:C.green, ()=>setVista("ordenes")],
@@ -1577,8 +1640,10 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                 background:col===C.amber?C.amberBg:col===C.red?C.redBg:col===C.green?C.greenBg:C.card2}}>{n}</span>
             </button>
           ))}
-        </div>
-        )}
+          </div>
+          </>
+          );
+        })()}
       </div>
     );
   }
@@ -1734,9 +1799,15 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                       </div>
                     )}
                   </div>
-                  <button onClick={()=>setModal({tipo:"reabrir", parte:p})}
-                    style={{height:66,padding:"0 18px",background:C.amberBg,border:`2px solid ${C.amber}`,color:C.amber,
-                      borderRadius:12,fontFamily:F.h,fontWeight:800,fontSize:17,cursor:"pointer",flexShrink:0}}>↺ Reabrir</button>
+                  {esOperario ? (
+                    <span style={{fontSize:13,color:C.mutedD,textAlign:"right",flexShrink:0,maxWidth:150,lineHeight:1.5}}>
+                      Para corregirla, díselo a tu responsable
+                    </span>
+                  ) : (
+                    <button onClick={()=>setModal({tipo:"reabrir", parte:p})}
+                      style={{height:66,padding:"0 18px",background:C.amberBg,border:`2px solid ${C.amber}`,color:C.amber,
+                        borderRadius:12,fontFamily:F.h,fontWeight:800,fontSize:17,cursor:"pointer",flexShrink:0}}>↺ Reabrir</button>
+                  )}
                 </div>
               </div>
             );
@@ -1807,7 +1878,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
             El desalado y demás trabajo fuera de línea no pertenece a ninguna orden ni a ningún turno:
             sirve para varios productos y líneas. Se anota aquí suelto y se suma al coste del primer turno que se cierre.
           </div>
-          {/* LO QUE PIDE LA PRODUCCIÓN DE HOY */}
+          {/* ÓRDENES DE APOYO DEL DÍA */}
           {(() => {
             // La misma tarea en varias órdenes se suma en una sola tarjeta
             const acum = {};
@@ -1831,15 +1902,17 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
             if (!pendientes.length) return null;
             return (
               <div style={{marginBottom:22}}>
-                <div style={{fontFamily:F.h,fontWeight:800,fontSize:17,color:C.text,marginBottom:4}}>Lo que hace falta hoy</div>
+                <div style={{fontFamily:F.h,fontWeight:800,fontSize:17,color:C.text,marginBottom:4}}>Órdenes de apoyo de hoy</div>
                 <div style={{fontSize:14,color:C.mutedD,lineHeight:1.55,marginBottom:12}}>
-                  Sale de lo que se fabrica hoy. Toca una para anotarla con los metros ya puestos.
+                  Salen solas de lo que se fabrica hoy. Se cierran igual que las de línea.
                 </div>
                 <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:14}}>
                   {pendientes.map((x,i)=>{
                     const hechoYa = hoyApoyos.filter(a=>a.proceso_id===x.cat.id);
                     const yaCant = hechoYa.reduce((a,z)=>a+toNum(z.cantidad),0);
                     const falta = Math.max(0, x.cantidad - yaCant);
+                    const pct = x.cantidad>0 ? yaCant/x.cantidad : 0;
+                    const estado = falta<=0 ? "cerrada" : yaCant>0 ? "a medias" : "sin empezar";
                     return (
                       <button key={i} onClick={()=>setModal({tipo:"apoyo", pre:{
                         proceso_id:x.cat.id, cantidad: falta>0 ? String(Math.round(falta)) : "" }})}
@@ -1847,7 +1920,11 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                           borderRadius:18,padding:16,cursor:"pointer",textAlign:"left",width:"100%"}}>
                         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:6}}>
                           <span style={{fontFamily:F.h,fontWeight:800,fontSize:17,color:C.text,minWidth:0}}>{x.cat.nombre}</span>
-                          {falta<=0 && <span style={{flexShrink:0,fontSize:12.5,fontWeight:800,color:C.green}}>✔ hecho</span>}
+                          <span style={{flexShrink:0,fontSize:12,fontWeight:800,borderRadius:20,padding:"5px 11px",
+                            background: estado==="cerrada"?C.green : estado==="a medias"?C.amberBg : C.card2,
+                            color: estado==="cerrada"?"#fff" : estado==="a medias"?C.amber : C.mutedD}}>
+                            {estado==="cerrada"?"✔ CERRADA" : estado==="a medias"?"A MEDIAS" : "SIN EMPEZAR"}
+                          </span>
                         </div>
                         <div style={{fontFamily:F.h,fontWeight:900,fontSize:26,color:falta<=0?C.green:C.blue,lineHeight:1.1}}>
                           {num(falta>0?falta:x.cantidad)} <span style={{fontSize:14,color:C.mutedD,fontWeight:600}}>{x.base==="m"?"m":"uds"}</span>
@@ -1859,6 +1936,11 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                               ? <>de {x.de.length} órdenes: {x.de.map(d=>`${d.linea} ${num(d.cantidad)}`).join(" · ")}</>
                               : <>{x.de[0].producto} · {x.de[0].linea}</>}
                           </div>
+                          {yaCant>0 && falta>0 && (
+                            <div style={{height:8,background:C.card2,borderRadius:4,overflow:"hidden",marginTop:8}}>
+                              <div style={{width:Math.min(100,pct*100)+"%",height:"100%",background:C.amber,borderRadius:4}}/>
+                            </div>
+                          )}
                         </div>
                       </button>
                     );
@@ -1868,10 +1950,13 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
             );
           })()}
 
-          <div style={{marginBottom:20}}>
-            <BotonF alto={96} borde={C.border} onClick={()=>setModal({tipo:"apoyo"})}>＋ Anotar otro trabajo de apoyo</BotonF>
+          <div style={{marginBottom:22}}>
+            <BotonF alto={96} borde={C.border} sub="para otro día, o lo que no venga de las órdenes de hoy"
+              onClick={()=>setModal({tipo:"apoyo", pre:{ extra:true }})}>＋ Trabajo de apoyo extra</BotonF>
           </div>
-          {hoyApoyos.length===0 && <Empty icon="🤝" text="Nada anotado hoy"/>}
+          {hoyApoyos.length>0 && (
+            <div style={{fontFamily:F.h,fontWeight:800,fontSize:17,color:C.text,marginBottom:10}}>Anotado hoy</div>
+          )}
           {hoyApoyos.map(a=>(
             <div key={a.id} style={{background:"#fff",border:`2px solid ${C.border}`,borderRadius:16,padding:15,marginBottom:11,
               display:"flex",justifyContent:"space-between",alignItems:"center",gap:12}}>
@@ -1880,6 +1965,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                 <div style={{fontSize:14,color:C.mutedD,marginTop:3}}>
                   {num(a.cantidad)} {a.base==="m"?"m":"uds"} · 👤 {a.persona||"—"}
                   {a.lote?` · 📦 ${a.lote}`:""}
+                  {a.extra && <span style={{color:C.blue,fontWeight:700}}> · extra</span>}
                 </div>
               </div>
               <div style={{textAlign:"right",flexShrink:0}}>
@@ -1961,6 +2047,7 @@ function HojaApoyo({ procesos, mps, gente, perfil, centroId, claveTurno, hoy, pr
       minutos_teoricos: Math.round(minutos),              // los que debería haber tardado
       materia_id: mpId, lote: lote.trim(),
       persona_id: quien, persona: gente.find(u => u.id === quien)?.nombre || "",
+      extra: !!pre?.extra,
       registrado_por: perfil?.nombre || "terminal", registrado_at: new Date().toISOString(),
     });
     setGuardando(false);
@@ -1985,7 +2072,7 @@ function HojaApoyo({ procesos, mps, gente, perfil, centroId, claveTurno, hoy, pr
   );
 
   return (
-    <CapaF titulo={proc?.nombre || "Apoyo"} sub={`Se anota por ${porMetro?"metros":"unidades"}, sin orden`}
+    <CapaF titulo={proc?.nombre || "Apoyo"} sub={pre?.extra ? "Trabajo extra, fuera de las órdenes de hoy" : `Se anota por ${porMetro?"metros":"unidades"}`}
       onCerrar={onCerrar} color={C.blue}>
       <BloqueF titulo={`¿Cuántos ${unidad}?`}>
         <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
@@ -2359,6 +2446,7 @@ function CierreTurno({ ots, partes, apoyos=[], productos, mps, procesos=[], cent
       destinatarios: destinatarios.map(u=>u.email),
       asunto, resumen: textoCorto(), informe_html: html,
       email_estado: destinatarios.length ? "enviando" : "sin_destinatarios",
+      desactualizado: false, desactualizado_motivo: "",
     });
 
     // Enviar el informe, igual que hace el CRM
@@ -3232,6 +3320,20 @@ function HojaReabrir({ parte, perfil, onCerrar, onHecho }) {
   const [motivo, setMotivo] = useState("");
   const reabrir = async () => {
     if (!motivo) return;
+    // Si el turno ya estaba cerrado, su informe deja de valer
+    try {
+      const snap = await getDocs(collection(db, "cierres_turno"));
+      for (const d of snap.docs) {
+        const c = d.data();
+        if (c.fecha === parte.fecha && c.turno_id === parte.turno_id) {
+          await save("cierres_turno", d.id, {
+            desactualizado: true,
+            desactualizado_motivo: `${parte.linea_nombre}: ${motivo}`,
+            desactualizado_at: new Date().toISOString(),
+          });
+        }
+      }
+    } catch (e) { /* si no se puede marcar, la reapertura sigue */ }
     await save("producciones", parte.id, {
       reabierta: true, reabierta_por: perfil?.nombre || "terminal",
       reabierta_motivo: motivo, reabierta_at: new Date().toISOString(),
@@ -3243,7 +3345,8 @@ function HojaReabrir({ parte, perfil, onCerrar, onHecho }) {
     <CapaF titulo="¿Reabrir esta orden?" sub={`${parte.linea_nombre} · ${fechaES(parte.fecha)}`} onCerrar={onCerrar} color={C.amber}>
       <div style={{background:C.amberBg,border:`2px solid ${C.amber}`,borderRadius:14,padding:15,marginBottom:18,
         fontSize:15.5,color:C.amber,fontWeight:700,lineHeight:1.55}}>
-        El informe de ese turno ya se generó. Al volver a cerrarla, los números del cierre semanal se recalcularán.
+        Si el turno ya estaba cerrado, su informe quedará marcado como <b>desactualizado</b>.
+        Habrá que cerrar el turno otra vez para que salga el informe corregido.
       </div>
       <div style={{fontFamily:F.h,fontWeight:800,fontSize:17,color:C.text,marginBottom:10}}>¿Por qué se reabre?</div>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(210px,1fr))",gap:14,marginBottom:20}}>
@@ -5994,6 +6097,7 @@ function CierresScreen({ onBack, centros, usuarios, perfil, centroFijo="" }) {
   };
 
   const ESTADOS = {
+    desactualizado: ["⚠️ Desactualizado", C.red, C.redBg],
     enviado: ["✔ Enviado", C.green, C.greenBg],
     parcial: ["⚠️ Enviado a medias", C.amber, C.amberBg],
     error: ["⛔ No salió", C.red, C.redBg],
@@ -6027,7 +6131,7 @@ function CierresScreen({ onBack, centros, usuarios, perfil, centroFijo="" }) {
         )}
 
         {lista.map(c=>{
-          const est = ESTADOS[c.email_estado] || ESTADOS.sin_destinatarios;
+          const est = c.desactualizado ? ESTADOS.desactualizado : (ESTADOS[c.email_estado] || ESTADOS.sin_destinatarios);
           const pct = toNum(c.uds_plan)>0 ? toNum(c.uds_real)/toNum(c.uds_plan) : 0;
           const ineficiencia = toNum(c.desvio_coste);
           const abiertoAqui = abierto === c.id;
@@ -6086,6 +6190,16 @@ function CierresScreen({ onBack, centros, usuarios, perfil, centroFijo="" }) {
                           {toNum(c.coste_apoyo_teorico)>0 && <> de {eur(c.coste_apoyo_teorico)} teóricos</>}
                         </div>
                       )}
+                    </div>
+                  )}
+                  {c.desactualizado && (
+                    <div style={{background:C.redBg,border:`2px solid ${C.red}`,borderRadius:11,padding:"11px 13px",
+                      marginBottom:10,fontSize:13,color:C.red,fontWeight:700,lineHeight:1.6}}>
+                      ⚠️ Se reabrió una orden después de cerrar el turno{c.desactualizado_motivo?` (${c.desactualizado_motivo})`:""}.
+                      <div style={{fontWeight:600,marginTop:3}}>
+                        Los números de este informe ya no valen. Cierra otra vez el turno en la pantalla de fábrica
+                        para generar el corregido.
+                      </div>
                     </div>
                   )}
                   {(c.email_enviados_a||[]).length>0 && (
