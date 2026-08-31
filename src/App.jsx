@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v3.28.0";
+const APP_VERSION = "v3.29.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -3201,24 +3201,42 @@ const CapaF = ({ titulo, sub, onCerrar, children, color=C.navy }) => (
 // Teclado numérico (o alfanumérico para lotes)
 function HojaNumero({ titulo, valor, texto, onOk, onCerrar }) {
   const [v, setV] = useState(valor || "");
+  const ABC = "ABCDEFGHIJKLMNÑOPQRSTUVWXYZ".split("");
+  const SIGNOS = ["/", "-", ".", ",", "_"];
   const teclas = texto
     ? ["1","2","3","4","5","6","7","8","9",".","0","←"]
-    : ["1","2","3","4","5","6","7","8","9","0","00","←"];
+    : ["1","2","3","4","5","6","7","8","9",",","0","←"];   // coma para decimales
   return (
     <CapaF titulo={titulo} onCerrar={onCerrar} color={C.blue}>
-      <div style={{background:"#fff",border:`2px solid ${C.border}`,borderRadius:16,padding:18,textAlign:"center",
-        marginBottom:16,maxWidth:520}}>
-        <span style={{fontFamily:F.h,fontWeight:900,fontSize:46,color:C.text}}>{v || "0"}</span>
-      </div>
-      {texto && (
-        <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:12,maxWidth:520}}>
-          {["A","B","C","D","E","F","G","H","J","K","L","M","N","P","R","S","T","U","V","Z"].map(k=>(
-            <button key={k} onClick={()=>setV(v+k)}
-              style={{width:60,height:60,background:"#fff",border:`2px solid ${C.border}`,borderRadius:12,
-                fontFamily:F.h,fontWeight:800,fontSize:22,color:C.text,cursor:"pointer"}}>{k}</button>
-          ))}
+      {/* Lo escrito se queda a la vista aunque se baje */}
+      <div style={{position:"sticky",top:0,zIndex:5,background:C.bg,paddingBottom:10,marginBottom:6}}>
+        <div style={{background:"#fff",border:`3px solid ${C.blue}`,borderRadius:16,padding:"16px 18px",
+          textAlign:"center",maxWidth:520,minHeight:76,display:"flex",alignItems:"center",justifyContent:"center"}}>
+          <span style={{fontFamily:F.h,fontWeight:900,fontSize:40,color:v?C.text:C.muted,wordBreak:"break-all",lineHeight:1.2}}>
+            {v || (texto ? "escribe aquí" : "0")}
+          </span>
         </div>
+      </div>
+
+      {texto && (
+        <>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(56px,1fr))",gap:8,marginBottom:10,maxWidth:560}}>
+            {ABC.map(k=>(
+              <button key={k} onClick={()=>setV(v+k)}
+                style={{height:58,background:"#fff",border:`2px solid ${C.border}`,borderRadius:12,
+                  fontFamily:F.h,fontWeight:800,fontSize:21,color:C.text,cursor:"pointer"}}>{k}</button>
+            ))}
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:`repeat(${SIGNOS.length},1fr)`,gap:8,marginBottom:12,maxWidth:480}}>
+            {SIGNOS.map(k=>(
+              <button key={k} onClick={()=>setV(v+k)}
+                style={{height:58,background:C.blueBg,border:`2px solid ${C.blue}`,borderRadius:12,
+                  fontFamily:F.h,fontWeight:800,fontSize:24,color:C.blue,cursor:"pointer"}}>{k}</button>
+            ))}
+          </div>
+        </>
       )}
+
       <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,maxWidth:480}}>
         {teclas.map(k=>(
           <button key={k} onClick={()=>setV(k==="←" ? v.slice(0,-1) : v+k)}
@@ -3226,8 +3244,9 @@ function HojaNumero({ titulo, valor, texto, onOk, onCerrar }) {
               fontFamily:F.h,fontWeight:800,fontSize:30,color:C.text,cursor:"pointer"}}>{k}</button>
         ))}
       </div>
-      <div style={{maxWidth:480,marginTop:16}}>
+      <div style={{maxWidth:480,marginTop:16,display:"grid",gap:10}}>
         <BotonF alto={100} bg={C.green} color="#fff" borde={C.green} onClick={()=>onOk(v)}>✔ GUARDAR</BotonF>
+        {v && <BotonF alto={72} borde={C.border} color={C.red} onClick={()=>setV("")}>Borrar todo</BotonF>}
       </div>
     </CapaF>
   );
@@ -3238,18 +3257,21 @@ function HojaTexto({ titulo, valor, onOk, onCerrar }) {
   const [v, setV] = useState(valor || "");
   const filas = [["Q","W","E","R","T","Y","U","I","O","P"],
                  ["A","S","D","F","G","H","J","K","L","Ñ"],
-                 ["Z","X","C","V","B","N","M",",","←"]];
+                 ["Z","X","C","V","B","N","M",",","←"],
+                 [".","/","-","(",")","%","º","+","?"]];
   return (
     <CapaF titulo={titulo} sub="Opcional · dilo en pocas palabras" onCerrar={onCerrar} color={C.blue}>
-      <div style={{background:"#fff",border:`2px solid ${C.border}`,borderRadius:16,padding:18,minHeight:110,
-        marginBottom:16,maxWidth:820,fontSize:22,fontWeight:600,color:v?C.text:C.muted,lineHeight:1.5}}>
-        {v || "Escribe aquí…"}
+      <div style={{position:"sticky",top:0,zIndex:5,background:C.bg,paddingBottom:10,marginBottom:6}}>
+        <div style={{background:"#fff",border:`3px solid ${C.blue}`,borderRadius:16,padding:18,minHeight:100,
+          maxWidth:820,fontSize:22,fontWeight:600,color:v?C.text:C.muted,lineHeight:1.5}}>
+          {v || "Escribe aquí…"}
+        </div>
       </div>
       <div style={{display:"grid",gap:8,maxWidth:820}}>
         {filas.map((f,i)=>(
           <div key={i} style={{display:"grid",gridTemplateColumns:`repeat(${f.length},1fr)`,gap:8}}>
             {f.map(k=>(
-              <button key={k} onClick={()=>setV(k==="←" ? v.slice(0,-1) : v + k.toLowerCase())}
+              <button key={k} onClick={()=>setV(k==="←" ? v.slice(0,-1) : v + (/[A-ZÑ]/.test(k) ? k.toLowerCase() : k))}
                 style={{height:64,background:k==="←"?C.card2:"#fff",border:`2px solid ${C.border}`,borderRadius:12,
                   fontFamily:F.h,fontWeight:700,fontSize:20,color:C.text,cursor:"pointer"}}>{k}</button>
             ))}
@@ -3358,10 +3380,12 @@ function HojaParada({ motivos, onOk, onCerrar }) {
   );
   return (
     <CapaF titulo={mot.nombre} sub="¿Cuántos minutos?" onCerrar={onCerrar} color={C.red}>
-      <div style={{background:"#fff",border:`2px solid ${C.border}`,borderRadius:16,padding:18,textAlign:"center",
-        marginBottom:16,maxWidth:440}}>
-        <span style={{fontFamily:F.h,fontWeight:900,fontSize:46,color:C.text}}>{min||"0"}</span>
-        <span style={{fontSize:22,color:C.mutedD,marginLeft:8}}>min</span>
+      <div style={{position:"sticky",top:0,zIndex:5,background:C.bg,paddingBottom:10,marginBottom:6}}>
+        <div style={{background:"#fff",border:`3px solid ${C.red}`,borderRadius:16,padding:"16px 18px",
+          textAlign:"center",maxWidth:440}}>
+          <span style={{fontFamily:F.h,fontWeight:900,fontSize:44,color:min?C.text:C.muted}}>{min||"0"}</span>
+          <span style={{fontSize:22,color:C.mutedD,marginLeft:8}}>min</span>
+        </div>
       </div>
       <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,maxWidth:440}}>
         {["1","2","3","4","5","6","7","8","9","0","00","←"].map(k=>(
