@@ -1476,8 +1476,9 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
   // El centro y el turno salen de la ficha del operario
   const esOperario = perfil?.rol === "operario";
   const centroPropio = centros.find(c => c.id === perfil?.centro) || null;
-  // El operario solo ve su centro. Los demás, el primero mientras no elijan otro.
-  const centro = esOperario ? centroPropio : (centroPropio || centros[0] || null);
+  // El operario solo ve el suyo. Los demás lo eligen.
+  const [centroElegido, setCentroElegido] = useState(perfil?.centro || "");
+  const centro = esOperario ? centroPropio : (centros.find(c=>c.id===centroElegido) || null);
   const centroId = centro?.id || "";
   const [turnoId, setTurnoId] = useState(perfil?.turno || turnos[0]?.id || "");
   useEffect(()=>{ if (perfil?.turno) setTurnoId(perfil.turno); }, [perfil?.turno]);
@@ -1538,6 +1539,34 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
     && (!centroId || !u.centro || u.centro === centroId));
   const gente = equipo.length ? equipo : usuarios.filter(u => u.activo !== false);
 
+  // ═══ ELEGIR CENTRO ═══
+  if (!esOperario && !centro) {
+    return (
+      <div style={{background:C.bg,minHeight:"100vh"}}>
+        <CabF titulo="¿En qué centro?" sub="Elige la planta que quieres ver" onSalir={onBack}/>
+        <div style={{padding:24,display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:20}}>
+          {centros.map(c=>{
+            const nLin = lineas.filter(l=>l.centro===c.id && l.activo!==false).length;
+            const nProd = productos.filter(p=>p.centro===c.id).length;
+            return (
+              <button key={c.id} onClick={()=>setCentroElegido(c.id)}
+                style={{minHeight:170,borderRadius:22,border:`4px solid ${C.border}`,background:"#fff",cursor:"pointer",
+                  display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:8,
+                  boxShadow:"0 3px 10px rgba(15,23,42,0.08)",padding:20}}>
+                <span style={{fontSize:46}}>🏭</span>
+                <span style={{fontFamily:F.h,fontWeight:900,fontSize:22,color:C.text,textAlign:"center"}}>{c.nombre}</span>
+                <span style={{fontSize:14,color:C.mutedD}}>
+                  {nLin} línea{nLin!==1?"s":""} · {nProd} producto{nProd!==1?"s":""}
+                </span>
+              </button>
+            );
+          })}
+          {centros.length===0 && <Empty icon="🏭" text="No hay centros dados de alta"/>}
+        </div>
+      </div>
+    );
+  }
+
   // ═══ INICIO ═══
   if (vista === "inicio") {
     const nInc = incid.filter(i => (i.fecha||"") >= new Date(Date.now()-7*864e5).toISOString().slice(0,10)).length;
@@ -1557,7 +1586,8 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
     return (
       <div style={{background:C.bg,minHeight:"100vh"}}>
         <CabF titulo={centro?.nombre || "Fábrica"} onSalir={onBack}
-          sub={`${new Date().toLocaleDateString("es-ES",{weekday:"long",day:"numeric",month:"long"})} · ${turno?.nombre||"sin turno"}`}/>
+          atras={!esOperario && centros.length>1 ? ()=>setCentroElegido("") : null}
+          sub={`${fechaESLarga(hoy)} · ${turno?.nombre||"sin turno"}`}/>
         {esOperario && !centroPropio && (
           <div style={{margin:"18px 22px",background:C.redBg,border:`3px solid ${C.red}`,borderRadius:16,
             padding:"20px",fontSize:17,color:C.red,fontWeight:700,lineHeight:1.6}}>
