@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v3.23.0";
+const APP_VERSION = "v3.25.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -1534,6 +1534,13 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
     const minApoyoHoy = apoyosHoy.reduce((a,x)=>a+toNum(x.minutos),0);
     const hace7 = new Date(Date.now()-7*864e5).toISOString().slice(0,10);
     const cierresRecientes = cierres.filter(c => (c.fecha||"") >= hace7 && (!centroId || c.centro === centroId));
+    // Por dónde va el cierre de la jornada, para el botón
+    const turnoYaCerrado = cierres.some(c => c.fecha===hoy && c.turno_id===turnoId && (!centroId || c.centro===centroId));
+    const pasoActual = otsHoy.length===0 ? null
+      : abiertas.length>0 ? { n:1, t:"cerrar las líneas" }
+      : apoyosHoy.length===0 && otsHoy.some(ot => (prodDe(ot.producto_id)?.procesos_asignados||[])
+          .some(pa => procesos.find(z=>z.id===pa.proceso_id)?.apoyo)) ? { n:2, t:"anotar el apoyo" }
+      : !turnoYaCerrado ? { n:3, t:"cerrar el turno" } : null;
     return (
       <div style={{background:C.bg,minHeight:"100vh"}}>
         <CabF titulo={centro?.nombre || "Fábrica"} onSalir={onBack}
@@ -1595,48 +1602,6 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
           const actual = pasos.find(p=>!p.ok);
           return (
           <>
-          <div style={{padding:"18px 22px 0"}}>
-            <div style={{background:"#fff",border:`2px solid ${C.border}`,borderRadius:18,padding:16}}>
-              {otsHoy.length===0 ? (
-                <div style={{fontSize:14.5,color:C.mutedD,lineHeight:1.6}}>
-                  <b style={{color:C.text,fontSize:15.5}}>Hoy no hay nada planificado</b>
-                  <div style={{marginTop:4}}>
-                    Sin órdenes para {turno?.nombre||"este turno"} no hay pasos que dar.
-                    Si debería haber trabajo, díselo a tu responsable.
-                  </div>
-                </div>
-              ) : (
-              <>
-                <div style={{fontFamily:F.h,fontWeight:800,fontSize:15,color:C.text,marginBottom:12}}>
-                  {actual ? `Ahora toca: ${actual.t}` : "✔ El turno está cerrado"}
-                </div>
-                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:12}}>
-                  {pasos.map(p=>{
-                    const esActual = actual?.n === p.n;
-                    return (
-                      <button key={p.n} onClick={p.ir}
-                        style={{display:"flex",alignItems:"center",gap:12,textAlign:"left",cursor:"pointer",
-                          background: p.ok?C.greenBg : esActual?C.blueBg : "#fff",
-                          border:`${esActual?3:2}px solid ${p.ok?C.green : esActual?C.blue : C.border}`,
-                          borderRadius:14,padding:"14px 15px"}}>
-                        <span style={{width:44,height:44,borderRadius:22,flexShrink:0,fontSize:20,fontWeight:900,
-                          display:"flex",alignItems:"center",justifyContent:"center",
-                          background: p.ok?C.green : esActual?C.blue : C.card2,
-                          color: (p.ok||esActual)?"#fff":C.mutedD, fontFamily:F.h}}>
-                          {p.ok ? "✔" : p.n}
-                        </span>
-                        <span style={{minWidth:0}}>
-                          <div style={{fontFamily:F.h,fontWeight:800,fontSize:15.5,color:C.text}}>{p.t}</div>
-                          <div style={{fontSize:13,color: p.ok?C.green : esActual?C.blue : C.mutedD, fontWeight:600}}>{p.sub}</div>
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </>
-              )}
-            </div>
-          </div>
           <div style={{padding:"24px 22px",display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:20}}>
           {[["📋","Órdenes de trabajo","Lo que se fabrica hoy",
              abiertas.length ? `${abiertas.length} sin cerrar` : "todo cerrado",
@@ -1648,6 +1613,10 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
             ["🤝","Apoyo","Desalado y similares",
              apoyosHoy.length ? `${apoyosHoy.length} hoy · ${Math.round(minApoyoHoy)} min` : "nada hoy",
              apoyosHoy.length?C.blue:C.mutedD, ()=>setVista("apoyo")],
+            ["✅","Cerrar la jornada","Los pasos del final del turno",
+             otsHoy.length===0 ? "nada que cerrar"
+               : pasoActual ? `paso ${pasoActual.n}: ${pasoActual.t}` : "todo cerrado",
+             pasoActual ? C.amber : C.green, ()=>setVista("cierre")],
             ["🔒","Turnos cerrados","Informes y reenvío",
              (cierresRecientes||[]).length ? `${cierresRecientes.length} esta semana` : "ninguno aún",
              (cierresRecientes||[]).length?C.green:C.mutedD, ()=>setVista("cierresTurno")]
@@ -1759,11 +1728,50 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
           <div style={{marginTop:20,display:"grid",gap:12}}>
             {otsHoy.length>0 && (
               <>
-                <BotonF alto={110} bg={abiertas.length?C.card2:C.navy} color={abiertas.length?C.muted:"#fff"}
-                  borde={abiertas.length?C.border:C.navy} disabled={abiertas.length>0 || reabiertas.length>0}
-                  sub={abiertas.length ? `faltan ${abiertas.length} línea(s) por cerrar`
-                    : reabiertas.length ? `hay ${reabiertas.length} reabierta(s)` : "genera el informe y lo envía"}
-                  onClick={()=>setModal({tipo:"cierreTurno"})}>🔒 CERRAR EL TURNO</BotonF>
+                {(() => {
+                  const apoyoFalta = (() => {
+                    const acum = {};
+                    otsHoy.forEach(ot => {
+                      const p = prodDe(ot.producto_id);
+                      (p?.procesos_asignados||[]).forEach(pa => {
+                        const cat = procesos.find(z=>z.id===pa.proceso_id);
+                        if (!cat?.apoyo) return;
+                        const base = pa.base_tiempo || cat.base_tiempo || "ud";
+                        const uds = toNum(parteDe(ot)?.cantidad) || toNum(ot.cantidad);
+                        if (!acum[cat.id]) acum[cat.id] = { nombre: cat.nombre, total: 0 };
+                        acum[cat.id].total += base==="m" ? toNum(p?.metros_finales)*(toNum(pa.capas)||1)*uds : uds;
+                      });
+                    });
+                    return Object.entries(acum).filter(([pid, x]) => {
+                      const ya = apoyos.filter(a=>a.fecha===hoy && a.proceso_id===pid).reduce((a,z)=>a+toNum(z.cantidad),0);
+                      return ya < x.total - 0.5;
+                    }).map(([,x]) => x.nombre);
+                  })();
+                  const frena = abiertas.length>0 || reabiertas.length>0 || apoyoFalta.length>0;
+                  return (
+                    <>
+                      <BotonF alto={110} bg={frena?C.card2:C.navy} color={frena?C.muted:"#fff"}
+                        borde={frena?C.border:C.navy} disabled={frena}
+                        sub={abiertas.length ? `faltan ${abiertas.length} línea(s) por cerrar`
+                          : reabiertas.length ? `hay ${reabiertas.length} reabierta(s)`
+                          : apoyoFalta.length ? "falta anotar el apoyo"
+                          : "genera el informe y lo envía"}
+                        onClick={()=>setModal({tipo:"cierreTurno"})}>🔒 CERRAR EL TURNO</BotonF>
+                      {apoyoFalta.length>0 && abiertas.length===0 && reabiertas.length===0 && (
+                        <div style={{background:C.amberBg,border:`2px solid ${C.amber}`,borderRadius:14,padding:"14px 16px",
+                          fontSize:15,color:C.amber,fontWeight:700,lineHeight:1.6}}>
+                          🤝 Falta anotar <b>{apoyoFalta.join(", ")}</b>.
+                          <div style={{fontSize:13.5,fontWeight:600,marginTop:4}}>
+                            Sin eso el informe sale incompleto: no se sabría lo que ha costado el desalado.
+                          </div>
+                          <div style={{marginTop:10}}>
+                            <BotonF alto={80} borde={C.amber} color={C.amber} onClick={()=>setVista("apoyo")}>🤝 Ir a anotarlo</BotonF>
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
               </>
             )}
             <BotonF alto={88} borde={C.border} onClick={()=>setVista("cerradas")}>🗂️ Ver órdenes cerradas</BotonF>
@@ -1878,6 +1886,94 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
         </div>
         {modal?.tipo==="incidencia" && <HojaIncidencia mps={mps} perfil={perfil} linea="" prods={prods}
           onCerrar={()=>setModal(null)} onHecho={()=>setModal(null)}/>}
+      </div>
+    );
+  }
+
+  // ═══ CERRAR LA JORNADA ═══
+  if (vista === "cierre") {
+    const apoyoPend = (() => {
+      const acum = {};
+      otsHoy.forEach(ot => {
+        const p = prodDe(ot.producto_id);
+        (p?.procesos_asignados||[]).forEach(pa => {
+          const cat = procesos.find(z=>z.id===pa.proceso_id);
+          if (!cat?.apoyo) return;
+          const base = pa.base_tiempo || cat.base_tiempo || "ud";
+          const uds = toNum(parteDe(ot)?.cantidad) || toNum(ot.cantidad);
+          acum[cat.id] = (acum[cat.id]||0) + (base==="m" ? toNum(p?.metros_finales)*(toNum(pa.capas)||1)*uds : uds);
+        });
+      });
+      return Object.entries(acum).filter(([pid, total]) => {
+        const ya = apoyos.filter(a=>a.fecha===hoy && a.proceso_id===pid).reduce((a,z)=>a+toNum(z.cantidad),0);
+        return ya < total - 0.5;
+      }).length;
+    })();
+    const turnoCerrado = cierres.some(c => c.fecha===hoy && c.turno_id===turnoId && (!centroId || c.centro===centroId));
+    const pasos = [
+      { n:1, t:"Cerrar las líneas", sub: abiertas.length ? `faltan ${abiertas.length} de ${otsHoy.length}` : "todas cerradas",
+        detalle:"Cada línea pone sus unidades, metros y lote.",
+        ok: otsHoy.length>0 && abiertas.length===0, ir:()=>setVista("ordenes") },
+      { n:2, t:"Anotar el apoyo", sub: apoyoPend ? `${apoyoPend} sin terminar` : "al día",
+        detalle:"El desalado y demás trabajo fuera de línea.",
+        ok: apoyoPend===0, ir:()=>setVista("apoyo") },
+      { n:3, t:"Cerrar el turno", sub: turnoCerrado ? "hecho, informe enviado" : "genera el informe y lo envía",
+        detalle: apoyoPend ? "Falta apoyo por anotar: el informe saldría incompleto." : "Solo cuando lo anterior esté hecho.",
+        ok: turnoCerrado, ir:()=>setVista("ordenes") },
+    ];
+    const actual = pasos.find(p=>!p.ok);
+    return (
+      <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
+        <CabF titulo="✅ Cerrar la jornada" sub={`${turno?.nombre||""} · ${fechaESLarga(hoy)}`}
+          atras={()=>setVista("inicio")} onSalir={onBack}/>
+        <div style={{padding:22}}>
+          {otsHoy.length===0 ? (
+            <div style={{background:"#fff",border:`2px solid ${C.border}`,borderRadius:18,padding:22,textAlign:"center"}}>
+              <div style={{fontSize:44,marginBottom:8}}>📭</div>
+              <div style={{fontFamily:F.h,fontWeight:800,fontSize:18,color:C.text,marginBottom:6}}>Hoy no hay nada que cerrar</div>
+              <div style={{fontSize:15,color:C.mutedD,lineHeight:1.6}}>
+                No hay órdenes para {turno?.nombre||"este turno"}.
+              </div>
+            </div>
+          ) : (
+            <>
+              <div style={{background: actual?C.amberBg:C.greenBg, border:`3px solid ${actual?C.amber:C.green}`,
+                borderRadius:18,padding:"18px 20px",marginBottom:18,textAlign:"center"}}>
+                <div style={{fontFamily:F.h,fontWeight:900,fontSize:22,color:actual?C.amber:C.green}}>
+                  {actual ? `Ahora toca el paso ${actual.n}` : "✔ Jornada cerrada"}
+                </div>
+                <div style={{fontSize:16,color:C.text,fontWeight:700,marginTop:3}}>
+                  {actual ? actual.t : "Todo hecho y el informe enviado"}
+                </div>
+              </div>
+
+              {pasos.map(p=>{
+                const esActual = actual?.n === p.n;
+                const bloqueado = !p.ok && !esActual;
+                return (
+                  <button key={p.n} onClick={p.ir} disabled={bloqueado}
+                    style={{display:"flex",alignItems:"center",gap:16,textAlign:"left",width:"100%",
+                      cursor: bloqueado?"default":"pointer", opacity: bloqueado?0.5:1,
+                      background: p.ok?C.greenBg : esActual?"#fff" : C.card2,
+                      border:`${esActual?3:2}px solid ${p.ok?C.green : esActual?C.blue : C.border}`,
+                      borderRadius:18,padding:"18px 20px",marginBottom:12}}>
+                    <span style={{width:60,height:60,borderRadius:30,flexShrink:0,fontSize:26,fontWeight:900,
+                      display:"flex",alignItems:"center",justifyContent:"center",fontFamily:F.h,
+                      background: p.ok?C.green : esActual?C.blue : C.border,
+                      color: (p.ok||esActual)?"#fff":C.mutedD}}>{p.ok?"✔":p.n}</span>
+                    <span style={{minWidth:0,flex:1}}>
+                      <div style={{fontFamily:F.h,fontWeight:800,fontSize:19,color:C.text}}>{p.t}</div>
+                      <div style={{fontSize:15,fontWeight:700,marginTop:2,
+                        color: p.ok?C.green : esActual?C.blue : C.mutedD}}>{p.sub}</div>
+                      <div style={{fontSize:13,color:C.mutedD,marginTop:3,lineHeight:1.5}}>{p.detalle}</div>
+                    </span>
+                    {esActual && <span style={{fontSize:26,color:C.blue,flexShrink:0}}>›</span>}
+                  </button>
+                );
+              })}
+            </>
+          )}
+        </div>
       </div>
     );
   }
@@ -3006,6 +3102,10 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
       {modal?.tipo==="incidencia" && <HojaIncidencia mps={mps} perfil={perfil} linea={ot.linea} consumos={consumos}
         onCerrar={()=>setModal(null)} onHecho={()=>setModal(null)}/>}
       {modal?.tipo==="cerrar" && <HojaCerrar ot={ot} p={p} hecho={hecho} objetivo={objetivo} tareas={tareas}
+        apoyoPendiente={(p?.procesos_asignados||[])
+          .filter(pa => procesos.find(z=>z.id===pa.proceso_id)?.apoyo)
+          .filter(pa => !apoyosHoy.some(a => a.proceso_id === pa.proceso_id))
+          .map(pa => procesos.find(z=>z.id===pa.proceso_id)?.nombre).filter(Boolean)}
         consumos={consumos} paros={paros} nota={nota} gente={gente} procesos={procesos} mps={mps}
         rendDe={rendDe} objRendDe={objRendDe} teoricoDe={teoricoDe} guardando={guardando}
         onCerrar={()=>setModal(null)} onConfirmar={guardar}/>}
@@ -3259,7 +3359,7 @@ function HojaIncidencia({ mps, perfil, linea, consumos=[], prods=[], onCerrar, o
   );
 }
 
-function HojaCerrar({ ot, p, hecho, objetivo, tareas, consumos, paros, nota, gente, procesos, mps,
+function HojaCerrar({ ot, p, hecho, objetivo, tareas, consumos, paros, nota, gente, procesos, mps, apoyoPendiente=[],
                       rendDe, objRendDe, teoricoDe, guardando, onConfirmar, onCerrar }) {
   const [quien, setQuien] = useState("");
   const nombreProc = (id) => procesos.find(z=>z.id===id)?.nombre || "?";
@@ -3316,6 +3416,16 @@ function HojaCerrar({ ot, p, hecho, objetivo, tareas, consumos, paros, nota, gen
         <div style={{background:C.redBg,border:`2px solid ${C.red}`,borderRadius:14,padding:15,marginBottom:16,
           fontSize:16,color:C.red,fontWeight:700,lineHeight:1.5}}>
           ⚠️ No has registrado ningún lote: no se podrá calcular el rendimiento.
+        </div>
+      )}
+      {apoyoPendiente.length>0 && (
+        <div style={{background:C.blueBg,border:`2px solid ${C.blue}`,borderRadius:14,padding:15,marginBottom:16,
+          fontSize:15,color:C.text,lineHeight:1.55}}>
+          🤝 <b>{apoyoPendiente.join(", ")}</b> sigue sin anotar.
+          <div style={{fontSize:13.5,color:C.mutedD,marginTop:4}}>
+            Puedes cerrar la línea igual — el apoyo se anota después, cuando ya se saben las unidades.
+            Pero hará falta antes de cerrar el turno.
+          </div>
         </div>
       )}
       {sinPersona>0 && (
