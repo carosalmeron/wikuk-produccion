@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v3.30.0";
+const APP_VERSION = "v3.31.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -1486,6 +1486,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
   const [incid]     = useCol("incidencias");
   const [apoyos]    = useCol("apoyos");
   const [cierres]   = useCol("cierres_turno", "fecha");
+  const [borradores] = useCol("borradores");
   const [costesCfg] = useCol("config_costes");
   const [ordenes]   = useCol("ordenes");
   const ggMes = toNum(costesCfg.find(c=>c.id===centroId)?.fijos_mensuales);
@@ -1720,6 +1721,8 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
             {otsHoy.map((ot,i)=>{
               const p = prodDe(ot.producto_id);
               const parte = parteDe(ot);
+              const empezada = !parte && borradores.some(b =>
+                b.id === `${ot.fecha||hoy}__${ot.turno||claveTurno}__${ot.linea}__${ot.producto_id}`);
               return (
                 <button key={i} onClick={()=>{ setOtSel({...ot, parte}); setVista("ot"); }}
                   style={{background:parte?C.greenBg:"#fff",border:`3px solid ${parte?C.green:C.border}`,
@@ -1727,8 +1730,9 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:8}}>
                     <span style={{fontFamily:F.h,fontWeight:800,fontSize:23,color:C.text}}>⚙️ {ot.linea}</span>
                     <span style={{flexShrink:0,fontSize:13,fontWeight:800,borderRadius:20,padding:"6px 12px",
-                      background:parte?C.green:C.amberBg,color:parte?"#fff":C.amber}}>
-                      {parte?"✔ CERRADA":"SIN CERRAR"}
+                      background: parte?C.green : empezada?C.blueBg : C.amberBg,
+                      color: parte?"#fff" : empezada?C.blue : C.amber}}>
+                      {parte ? "✔ CERRADA" : empezada ? "▶ EMPEZADA" : "SIN CERRAR"}
                     </span>
                   </div>
                   <div style={{fontSize:19,fontWeight:700,color:C.text,marginBottom:4}}>{p?.nombre||"?"}</div>
@@ -1748,6 +1752,9 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                   )}
                   {parte && <div style={{fontSize:14,color:C.green,fontWeight:700,marginTop:4}}>
                     {num(parte.cantidad)} hechas · cerró {parte.cerrado_por||"—"}
+                  </div>}
+                  {empezada && <div style={{fontSize:14,color:C.blue,fontWeight:700,marginTop:4}}>
+                    Hay datos guardados sin cerrar
                   </div>}
                 </button>
               );
@@ -2856,6 +2863,40 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
   const [nota, setNota] = useState(parte?.observacion || "");
   const [modal, setModal] = useState(null);
   const [guardando, setGuardando] = useState(false);
+  const [borradorCargado, setBorradorCargado] = useState(false);
+  const [guardadoEn, setGuardadoEn] = useState(null);
+
+  // ── Lo que se va escribiendo se guarda solo, por si se sale o se apaga la tablet
+  const idBorrador = `${fechaOT}__${claveOT}__${ot?.linea||""}__${ot?.producto_id||""}`;
+  const [borradores] = useCol("borradores");
+  const borrador = borradores.find(b => b.id === idBorrador);
+
+  // Al abrir: si hay algo a medias y el parte no está cerrado, se recupera
+  useEffect(() => {
+    if (borradorCargado || parte || !borrador) return;
+    setBorradorCargado(true);
+    if (borrador.total != null) setTotal(String(borrador.total));
+    if (borrador.consumos) setConsumos(borrador.consumos);
+    if (borrador.tareas) setTareas(borrador.tareas);
+    if (borrador.paros) setParos(borrador.paros);
+    if (borrador.nota) setNota(borrador.nota);
+  }, [borrador, parte, borradorCargado]);
+
+  // Cada cambio se guarda, esperando un par de segundos para no escribir en cada tecla
+  useEffect(() => {
+    if (parte) return;                                  // ya cerrada: no hay borrador
+    if (!total && !consumos.some(c=>c.lote||toNum(c.metros_consumidos))
+        && !tareas.some(t=>toNum(t.cantidad)) && !paros.length && !nota) return;
+    const reloj = setTimeout(async () => {
+      await save("borradores", idBorrador, {
+        linea: ot?.linea||"", producto_id: ot?.producto_id||"", fecha: fechaOT, turno_clave: claveOT,
+        total, consumos, tareas, paros, nota,
+        actualizado_at: new Date().toISOString(), por: perfil?.nombre || "",
+      });
+      setGuardadoEn(new Date());
+    }, 1500);
+    return () => clearTimeout(reloj);
+  }, [total, consumos, tareas, paros, nota]);
 
   const nombreProc = (id) => procesos.find(z=>z.id===id)?.nombre || "?";
   const objProc = (id) => { const c = procesos.find(z=>z.id===id);
@@ -2896,6 +2937,7 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
       const lid = (c.materia_id+"_"+c.lote).replace(/[^a-zA-Z0-9_-]/g,"_");
       await save("lotes", lid, { materia_id: c.materia_id, codigo: c.lote, ultima_fecha: fechaOT });
     }
+    try { await del("borradores", idBorrador); } catch(e) { /* daba igual */ }
     setGuardando(false);
     setModal({ tipo:"hecho", quien });
   };
@@ -2913,6 +2955,15 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
         color={esReabierta ? C.amber : C.navy}
         sub={`${ot.linea} · ${fechaOT===hoy?"hoy":fechaES(fechaOT)} · objetivo ${num(objetivo)} ${p.unidad||"uds"}`}/>
       <div style={{padding:22}}>
+        {!parte && (guardadoEn || borrador) && (
+          <div style={{background:C.greenBg,border:`2px solid ${C.green}`,borderRadius:12,padding:"11px 14px",
+            marginBottom:16,fontSize:14,color:C.green,fontWeight:700,lineHeight:1.5}}>
+            ✔ Guardado solo{guardadoEn ? ` a las ${guardadoEn.toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"})}` : ""}.
+            <div style={{fontSize:13,fontWeight:600,color:C.mutedD,marginTop:2}}>
+              Puedes salir y volver: lo escrito no se pierde. La orden no queda cerrada hasta que lo hagas abajo.
+            </div>
+          </div>
+        )}
         {esReabierta && (
           <div style={{background:C.amberBg,border:`2px solid ${C.amber}`,borderRadius:14,padding:"14px 16px",
             marginBottom:16,fontSize:15,color:C.amber,fontWeight:700,lineHeight:1.55}}>
