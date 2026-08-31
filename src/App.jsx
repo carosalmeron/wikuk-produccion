@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v3.29.0";
+const APP_VERSION = "v3.30.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -3026,9 +3026,13 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
         {/* TAREAS */}
         <BloqueF titulo="🛠️ Tareas y cantidades"
           sub="Lo que ha hecho cada uno en la línea. El desalado y demás trabajo de apoyo se anota aparte, en 🤝 Apoyo.">
-          {tareas.map(t=>{
-            const dif = hecho>0 && toNum(t.cantidad)>0 ? toNum(t.cantidad) - hecho : 0;
-            const corto = dif < -0.5;
+          {tareas.map((t,idx)=>{
+            // Si el proceso está repartido entre varios, cuenta la suma
+            const mismos = tareas.filter(z=>z.proceso_id===t.proceso_id);
+            const sumaProc = mismos.reduce((a,z)=>a+toNum(z.cantidad), 0);
+            const primero = tareas.findIndex(z=>z.proceso_id===t.proceso_id) === idx;
+            const dif = hecho>0 && sumaProc>0 ? sumaProc - hecho : 0;
+            const corto = dif < -0.5 && primero;
             return (
               <div key={t.id} style={{border:`2px solid ${corto?C.amber:C.border}`,borderRadius:14,padding:"12px 13px",marginBottom:10}}>
                 <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
@@ -3050,6 +3054,11 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
                     style={{width:52,height:64,borderRadius:12,border:`2px solid ${C.border}`,background:"#fff",
                       color:C.red,fontSize:20,cursor:"pointer"}}>✕</button>
                 </div>
+                {mismos.length>1 && primero && (
+                  <div style={{fontSize:13,color:C.blue,fontWeight:700,marginTop:8}}>
+                    Repartida entre {mismos.length}: {num(sumaProc)} en total
+                  </div>
+                )}
                 {corto && (
                   <div style={{fontSize:13.5,color:C.amber,fontWeight:700,marginTop:8}}>
                     {num(-dif)} menos que el total de la línea — ¿quedaron sin hacer?
@@ -3203,9 +3212,7 @@ function HojaNumero({ titulo, valor, texto, onOk, onCerrar }) {
   const [v, setV] = useState(valor || "");
   const ABC = "ABCDEFGHIJKLMNÑOPQRSTUVWXYZ".split("");
   const SIGNOS = ["/", "-", ".", ",", "_"];
-  const teclas = texto
-    ? ["1","2","3","4","5","6","7","8","9",".","0","←"]
-    : ["1","2","3","4","5","6","7","8","9",",","0","←"];   // coma para decimales
+  const teclas = ["1","2","3","4","5","6","7","8","9",".","0","←"];
   return (
     <CapaF titulo={titulo} onCerrar={onCerrar} color={C.blue}>
       {/* Lo escrito se queda a la vista aunque se baje */}
@@ -3244,6 +3251,15 @@ function HojaNumero({ titulo, valor, texto, onOk, onCerrar }) {
               fontFamily:F.h,fontWeight:800,fontSize:30,color:C.text,cursor:"pointer"}}>{k}</button>
         ))}
       </div>
+      {!texto && (
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,maxWidth:480,marginTop:12}}>
+          {[",","00"].map(k=>(
+            <button key={k} onClick={()=>setV(v+k)}
+              style={{height:72,background:"#fff",border:`2px solid ${C.border}`,borderRadius:16,
+                fontFamily:F.h,fontWeight:800,fontSize:26,color:C.text,cursor:"pointer"}}>{k}</button>
+          ))}
+        </div>
+      )}
       <div style={{maxWidth:480,marginTop:16,display:"grid",gap:10}}>
         <BotonF alto={100} bg={C.green} color="#fff" borde={C.green} onClick={()=>onOk(v)}>✔ GUARDAR</BotonF>
         {v && <BotonF alto={72} borde={C.border} color={C.red} onClick={()=>setV("")}>Borrar todo</BotonF>}
@@ -3343,20 +3359,26 @@ const HojaPersonas = ({ titulo, gente, onOk, onCerrar }) => (
 
 function HojaProcesos({ procesos, puestos, onOk, onCerrar }) {
   const [q, setQ] = useState("");
-  const lista = procesos.filter(p => !puestos.includes(p.id) &&
-    (!q || (p.nombre||"").toLowerCase().includes(q.toLowerCase())));
+  const lista = procesos
+    .filter(p => !q || (p.nombre||"").toLowerCase().includes(q.toLowerCase()))
+    .sort((a,b) => (puestos.includes(a.id)?1:0) - (puestos.includes(b.id)?1:0));
   return (
-    <CapaF titulo="¿Qué tarea añades?" sub="Escribe para buscar" onCerrar={onCerrar} color={C.blue}>
+    <CapaF titulo="¿Qué tarea añades?" sub="Se puede repetir la misma para otra persona" onCerrar={onCerrar} color={C.blue}>
       <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Buscar…" autoFocus
         style={{width:"100%",height:72,borderRadius:16,border:`3px solid ${C.blue}`,padding:"0 18px",
           fontSize:21,marginBottom:16,color:C.text,background:"#fff",boxSizing:"border-box"}}/>
       {lista.slice(0,20).map(p=>(
         <button key={p.id} onClick={()=>onOk(p.id)}
-          style={{width:"100%",minHeight:84,borderRadius:14,border:`2px solid ${C.border}`,background:"#fff",
+          style={{width:"100%",minHeight:84,borderRadius:14,
+            border:`2px solid ${puestos.includes(p.id)?C.blue:C.border}`,
+            background: puestos.includes(p.id)?C.blueBg:"#fff",
             padding:"14px 16px",marginBottom:10,textAlign:"left",cursor:"pointer"}}>
           <div style={{fontFamily:F.h,fontWeight:800,fontSize:18,color:C.text}}>{p.nombre}</div>
           <div style={{fontSize:13,color:C.mutedD,marginTop:2}}>
             {toNum(p.tiempo_proceso)||"—"} min/{p.base_tiempo||"ud"}{p.apoyo?" · fuera de línea":""}
+            {puestos.includes(p.id) && (
+              <span style={{color:C.blue,fontWeight:700}}> · ya está puesta, se añadirá otra vez</span>
+            )}
           </div>
         </button>
       ))}
@@ -3491,13 +3513,16 @@ function HojaCerrar({ ot, p, hecho, objetivo, tareas, consumos, paros, nota, gen
     <CapaF titulo={`¿Cerramos la ${ot.linea}?`} sub={`${p.nombre} · ${num(hecho)} de ${num(objetivo)} uds`} onCerrar={onCerrar}>
       <div style={{background:"#fff",border:`2px solid ${C.border}`,borderRadius:18,padding:16,marginBottom:16}}>
         <div style={{fontFamily:F.h,fontWeight:800,fontSize:16,color:C.text,marginBottom:10}}>Esto es lo que se guarda</div>
-        {tareas.filter(t=>toNum(t.cantidad)>0).map(t=>(
-          <div key={t.id} style={{display:"flex",justifyContent:"space-between",padding:"9px 0",
-            borderBottom:`1px solid ${C.card2}`,fontSize:15.5}}>
-            <span style={{color:C.text}}>{nombreProc(t.proceso_id)} · {nombrePers(t.persona_id)}</span>
-            <b style={{color: toNum(t.cantidad)<hecho ? C.amber : C.text}}>{num(t.cantidad)} uds</b>
-          </div>
-        ))}
+        {tareas.filter(t=>toNum(t.cantidad)>0).map(t=>{
+          const suma = tareas.filter(z=>z.proceso_id===t.proceso_id).reduce((a,z)=>a+toNum(z.cantidad),0);
+          return (
+            <div key={t.id} style={{display:"flex",justifyContent:"space-between",padding:"9px 0",
+              borderBottom:`1px solid ${C.card2}`,fontSize:15.5}}>
+              <span style={{color:C.text}}>{nombreProc(t.proceso_id)} · {nombrePers(t.persona_id)}</span>
+              <b style={{color: suma<hecho ? C.amber : C.text}}>{num(t.cantidad)} uds</b>
+            </div>
+          );
+        })}
         {tareas.filter(t=>toNum(t.cantidad)>0).length===0 &&
           <div style={{fontSize:14,color:C.muted}}>Ninguna tarea con cantidad.</div>}
       </div>
