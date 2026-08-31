@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v3.25.0";
+const APP_VERSION = "v3.28.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -71,6 +71,13 @@ const DOMINIO_OPERARIO = "operario.wikuk";
 // que acepta llamadas de fuera. Para cambiarlo, deja la constante vacía.
 const API_CORREO = "https://crmwikuk.vercel.app/api/send-email";
 const correoDeUsuario = (u) => `${(u||"").trim().toLowerCase().replace(/[^a-z0-9._-]/g,"")}@${DOMINIO_OPERARIO}`;
+// T1 es el que entra antes, T2 el siguiente… sin depender de cómo estén ordenados en la lista
+const turnosOrdenados = (turnos=[]) =>
+  [...turnos].sort((a,b) => String(a.hora_inicio||"").localeCompare(String(b.hora_inicio||"")));
+const claveDeTurno = (turnos, turnoId) => {
+  const i = turnosOrdenados(turnos).findIndex(t => t.id === turnoId);
+  return `T${(i < 0 ? 0 : i) + 1}`;
+};
 // Acepta coma o punto como separador decimal (teclados móviles españoles)
 const toNum = (v) => {
   if (v === "" || v === null || v === undefined) return 0;
@@ -1471,6 +1478,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
   const [turnoId, setTurnoId] = useState(perfil?.turno || turnos[0]?.id || "");
   useEffect(()=>{ if (perfil?.turno) setTurnoId(perfil.turno); }, [perfil?.turno]);
   const [otSel, setOtSel] = useState(null);         // {linea, producto_id, cantidad, ...}
+  const [verDia, setVerDia] = useState(false);      // supervisión: los dos turnos a la vez
   const [modal, setModal] = useState(null);
 
   const [planesSem] = useCol("planes_semana");
@@ -1484,23 +1492,22 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
 
   const semanaHoy = isoWeek(hoy);
   const turno = turnos.find(t=>t.id===turnoId);
-  const iTurno = Math.max(0, turnos.findIndex(t=>t.id===turnoId));
-  const claveTurno = `T${iTurno+1}`;
+  const claveTurno = claveDeTurno(turnos, turnoId);
 
   // ── Del calendario planificado
   const otsPlan = planesSem
     .filter(w => w.semana === semanaHoy && (!centroId || w.centro === centroId))
     .flatMap(w => (w.calendario||[])
-      .filter(x => x.fecha === hoy && x.turno === claveTurno)
+      .filter(x => x.fecha === hoy && (verDia || x.turno === claveTurno))
       .map(x => ({ ...x, semana: w.semana, origen_ot: "plan" })));
 
   // ── Y las creadas a mano en Órdenes de Producción
   const nombreLinea = (id) => lineas.find(l => l.id === id)?.nombre || "";
   const otsManual = ordenes
     .filter(o => !o.cerrada && o.fecha === hoy
-      && (!o.turno_id || o.turno_id === turnoId)
+      && (verDia || !o.turno_id || o.turno_id === turnoId)
       && (!centroId || (o.centro || productos.find(p=>p.id===o.producto_id)?.centro) === centroId))
-    .map(o => ({ linea: nombreLinea(o.linea_id) || "Sin línea", turno: claveTurno,
+    .map(o => ({ linea: nombreLinea(o.linea_id) || "Sin línea", turno: o.turno_id ? claveDeTurno(turnos, o.turno_id) : claveTurno,
       fecha: o.fecha, producto_id: o.producto_id, cantidad: toNum(o.cantidad),
       orden_id: o.id, numero: o.numero, cliente: o.cliente, tipo: o.tipo, origen_ot: "manual" }));
 
@@ -1510,7 +1517,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
 
   const parteDe = (ot) => prods.find(p =>
     (ot.orden_id && p.orden_id === ot.orden_id) ||
-    (p.fecha===hoy && p.linea_nombre===ot.linea && p.turno_clave===claveTurno && p.producto_id===ot.producto_id));
+    (p.fecha===hoy && p.linea_nombre===ot.linea && p.turno_clave===(ot.turno||claveTurno) && p.producto_id===ot.producto_id));
   const abiertas = otsHoy.filter(ot => !parteDe(ot));
   const cerradasHoy = otsHoy.filter(ot => parteDe(ot));
   const cerradasTodas = prods.filter(p => p.origen==="terminal" && !p.reabierta).slice(0, 30);
@@ -1562,7 +1569,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
         )}
         {turnos.length>1 && !esOperario && (
           <div style={{display:"flex",gap:10,padding:"16px 22px 0"}}>
-            {turnos.map(t=>(
+            {turnosOrdenados(turnos).map(t=>(
               <button key={t.id} onClick={()=>setTurnoId(t.id)}
                 style={{flex:1,minHeight:64,borderRadius:14,border:`3px solid ${turnoId===t.id?C.navy:C.border}`,
                   background:turnoId===t.id?C.navy:"#fff",color:turnoId===t.id?"#fff":C.text,
@@ -1644,8 +1651,23 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
   if (vista === "ordenes") {
     return (
       <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
-        <CabF titulo="Órdenes de trabajo" sub={`${centro?.nombre||"sin centro"} · ${turno?.nombre||""} · toca tu línea`}
+        <CabF titulo="Órdenes de trabajo"
+          sub={`${centro?.nombre||"sin centro"} · ${verDia ? "todo el día" : (turno?.nombre||"")} · toca tu línea`}
           atras={()=>setVista("inicio")} onSalir={onBack}/>
+        {!esOperario && turnos.length>1 && (
+          <div style={{padding:"16px 22px 0"}}>
+            <div style={{display:"flex",gap:10}}>
+              <button onClick={()=>setVerDia(false)}
+                style={{flex:1,minHeight:60,borderRadius:14,border:`3px solid ${!verDia?C.navy:C.border}`,
+                  background:!verDia?C.navy:"#fff",color:!verDia?"#fff":C.text,
+                  fontFamily:F.h,fontWeight:800,fontSize:16,cursor:"pointer"}}>🕐 {turno?.nombre||"Mi turno"}</button>
+              <button onClick={()=>setVerDia(true)}
+                style={{flex:1,minHeight:60,borderRadius:14,border:`3px solid ${verDia?C.navy:C.border}`,
+                  background:verDia?C.navy:"#fff",color:verDia?"#fff":C.text,
+                  fontFamily:F.h,fontWeight:800,fontSize:16,cursor:"pointer"}}>📅 Ver todo el día</button>
+            </div>
+          </div>
+        )}
         <div style={{padding:22}}>
           {reabiertas.length>0 && (
             <div style={{marginBottom:22}}>
@@ -1712,6 +1734,12 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                   <div style={{fontSize:19,fontWeight:700,color:C.text,marginBottom:4}}>{p?.nombre||"?"}</div>
                   <div style={{fontSize:14,color:C.mutedD}}>
                     {num(ot.cantidad)} uds{nombreMolde(p)?` · 🔧 ${nombreMolde(p)}`:""}
+                    {verDia && ot.turno && (
+                      <span style={{marginLeft:8,background:C.card2,borderRadius:8,padding:"3px 8px",
+                        fontSize:12.5,fontWeight:800,color:C.text}}>
+                        🕐 {turnosOrdenados(turnos).find((t,i)=>`T${i+1}`===ot.turno)?.nombre || ot.turno}
+                      </span>
+                    )}
                   </div>
                   {ot.origen_ot==="manual" && (
                     <div style={{fontSize:13.5,color:C.blue,fontWeight:700,marginTop:4}}>
@@ -1773,6 +1801,12 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                   );
                 })()}
               </>
+            )}
+            {verDia && (
+              <div style={{background:C.card2,borderRadius:14,padding:"13px 15px",fontSize:14,color:C.mutedD,lineHeight:1.6}}>
+                Estás viendo los dos turnos. El cierre se hace turno a turno:
+                vuelve a <b style={{color:C.text}}>{turno?.nombre||"tu turno"}</b> para cerrarlo.
+              </div>
             )}
             <BotonF alto={88} borde={C.border} onClick={()=>setVista("cerradas")}>🗂️ Ver órdenes cerradas</BotonF>
           </div>
@@ -2558,7 +2592,7 @@ function CierreTurno({ ots, partes, apoyos=[], productos, mps, procesos=[], cent
 
   const cerrarYEnviar = async (accion) => {
     setGuardando(true);
-    const idCierre = `${hoy}__${claveDe(turno,0)}__${centro?.id||""}`;
+    const idCierre = `${hoy}__${turno?.id||"sin-turno"}__${centro?.id||""}`;
     const asunto = `Producción ${turno?.nombre||""} · ${fechaESLarga(hoy)} · ${centro?.nombre||""}`;
     const html = htmlCorreo();
     await save("cierres_turno", idCierre, {
@@ -2791,7 +2825,6 @@ function CierreTurno({ ots, partes, apoyos=[], productos, mps, procesos=[], cent
     </CapaF>
   );
 }
-const claveDe = (turno, i) => turno?.id || `T${i+1}`;
 
 // ── LA ORDEN DE TRABAJO: todo el turno en una pantalla ─────────────────────────
 function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, procesos, claveTurno, turno, hoy, apoyosHoy=[], onApoyo, onSalir, onVolver }) {
@@ -2914,7 +2947,11 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
 
         {/* MATERIA */}
         <BloqueF titulo="📦 Materia prima usada" sub="Metros gastados y de qué lote. De aquí sale el rendimiento.">
-          {consumos.length===0 && <div style={{fontSize:14,color:C.muted}}>Este producto no tiene escandallo.</div>}
+          {consumos.length===0 && (
+            <div style={{fontSize:14,color:C.mutedD,lineHeight:1.6,marginBottom:12}}>
+              Este producto no tiene escandallo. Añade abajo la materia que se haya usado.
+            </div>
+          )}
           {consumos.map((c,i)=>{
             const mp = mps.find(m=>m.id===c.materia_id);
             const r = rendDe(c), obj = objRendDe(c);
@@ -2924,7 +2961,11 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
                 paddingBottom:14, marginBottom: i<consumos.length-1?14:0}}>
                 <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap",marginBottom:10}}>
                   <span style={{flex:1,minWidth:150}}>
-                    <b style={{fontSize:18,color:C.text}}>{mp?.nombre||"?"}</b>
+                    <button onClick={()=>setModal({tipo:"materia", onOk:v=>setCons(i,"materia_id",v)})}
+                      style={{background:"none",border:"none",padding:0,cursor:"pointer",textAlign:"left"}}>
+                      <b style={{fontSize:18,color:C.text,borderBottom:`2px dotted ${C.border}`}}>{mp?.nombre||"＋ elegir materia"}</b>
+                      <span style={{fontSize:13,color:C.blue,marginLeft:6}}>cambiar</span>
+                    </button>
                     <div style={{fontSize:13,color:C.mutedD,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap",marginTop:3}}>
                       <button onClick={()=>setModal({tipo:"num",titulo:`Capas de ${mp?.nombre||""}`,
                         valor:String(toNum(c.capas)||""), onOk:v=>setCons(i,"capas",toNum(v))})}
@@ -2948,6 +2989,12 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
                       borderRadius:12,fontFamily:F.h,fontWeight:800,fontSize:15,cursor:"pointer"}}>
                     {c.lote ? `📦 ${c.lote}` : "＋ poner lote"}
                   </button>
+                  <button onClick={()=>{
+                      if (!window.confirm(`¿Quitar ${mp?.nombre||"esta materia"} del parte?`)) return;
+                      setConsumos(cs=>cs.filter((_,k)=>k!==i));
+                    }}
+                    style={{width:52,height:64,borderRadius:12,border:`2px solid ${C.border}`,background:"#fff",
+                      color:C.red,fontSize:20,cursor:"pointer",flexShrink:0}}>✕</button>
                 </div>
                 <div style={{borderRadius:12,padding:"11px 13px",fontSize:14,fontWeight:700,lineHeight:1.55,
                   background: r==null?C.card2 : bien?C.greenBg:C.redBg,
@@ -2965,6 +3012,15 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
               </div>
             );
           })}
+          <button onClick={()=>setModal({tipo:"materia", onOk:v=>setConsumos(cs=>[...cs,
+              { materia_id:v, capas: capasDe(v), lote:"", metros_consumidos:0 }])})}
+            style={{width:"100%",minHeight:70,borderRadius:14,border:`3px dashed ${C.border}`,background:"#fff",
+              fontFamily:F.h,fontWeight:800,fontSize:17,color:C.mutedD,cursor:"pointer",marginTop:12}}>
+            ＋ Añadir otra materia o lote
+          </button>
+          <div style={{fontSize:12.5,color:C.mutedD,lineHeight:1.55,marginTop:8}}>
+            Para cuando se cambia de tripa a media tirada, o se gastan dos lotes de la misma materia.
+          </div>
         </BloqueF>
 
         {/* TAREAS */}
@@ -3090,6 +3146,9 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
         onOk={v=>{ modal.onOk(v); setModal(null); }} onCerrar={()=>setModal(null)}/>}
       {modal?.tipo==="lote" && <HojaNumero titulo={modal.titulo} valor={modal.valor} texto
         onOk={v=>{ modal.onOk(v); setModal(null); }} onCerrar={()=>setModal(null)}/>}
+      {modal?.tipo==="materia" && <HojaMaterias mps={mps} producto={p}
+        puestas={consumos.map(c=>c.materia_id)}
+        onOk={v=>{ modal.onOk(v); setModal(null); }} onCerrar={()=>setModal(null)}/>}
       {modal?.tipo==="persona" && <HojaPersonas titulo={modal.titulo} gente={gente.filter(u=>!u.es_apoyo)}
         onOk={v=>{ modal.onOk(v); setModal(null); }} onCerrar={()=>setModal(null)}/>}
       {modal?.tipo==="proceso" && <HojaProcesos procesos={procesos.filter(z=>!z.apoyo)} puestos={tareas.map(t=>t.proceso_id)}
@@ -3205,6 +3264,40 @@ function HojaTexto({ titulo, valor, onOk, onCerrar }) {
       <div style={{maxWidth:480,marginTop:16}}>
         <BotonF alto={100} bg={C.green} color="#fff" borde={C.green} onClick={()=>onOk(v)}>✔ GUARDAR</BotonF>
       </div>
+    </CapaF>
+  );
+}
+
+function HojaMaterias({ mps, producto, puestas=[], onOk, onCerrar }) {
+  const [q, setQ] = useState("");
+  const delEscandallo = (producto?.materias_asignadas||[]).map(m=>m.mp_id);
+  const lista = mps
+    .filter(m => !q || `${m.nombre} ${m.codigo||""}`.toLowerCase().includes(q.toLowerCase()))
+    .sort((a,b) => (delEscandallo.includes(b.id)?1:0) - (delEscandallo.includes(a.id)?1:0));
+  return (
+    <CapaF titulo="¿Qué materia se ha usado?" sub="Las de la ficha del producto salen primero"
+      onCerrar={onCerrar} color={C.blue}>
+      <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Buscar…" autoFocus
+        style={{width:"100%",height:72,borderRadius:16,border:`3px solid ${C.blue}`,padding:"0 18px",
+          fontSize:21,marginBottom:16,color:C.text,background:"#fff",boxSizing:"border-box"}}/>
+      {lista.slice(0,30).map(m=>{
+        const suya = delEscandallo.includes(m.id);
+        const yaEsta = puestas.includes(m.id);
+        return (
+          <button key={m.id} onClick={()=>onOk(m.id)}
+            style={{width:"100%",minHeight:84,borderRadius:14,border:`2px solid ${suya?C.blue:C.border}`,
+              background: suya?C.blueBg:"#fff", padding:"14px 16px",marginBottom:10,textAlign:"left",cursor:"pointer"}}>
+            <div style={{fontFamily:F.h,fontWeight:800,fontSize:18,color:C.text}}>
+              {m.nombre}{yaEsta && <span style={{fontSize:13,color:C.mutedD,fontWeight:600}}> · ya está puesta</span>}
+            </div>
+            <div style={{fontSize:13,color:C.mutedD,marginTop:2}}>
+              {suya ? "de la ficha del producto" : "otra materia"}
+              {toNum(m.precio_ud)>0 && ` · ${toNum(m.precio_ud).toFixed(3)} €/m`}
+            </div>
+          </button>
+        );
+      })}
+      {lista.length===0 && <Empty icon="🔍" text="Ninguna materia con ese nombre"/>}
     </CapaF>
   );
 }
