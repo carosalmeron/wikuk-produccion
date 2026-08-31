@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v3.32.0";
+const APP_VERSION = "v3.34.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -1485,6 +1485,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
   const [prods]     = useCol("producciones");
   const [incid]     = useCol("incidencias");
   const [apoyos]    = useCol("apoyos");
+  const [apoyosCerrados] = useCol("apoyos_cerrados");
   const [cierres]   = useCol("cierres_turno", "fecha");
   const [borradores] = useCol("borradores");
   const [costesCfg] = useCol("config_costes");
@@ -1820,7 +1821,9 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
 
           {modal?.tipo==="cierreTurno" && (
             <CierreTurno ots={otsHoy} partes={prods.filter(p=>p.fecha===hoy)}
-              apoyos={apoyos.filter(a=>a.fecha===hoy && !a.cierre_id && (!centroId || !a.centro || a.centro===centroId))}
+              apoyos={apoyos.filter(a=>a.fecha===hoy && !a.cierre_id
+                && (!a.para || a.para==="este")
+                && (!centroId || !a.centro || a.centro===centroId))}
               productos={productos} mps={mps} procesos={procesos}
               centros={centros} centro={centro} turno={turno} hoy={hoy} perfil={perfil} usuarios={usuarios}
               ggMes={ggMes} onCerrar={()=>setModal(null)} onHecho={()=>{ setModal(null); setVista("inicio"); }}/>
@@ -2068,16 +2071,17 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                 </div>
                 <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:14}}>
                   {pendientes.map((x,i)=>{
-                    const hechoYa = hoyApoyos.filter(a=>a.proceso_id===x.cat.id);
+                    const hechoYa = hoyApoyos.filter(a=>a.proceso_id===x.cat.id && (!a.para || a.para==="este"));
                     const yaCant = hechoYa.reduce((a,z)=>a+toNum(z.cantidad),0);
                     const falta = Math.max(0, x.cantidad - yaCant);
-                    const pct = x.cantidad>0 ? yaCant/x.cantidad : 0;
-                    const estado = falta<=0 ? "cerrada" : yaCant>0 ? "a medias" : "sin empezar";
+                    const pct = x.cantidad>0 ? Math.min(1, yaCant/x.cantidad) : 0;
+                    const idCierreAp = `${hoy}__${x.cat.id}__${centroId||"sin"}`;
+                    const cerradaMano = apoyosCerrados.some(z=>z.id===idCierreAp);
+                    const estado = cerradaMano ? "cerrada" : yaCant>0 ? "a medias" : "sin empezar";
                     return (
-                      <button key={i} onClick={()=>setModal({tipo:"apoyo", pre:{
-                        proceso_id:x.cat.id, cantidad: falta>0 ? String(Math.round(falta)) : "" }})}
-                        style={{background: falta<=0?C.greenBg:"#fff", border:`3px solid ${falta<=0?C.green:C.blue}`,
-                          borderRadius:18,padding:16,cursor:"pointer",textAlign:"left",width:"100%"}}>
+                      <div key={i}
+                        style={{background: cerradaMano?C.greenBg:"#fff", border:`3px solid ${cerradaMano?C.green:C.blue}`,
+                          borderRadius:18,padding:16,textAlign:"left",width:"100%"}}>
                         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:6}}>
                           <span style={{fontFamily:F.h,fontWeight:800,fontSize:17,color:C.text,minWidth:0}}>{x.cat.nombre}</span>
                           <span style={{flexShrink:0,fontSize:12,fontWeight:800,borderRadius:20,padding:"5px 11px",
@@ -2096,13 +2100,54 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                               ? <>de {x.de.length} órdenes: {x.de.map(d=>`${d.linea} ${num(d.cantidad)}`).join(" · ")}</>
                               : <>{x.de[0].producto} · {x.de[0].linea}</>}
                           </div>
-                          {yaCant>0 && falta>0 && (
+                          {yaCant>0 && !cerradaMano && (
                             <div style={{height:8,background:C.card2,borderRadius:4,overflow:"hidden",marginTop:8}}>
-                              <div style={{width:Math.min(100,pct*100)+"%",height:"100%",background:C.amber,borderRadius:4}}/>
+                              <div style={{width:Math.min(100,pct*100)+"%",height:"100%",
+                                background: yaCant>x.cantidad+0.5 ? C.red : C.amber, borderRadius:4}}/>
+                            </div>
+                          )}
+                          {(() => {
+                            const guardado = hoyApoyos.filter(a=>a.proceso_id===x.cat.id && a.para && a.para!=="este")
+                              .reduce((a,z)=>a+toNum(z.cantidad),0);
+                            if (!guardado) return null;
+                            return <div style={{color:C.amber,fontWeight:700,marginTop:6}}>
+                              + {num(guardado)} {x.base==="m"?"m":"uds"} desalados para más adelante
+                            </div>;
+                          })()}
+                          {yaCant > x.cantidad + 0.5 && (
+                            <div style={{color:C.red,fontWeight:700,marginTop:6}}>
+                              ⚠️ Hay {num(yaCant-x.cantidad)} {x.base==="m"?"m":"uds"} de más para este turno.
+                              Si era para otro, cámbialo con la ✕ y vuelve a anotarlo.
                             </div>
                           )}
                         </div>
-                      </button>
+                        {!cerradaMano ? (
+                          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginTop:12}}>
+                            <BotonF alto={72} borde={C.blue} color={C.blue}
+                              onClick={()=>setModal({tipo:"apoyo", pre:{
+                                proceso_id:x.cat.id, cantidad: falta>0 ? String(Math.round(falta)) : "" }})}>
+                              ＋ Anotar
+                            </BotonF>
+                            <BotonF alto={72} bg={yaCant>0?C.green:C.card2} color={yaCant>0?"#fff":C.muted}
+                              borde={yaCant>0?C.green:C.border} disabled={yaCant<=0}
+                              onClick={async ()=>{
+                                if (!window.confirm(`¿Cerrar ${x.cat.nombre}?\n\nAnotados ${num(yaCant)} de ${num(x.cantidad)} ${x.base==="m"?"m":"uds"}.`)) return;
+                                await save("apoyos_cerrados", idCierreAp, {
+                                  fecha: hoy, proceso_id: x.cat.id, proceso: x.cat.nombre, centro: centroId,
+                                  cantidad_pedida: x.cantidad, cantidad_hecha: yaCant,
+                                  cerrado_por: perfil?.nombre||"", cerrado_at: new Date().toISOString(),
+                                });
+                              }}>✔ Cerrar</BotonF>
+                          </div>
+                        ) : (
+                          <button onClick={async ()=>{
+                              if (!window.confirm(`¿Reabrir ${x.cat.nombre}?`)) return;
+                              await del("apoyos_cerrados", idCierreAp);
+                            }}
+                            style={{width:"100%",marginTop:12,background:"none",border:"none",color:C.mutedD,
+                              fontSize:14,fontWeight:700,cursor:"pointer",padding:8}}>↺ Reabrir</button>
+                        )}
+                      </div>
                     );
                   })}
                 </div>
@@ -2117,6 +2162,21 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
           {hoyApoyos.length>0 && (
             <div style={{fontFamily:F.h,fontWeight:800,fontSize:17,color:C.text,marginBottom:10}}>Anotado hoy</div>
           )}
+          {(() => {
+            const vistos = {};
+            const dup = hoyApoyos.filter(a=>{
+              const k = `${a.proceso_id}|${a.cantidad}|${a.lote||""}|${a.persona||""}`;
+              if (vistos[k]) return true; vistos[k] = 1; return false;
+            });
+            if (!dup.length) return null;
+            return (
+              <div style={{background:C.amberBg,border:`2px solid ${C.amber}`,borderRadius:14,padding:"13px 15px",
+                marginBottom:12,fontSize:14,color:C.amber,fontWeight:700,lineHeight:1.55}}>
+                ⚠️ Hay {dup.length} anotación{dup.length!==1?"es":""} repetida{dup.length!==1?"s":""} (mismo proceso, cantidad y lote).
+                Bórrala con la ✕ si se guardó dos veces.
+              </div>
+            );
+          })()}
           {hoyApoyos.map(a=>(
             <div key={a.id} style={{background:"#fff",border:`2px solid ${C.border}`,borderRadius:16,padding:15,marginBottom:11,
               display:"flex",justifyContent:"space-between",alignItems:"center",gap:12}}>
@@ -2126,13 +2186,24 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                   {num(a.cantidad)} {a.base==="m"?"m":"uds"} · 👤 {a.persona||"—"}
                   {toNum(a.n_personas)>1 && ` (${a.n_personas} × ${Math.round(toNum(a.minutos_por_persona))} min)`}
                   {a.lote?` · 📦 ${a.lote}`:""}
-                  {a.extra && <span style={{color:C.blue,fontWeight:700}}> · extra</span>}
+                  {a.para==="siguiente" && <span style={{color:C.amber,fontWeight:700}}> · para el turno siguiente</span>}
+                  {a.para==="otro" && <span style={{color:C.blue,fontWeight:700}}> · para otro día</span>}
                 </div>
               </div>
-              <div style={{textAlign:"right",flexShrink:0}}>
-                <div style={{fontFamily:F.h,fontWeight:900,fontSize:22,color:a.cierre_id?C.mutedD:C.blue}}>{Math.round(toNum(a.minutos))}</div>
-                <div style={{fontSize:12,color:C.mutedD}}>min</div>
-                {a.cierre_id && <div style={{fontSize:10.5,color:C.green,fontWeight:700}}>✔ imputado</div>}
+              <div style={{display:"flex",alignItems:"center",gap:10,flexShrink:0}}>
+                <div style={{textAlign:"right"}}>
+                  <div style={{fontFamily:F.h,fontWeight:900,fontSize:22,color:a.cierre_id?C.mutedD:C.blue}}>{Math.round(toNum(a.minutos))}</div>
+                  <div style={{fontSize:12,color:C.mutedD}}>min</div>
+                  {a.cierre_id && <div style={{fontSize:10.5,color:C.green,fontWeight:700}}>✔ imputado</div>}
+                </div>
+                {!a.cierre_id && (
+                  <button onClick={async ()=>{
+                      if (!window.confirm(`¿Borrar esta anotación?\n\n${a.proceso} · ${num(a.cantidad)} ${a.base==="m"?"m":"uds"} · ${a.persona||""}`)) return;
+                      await del("apoyos", a.id);
+                    }}
+                    style={{width:52,height:56,borderRadius:12,border:`2px solid ${C.border}`,background:"#fff",
+                      color:C.red,fontSize:19,cursor:"pointer"}}>✕</button>
+                )}
               </div>
             </div>
           ))}
@@ -2187,6 +2258,7 @@ function HojaApoyo({ procesos, mps, gente, perfil, centroId, claveTurno, hoy, pr
   const [lote, setLote] = useState("");
   const [mpId, setMpId] = useState("");
   const [quienes, setQuienes] = useState([]);   // pueden ser varios
+  const [para, setPara] = useState(pre?.extra ? "otro" : "este");   // este · siguiente · otro
   const [modal, setModal] = useState(null);
   const [guardando, setGuardando] = useState(false);
 
@@ -2215,7 +2287,8 @@ function HojaApoyo({ procesos, mps, gente, perfil, centroId, claveTurno, hoy, pr
       materia_id: mpId, lote: lote.trim(),
       personas_id: quienes,
       persona: quienes.map(id => gente.find(u=>u.id===id)?.nombre).filter(Boolean).join(", "),
-      extra: !!pre?.extra,
+      para,                                   // a qué turno se le carga
+      extra: !!pre?.extra || para === "otro",
       registrado_por: perfil?.nombre || "terminal", registrado_at: new Date().toISOString(),
     });
     setGuardando(false);
@@ -2640,7 +2713,17 @@ function CierreTurno({ ots, partes, apoyos=[], productos, mps, procesos=[], cent
       }
     }
     // El apoyo imputado queda marcado: si hay otro turno, no se cuenta dos veces
-    for (const a of apoyos) if (a.id) await save("apoyos", a.id, { cierre_id: idCierre });
+    for (const ap of apoyos) if (ap.id) await save("apoyos", ap.id, { cierre_id: idCierre });
+    // Lo guardado para el siguiente turno pasa a estar disponible
+    try {
+      const snap = await getDocs(collection(db, "apoyos"));
+      for (const d of snap.docs) {
+        const dato = d.data();
+        if (dato.fecha === hoy && dato.para === "siguiente" && !dato.cierre_id) {
+          await save("apoyos", d.id, { para: "este" });
+        }
+      }
+    } catch (e) { /* si falla, se queda esperando */ }
 
     setGuardando(false);
     if (accion === "imprimir") imprimirHTML(htmlInforme());
