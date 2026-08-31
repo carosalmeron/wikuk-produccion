@@ -1822,8 +1822,21 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
           {modal?.tipo==="cierreTurno" && (
             <CierreTurno ots={otsHoy} partes={prods.filter(p=>p.fecha===hoy)}
               apoyos={apoyos.filter(a=>a.fecha===hoy && !a.cierre_id
-                && (!a.para || a.para==="este")
                 && (!centroId || !a.centro || a.centro===centroId))}
+              apoyoPedidoHoy={(() => {
+                const acum = {};
+                otsHoy.forEach(ot => {
+                  const p = prodDe(ot.producto_id);
+                  (p?.procesos_asignados||[]).forEach(pa => {
+                    const cat = procesos.find(z=>z.id===pa.proceso_id);
+                    if (!cat?.apoyo) return;
+                    const base = pa.base_tiempo || cat.base_tiempo || "ud";
+                    const uds = toNum(parteDe(ot)?.cantidad) || toNum(ot.cantidad);
+                    acum[cat.id] = (acum[cat.id]||0) + (base==="m" ? toNum(p?.metros_finales)*(toNum(pa.capas)||1)*uds : uds);
+                  });
+                });
+                return acum;
+              })()}
               productos={productos} mps={mps} procesos={procesos}
               centros={centros} centro={centro} turno={turno} hoy={hoy} perfil={perfil} usuarios={usuarios}
               ggMes={ggMes} onCerrar={()=>setModal(null)} onHecho={()=>{ setModal(null); setVista("inicio"); }}/>
@@ -2071,7 +2084,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                 </div>
                 <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:14}}>
                   {pendientes.map((x,i)=>{
-                    const hechoYa = hoyApoyos.filter(a=>a.proceso_id===x.cat.id && (!a.para || a.para==="este"));
+                    const hechoYa = hoyApoyos.filter(a=>a.proceso_id===x.cat.id);
                     const yaCant = hechoYa.reduce((a,z)=>a+toNum(z.cantidad),0);
                     const falta = Math.max(0, x.cantidad - yaCant);
                     const pct = x.cantidad>0 ? Math.min(1, yaCant/x.cantidad) : 0;
@@ -2106,18 +2119,9 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                                 background: yaCant>x.cantidad+0.5 ? C.red : C.amber, borderRadius:4}}/>
                             </div>
                           )}
-                          {(() => {
-                            const guardado = hoyApoyos.filter(a=>a.proceso_id===x.cat.id && a.para && a.para!=="este")
-                              .reduce((a,z)=>a+toNum(z.cantidad),0);
-                            if (!guardado) return null;
-                            return <div style={{color:C.amber,fontWeight:700,marginTop:6}}>
-                              + {num(guardado)} {x.base==="m"?"m":"uds"} desalados para más adelante
-                            </div>;
-                          })()}
                           {yaCant > x.cantidad + 0.5 && (
-                            <div style={{color:C.red,fontWeight:700,marginTop:6}}>
-                              ⚠️ Hay {num(yaCant-x.cantidad)} {x.base==="m"?"m":"uds"} de más para este turno.
-                              Si era para otro, cámbialo con la ✕ y vuelve a anotarlo.
+                            <div style={{color:C.blue,fontWeight:700,marginTop:6}}>
+                              + {num(yaCant-x.cantidad)} {x.base==="m"?"m":"uds"} de sobra, para lo que venga después
                             </div>
                           )}
                         </div>
@@ -2186,8 +2190,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                   {num(a.cantidad)} {a.base==="m"?"m":"uds"} · 👤 {a.persona||"—"}
                   {toNum(a.n_personas)>1 && ` (${a.n_personas} × ${Math.round(toNum(a.minutos_por_persona))} min)`}
                   {a.lote?` · 📦 ${a.lote}`:""}
-                  {a.para==="siguiente" && <span style={{color:C.amber,fontWeight:700}}> · para el turno siguiente</span>}
-                  {a.para==="otro" && <span style={{color:C.blue,fontWeight:700}}> · para otro día</span>}
+                  {a.extra && <span style={{color:C.blue,fontWeight:700}}> · extra</span>}
                 </div>
               </div>
               <div style={{display:"flex",alignItems:"center",gap:10,flexShrink:0}}>
@@ -2288,7 +2291,7 @@ function HojaApoyo({ procesos, mps, gente, perfil, centroId, claveTurno, hoy, pr
       personas_id: quienes,
       persona: quienes.map(id => gente.find(u=>u.id===id)?.nombre).filter(Boolean).join(", "),
       para,                                   // a qué turno se le carga
-      extra: !!pre?.extra || para === "otro",
+      extra: !!pre?.extra,
       registrado_por: perfil?.nombre || "terminal", registrado_at: new Date().toISOString(),
     });
     setGuardando(false);
@@ -2407,7 +2410,7 @@ function HojaApoyo({ procesos, mps, gente, perfil, centroId, claveTurno, hoy, pr
 }
 
 // ── CIERRE DEL TURNO E INFORME ─────────────────────────────────────────────────
-function CierreTurno({ ots, partes, apoyos=[], productos, mps, procesos=[], centros, centro, turno, hoy, perfil, usuarios,
+function CierreTurno({ ots, partes, apoyos=[], apoyoPedidoHoy={}, productos, mps, procesos=[], centros, centro, turno, hoy, perfil, usuarios,
                        ggMes, onCerrar, onHecho }) {
   const [guardando, setGuardando] = useState(false);
 
@@ -2453,9 +2456,34 @@ function CierreTurno({ ots, partes, apoyos=[], productos, mps, procesos=[], cent
     ventaObj:a.ventaObj+f.ventaObj, ventaReal:a.ventaReal+f.ventaReal,
   }), {plan:0,real:0,objMat:0,objMO:0,objApoyo:0,realMat:0,realMO:0,realApoyo:0,ventaObj:0,ventaReal:0});
 
-  // ── El trabajo de apoyo lleva su propia cuenta: lo de hoy puede ser para mañana
-  const minApoyo    = apoyos.reduce((a,x)=>a+toNum(x.minutos), 0);
-  const minApoyoTeo = apoyos.reduce((a,x)=>a+(toNum(x.minutos_teoricos)||toNum(x.minutos)), 0);
+  // ── El apoyo se reparte solo: a este turno lo que pedían sus órdenes; el resto queda de sobra
+  const repartoApoyo = (() => {
+    const restante = { ...apoyoPedidoHoy };
+    const deHoy = [], sobra = [];
+    for (const a of apoyos) {
+      const pide = restante[a.proceso_id] ?? 0;
+      const cant = toNum(a.cantidad);
+      if (pide <= 0.5) { sobra.push({ ...a, cantidad_usada: 0 }); continue; }
+      if (cant <= pide) {
+        restante[a.proceso_id] = pide - cant;
+        deHoy.push({ ...a, cantidad_usada: cant });
+      } else {
+        // Se parte: una parte es de hoy y el resto queda para lo que venga
+        const frac = pide / cant;
+        restante[a.proceso_id] = 0;
+        deHoy.push({ ...a, cantidad_usada: pide, minutos: toNum(a.minutos)*frac,
+          minutos_teoricos: (toNum(a.minutos_teoricos)||toNum(a.minutos))*frac, partido: true });
+        sobra.push({ ...a, cantidad_usada: cant - pide, minutos: toNum(a.minutos)*(1-frac) });
+      }
+    }
+    return { deHoy, sobra };
+  })();
+  const apoyosTurno = repartoApoyo.deHoy;
+  const sobraApoyo  = repartoApoyo.sobra;
+  const minSobra    = sobraApoyo.reduce((a,x)=>a+toNum(x.minutos), 0);
+
+  const minApoyo    = apoyosTurno.reduce((a,x)=>a+toNum(x.minutos), 0);
+  const minApoyoTeo = apoyosTurno.reduce((a,x)=>a+(toNum(x.minutos_teoricos)||toNum(x.minutos)), 0);
   const costeApoyo    = (minApoyo/60) * TARIFA_MO;
   const costeApoyoTeo = (minApoyoTeo/60) * TARIFA_MO;
   const desvioApoyo   = costeApoyo - costeApoyoTeo;
@@ -2713,17 +2741,15 @@ function CierreTurno({ ots, partes, apoyos=[], productos, mps, procesos=[], cent
       }
     }
     // El apoyo imputado queda marcado: si hay otro turno, no se cuenta dos veces
-    for (const ap of apoyos) if (ap.id) await save("apoyos", ap.id, { cierre_id: idCierre });
-    // Lo guardado para el siguiente turno pasa a estar disponible
-    try {
-      const snap = await getDocs(collection(db, "apoyos"));
-      for (const d of snap.docs) {
-        const dato = d.data();
-        if (dato.fecha === hoy && dato.para === "siguiente" && !dato.cierre_id) {
-          await save("apoyos", d.id, { para: "este" });
-        }
+    // Se marca lo consumido; lo que se partió guarda cuánto queda libre
+    for (const ap of apoyosTurno) {
+      if (!ap.id) continue;
+      if (ap.partido) {
+        await save("apoyos", ap.id, { usado_en: idCierre, cantidad_usada: ap.cantidad_usada });
+      } else {
+        await save("apoyos", ap.id, { cierre_id: idCierre });
       }
-    } catch (e) { /* si falla, se queda esperando */ }
+    }
 
     setGuardando(false);
     if (accion === "imprimir") imprimirHTML(htmlInforme());
@@ -2807,17 +2833,20 @@ function CierreTurno({ ots, partes, apoyos=[], productos, mps, procesos=[], cent
           </div>
         );
       })()}
-      {apoyos.length>0 && (
+      {apoyosTurno.length>0 && (
         <BloqueF titulo="🤝 Trabajo de apoyo" borde={desvioApoyo>0?C.amber:C.green}
-          sub="Aquí se mide si el desalado va a ritmo. A los productos se les cobra su apoyo teórico, porque lo de hoy puede ser para mañana.">
-          {apoyos.map((a,i)=>{
+          sub="Se ha repartido solo: a este turno lo que pedían sus órdenes. Lo demás queda para lo que venga después.">
+          {apoyosTurno.map((a,i)=>{
             const teo = toNum(a.minutos_teoricos)||toNum(a.minutos), real = toNum(a.minutos);
             return (
               <div key={i} style={{padding:"8px 0",borderBottom:i<apoyos.length-1?`1px solid ${C.card2}`:"none"}}>
                 <div style={{display:"flex",justifyContent:"space-between",fontSize:14.5,gap:10}}>
                   <span style={{color:C.text,minWidth:0}}>{a.proceso}
-                    <div style={{fontSize:12.5,color:C.mutedD}}>{num(a.cantidad)} {a.base==="m"?"m":"uds"} · {a.persona||"—"}
-                      {a.lote?` · 📦 ${a.lote}`:""}</div>
+                    <div style={{fontSize:12.5,color:C.mutedD}}>
+                      {num(a.cantidad_usada ?? a.cantidad)} {a.base==="m"?"m":"uds"} · {a.persona||"—"}
+                      {a.lote?` · 📦 ${a.lote}`:""}
+                      {a.partido && <span style={{color:C.blue,fontWeight:700}}> · parte de {num(a.cantidad)}</span>}
+                    </div>
                   </span>
                   <span style={{flexShrink:0,textAlign:"right"}}>
                     <b style={{color:real>teo+1?C.amber:C.text}}>{Math.round(real)} min</b>
@@ -2835,6 +2864,13 @@ function CierreTurno({ ots, partes, apoyos=[], productos, mps, procesos=[], cent
               <span style={{color:C.mutedD}}>Ha costado</span>
               <b style={{color:desvioApoyo>0?C.amber:C.green}}>{eur(costeApoyo)}</b>
             </div>
+            {minSobra>0.5 && (
+              <div style={{background:C.blueBg,borderRadius:9,padding:"9px 11px",marginTop:6,
+                fontSize:12.5,color:C.blue,fontWeight:700,lineHeight:1.5}}>
+                Quedan {Math.round(minSobra)} min de desalado de sobra ({eur(minSobra/60*TARIFA_MO)}),
+                que se cargarán al turno que los use.
+              </div>
+            )}
             {Math.abs(desvioApoyo)>0.5 && (
               <div style={{display:"flex",justifyContent:"space-between",borderTop:`1px solid ${C.border}`,marginTop:5,paddingTop:5}}>
                 <span style={{color:C.text,fontWeight:700}}>{desvioApoyo>0?"De más":"De menos"}</span>
