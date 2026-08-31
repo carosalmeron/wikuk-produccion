@@ -1826,18 +1826,27 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                           : reabiertas.length ? `hay ${reabiertas.length} reabierta(s)`
                           : "genera el informe y lo envía"}
                         onClick={()=>setModal({tipo:"cierreTurno"})}>🔒 CERRAR EL TURNO</BotonF>
-                      {apoyoFalta.length>0 && abiertas.length===0 && reabiertas.length===0 && (
-                        <div style={{background:C.amberBg,border:`2px solid ${C.amber}`,borderRadius:14,padding:"14px 16px",
-                          fontSize:15,color:C.amber,fontWeight:700,lineHeight:1.6}}>
-                          🤝 ¿Se ha anotado el desalado de hoy?
-                          <div style={{fontSize:13.5,fontWeight:600,marginTop:4}}>
-                            Si no, el informe no dirá lo que ha costado. Puedes cerrar igual.
+                      {abiertas.length===0 && reabiertas.length===0 && (() => {
+                        const delDia = apoyos.filter(a=>a.fecha===hoy && (!centroId || !a.centro || a.centro===centroId));
+                        const sinValidar = delDia.filter(a=>!a.validado_por && !a.cierre_id).length;
+                        if (!apoyoFalta.length && !sinValidar) return null;
+                        return (
+                          <div style={{background:C.amberBg,border:`2px solid ${C.amber}`,borderRadius:14,padding:"14px 16px",
+                            fontSize:15,color:C.amber,fontWeight:700,lineHeight:1.6}}>
+                            {sinValidar
+                              ? <>🤝 Hay {sinValidar} anotación{sinValidar!==1?"es":""} de desalado sin validar.</>
+                              : <>🤝 ¿Se ha anotado el desalado de hoy?</>}
+                            <div style={{fontSize:13.5,fontWeight:600,marginTop:4}}>
+                              Puedes cerrar igual, pero conviene repasarlo: entra en el coste del turno.
+                            </div>
+                            <div style={{marginTop:10}}>
+                              <BotonF alto={80} borde={C.amber} color={C.amber} onClick={()=>setVista("apoyo")}>
+                                🤝 Ir a {sinValidar?"validarlo":"anotarlo"}
+                              </BotonF>
+                            </div>
                           </div>
-                          <div style={{marginTop:10}}>
-                            <BotonF alto={80} borde={C.amber} color={C.amber} onClick={()=>setVista("apoyo")}>🤝 Ir a anotarlo</BotonF>
-                          </div>
-                        </div>
-                      )}
+                        );
+                      })()}
                     </>
                   );
                 })()}
@@ -2065,8 +2074,9 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
   if (vista === "apoyo") {
     const hoyApoyos = apoyos.filter(a=>a.fecha===hoy && (!centroId || !a.centro || a.centro===centroId));
     const totalMin = hoyApoyos.reduce((a,x)=>a+toNum(x.minutos),0);
+    const validado = hoyApoyos.length>0 && hoyApoyos.every(a=>a.validado_por);
 
-    // La hoja de trabajo del día: lo que piden los partes, sumando las órdenes iguales
+    // 1 · Lo que piden los partes de hoy
     const acum = {};
     otsHoy.forEach(ot => {
       const p = prodDe(ot.producto_id);
@@ -2083,63 +2093,122 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
     });
     const pedido = Object.values(acum);
 
+    // 2 y 3 · Lo hecho, y cuánto de eso sobra para después
+    const hechoPorProc = {};
+    hoyApoyos.forEach(a => {
+      if (!hechoPorProc[a.proceso_id]) hechoPorProc[a.proceso_id] = { proceso:a.proceso, base:a.base, cant:0, min:0 };
+      hechoPorProc[a.proceso_id].cant += toNum(a.cantidad);
+      hechoPorProc[a.proceso_id].min  += toNum(a.minutos);
+    });
+    const sobrante = Object.entries(hechoPorProc).map(([pid,x]) => {
+      const pide = acum[pid]?.cantidad || 0;
+      return { ...x, pide, sobra: Math.max(0, x.cant - pide) };
+    }).filter(x => x.sobra > 0.5);
+
     return (
       <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
         <CabF titulo="🤝 Trabajo de apoyo" sub={fechaESLarga(hoy)}
           atras={()=>setVista("inicio")} onSalir={onBack}/>
         <div style={{padding:22}}>
 
-          {/* HOJA DE TRABAJO DEL DÍA */}
-          {pedido.length>0 && (
-            <BloqueF titulo="Lo que hay que desalar hoy" sub="Sale de los partes del día.">
-              {pedido.map((x,i)=>(
-                <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:12,
-                  padding:"12px 0",borderBottom: i<pedido.length-1?`1px solid ${C.card2}`:"none"}}>
-                  <span style={{minWidth:0}}>
-                    <div style={{fontFamily:F.h,fontWeight:800,fontSize:17,color:C.text}}>{x.cat.nombre}</div>
-                    <div style={{fontSize:13,color:C.mutedD}}>{[...new Set(x.lineas)].join(" · ")}</div>
-                  </span>
-                  <span style={{flexShrink:0,fontFamily:F.h,fontWeight:900,fontSize:24,color:C.text}}>
-                    {num(x.cantidad)} <span style={{fontSize:14,color:C.mutedD,fontWeight:600}}>{x.base==="m"?"m":"uds"}</span>
+          {/* 1 · LO QUE HAY QUE HACER */}
+          <BloqueF titulo="1 · Lo que hay que desalar hoy" sub="Sale de los partes del día.">
+            {pedido.length===0 && <div style={{fontSize:14,color:C.muted}}>Hoy los partes no piden desalado.</div>}
+            {pedido.map((x,i)=>(
+              <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:12,
+                padding:"12px 0",borderBottom: i<pedido.length-1?`1px solid ${C.card2}`:"none"}}>
+                <span style={{minWidth:0}}>
+                  <div style={{fontFamily:F.h,fontWeight:800,fontSize:17,color:C.text}}>{x.cat.nombre}</div>
+                  <div style={{fontSize:13,color:C.mutedD}}>{[...new Set(x.lineas)].join(" · ")}</div>
+                </span>
+                <span style={{flexShrink:0,fontFamily:F.h,fontWeight:900,fontSize:24,color:C.text}}>
+                  {num(x.cantidad)} <span style={{fontSize:14,color:C.mutedD,fontWeight:600}}>{x.base==="m"?"m":"uds"}</span>
+                </span>
+              </div>
+            ))}
+          </BloqueF>
+
+          {/* 2 · LO HECHO */}
+          <BloqueF titulo="2 · Lo que se ha hecho" sub={hoyApoyos.length ? `${Math.round(totalMin)} min en total` : "Todavía sin anotar."}>
+            {Object.values(hechoPorProc).map((x,i)=>(
+              <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:12,
+                padding:"12px 0",borderBottom:`1px solid ${C.card2}`}}>
+                <div style={{fontFamily:F.h,fontWeight:800,fontSize:17,color:C.text}}>{x.proceso}</div>
+                <span style={{flexShrink:0,textAlign:"right"}}>
+                  <div style={{fontFamily:F.h,fontWeight:900,fontSize:22,color:C.text}}>
+                    {num(x.cant)} <span style={{fontSize:13,color:C.mutedD,fontWeight:600}}>{x.base==="m"?"m":"uds"}</span>
+                  </div>
+                  <div style={{fontSize:12.5,color:C.mutedD}}>{Math.round(x.min)} min</div>
+                </span>
+              </div>
+            ))}
+            {hoyApoyos.length>0 && (
+              <details style={{marginTop:10}}>
+                <summary style={{cursor:"pointer",fontSize:13.5,color:C.blue,fontWeight:700,padding:"6px 0"}}>
+                  Ver las {hoyApoyos.length} anotaciones
+                </summary>
+                {hoyApoyos.map(a=>(
+                  <div key={a.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,
+                    padding:"9px 0",borderBottom:`1px solid ${C.card2}`,fontSize:13.5}}>
+                    <span style={{color:C.mutedD,minWidth:0}}>
+                      {num(a.cantidad)} {a.base==="m"?"m":"uds"} · {a.persona||"—"}
+                      {a.lote?` · 📦 ${a.lote}`:""} · {Math.round(toNum(a.minutos))} min
+                    </span>
+                    {a.cierre_id || a.validado_por
+                      ? <span style={{fontSize:12,color:C.green,fontWeight:700,flexShrink:0}}>✔</span>
+                      : <button onClick={async ()=>{
+                            if (!window.confirm(`¿Borrar?\n\n${a.proceso} · ${num(a.cantidad)} ${a.base==="m"?"m":"uds"}`)) return;
+                            await del("apoyos", a.id);
+                          }}
+                          style={{width:44,height:44,borderRadius:10,border:`2px solid ${C.border}`,background:"#fff",
+                            color:C.red,fontSize:17,cursor:"pointer",flexShrink:0}}>✕</button>}
+                  </div>
+                ))}
+              </details>
+            )}
+            <div style={{marginTop:14}}>
+              <BotonF alto={104} bg={C.blue} color="#fff" borde={C.blue}
+                onClick={()=>setModal({tipo:"apoyo"})}>＋ ANOTAR LO DESALADO</BotonF>
+            </div>
+          </BloqueF>
+
+          {/* 3 · LO QUE QUEDA PARA DESPUÉS */}
+          {sobrante.length>0 && (
+            <BloqueF titulo="3 · Queda hecho para después" borde={C.blue}
+              sub="De más de lo que pedían los partes de hoy. Se cargará al turno que lo use.">
+              {sobrante.map((x,i)=>(
+                <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:12,padding:"10px 0"}}>
+                  <span style={{color:C.text,fontWeight:700,fontSize:16}}>{x.proceso}</span>
+                  <span style={{flexShrink:0,fontFamily:F.h,fontWeight:900,fontSize:22,color:C.blue}}>
+                    {num(x.sobra)} <span style={{fontSize:13,color:C.mutedD,fontWeight:600}}>{x.base==="m"?"m":"uds"}</span>
                   </span>
                 </div>
               ))}
             </BloqueF>
           )}
 
-          {/* ANOTAR */}
-          <div style={{marginBottom:22}}>
-            <BotonF alto={120} bg={C.blue} color="#fff" borde={C.blue}
-              sub="metros, lote, quién y cuánto se ha tardado"
-              onClick={()=>setModal({tipo:"apoyo"})}>＋ ANOTAR LO DESALADO</BotonF>
-          </div>
-
-          {/* LO ANOTADO */}
-          {hoyApoyos.length>0 && (
-            <BloqueF titulo={`Anotado hoy · ${Math.round(totalMin)} min`}
-              sub="Toca la ✕ si algo se ha metido dos veces o está mal.">
-              {hoyApoyos.map(a=>(
-                <div key={a.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,
-                  padding:"12px 0",borderBottom:`1px solid ${C.card2}`}}>
-                  <span style={{minWidth:0}}>
-                    <div style={{fontFamily:F.h,fontWeight:800,fontSize:16,color:C.text}}>
-                      {a.proceso} · {num(a.cantidad)} {a.base==="m"?"m":"uds"}
-                    </div>
-                    <div style={{fontSize:13,color:C.mutedD,marginTop:2}}>
-                      {a.persona||"—"}{a.lote?` · 📦 ${a.lote}`:""} · {Math.round(toNum(a.minutos))} min
-                    </div>
-                  </span>
-                  {a.cierre_id
-                    ? <span style={{fontSize:12,color:C.green,fontWeight:700,flexShrink:0}}>✔ cerrado</span>
-                    : <button onClick={async ()=>{
-                          if (!window.confirm(`¿Borrar?\n\n${a.proceso} · ${num(a.cantidad)} ${a.base==="m"?"m":"uds"}`)) return;
-                          await del("apoyos", a.id);
-                        }}
-                        style={{width:52,height:52,borderRadius:12,border:`2px solid ${C.border}`,background:"#fff",
-                          color:C.red,fontSize:19,cursor:"pointer",flexShrink:0}}>✕</button>}
+          {/* 4 · VALIDAR */}
+          {hoyApoyos.length>0 && !esOperario && (
+            <BloqueF titulo="4 · Dar por bueno" borde={validado?C.green:C.amber}
+              sub={validado ? "Ya está validado." : "Revísalo y valídalo antes de cerrar el turno."}>
+              {validado ? (
+                <div style={{fontSize:15,color:C.green,fontWeight:700,lineHeight:1.6}}>
+                  ✔ Validado por {hoyApoyos.find(a=>a.validado_por)?.validado_por}
                 </div>
-              ))}
+              ) : (
+                <BotonF alto={104} bg={C.green} color="#fff" borde={C.green}
+                  onClick={async ()=>{
+                    if (!window.confirm(`¿Dar por bueno el desalado de hoy?\n\n${Math.round(totalMin)} min en ${hoyApoyos.length} anotaciones.`)) return;
+                    for (const a of hoyApoyos) await save("apoyos", a.id, {
+                      validado_por: perfil?.nombre||"", validado_at: new Date().toISOString() });
+                  }}>✔ VALIDAR EL DESALADO</BotonF>
+              )}
             </BloqueF>
+          )}
+          {hoyApoyos.length>0 && esOperario && !validado && (
+            <div style={{background:C.card2,borderRadius:14,padding:"13px 15px",fontSize:14,color:C.mutedD,lineHeight:1.6}}>
+              Falta que tu responsable lo dé por bueno.
+            </div>
           )}
 
           {hoyApoyos.length===0 && pedido.length===0 && (
