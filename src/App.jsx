@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v3.21.1";
+const APP_VERSION = "v3.23.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -536,6 +536,7 @@ function UsuarioForm({ onBack, ep, turnos, centros, onDone }) {
   const [costeHora, setCosteHora] = useState(ep?.coste_hora?.toString()||"");
   const [usuarioLogin, setUsuarioLogin] = useState(ep?.usuario||"");
   const [recibeInf, setRecibeInf] = useState(!!ep?.recibe_informe);
+  const [esApoyo, setEsApoyo] = useState(!!ep?.es_apoyo);
   const [clave, setClave] = useState(ep?.clave||"");
   const [horasDia, setHorasDia]   = useState(ep?.horas_dia?.toString()||"8");
   const [activo, setActivo] = useState(ep?.activo!==false);
@@ -560,6 +561,7 @@ function UsuarioForm({ onBack, ep, turnos, centros, onDone }) {
       coste_hora: parseFloat(costeHora)||0,
       horas_dia: parseFloat(horasDia)||8, activo,
       recibe_informe: recibeInf,
+      es_apoyo: rol==="operario" ? esApoyo : false,
       usuario: rol==="operario" ? usuarioLogin.trim().toLowerCase() : "",
       clave:   rol==="operario" ? clave : "",
     };
@@ -630,6 +632,17 @@ function UsuarioForm({ onBack, ep, turnos, centros, onDone }) {
                 </div>
               )}
             </div>
+
+            <button onClick={()=>setEsApoyo(v=>!v)}
+              style={{width:"100%",background:esApoyo?C.blueBg:"#fff",border:`1.5px solid ${esApoyo?C.blue:C.border}`,
+                borderRadius:12,padding:"13px 15px",marginBottom:14,cursor:"pointer",textAlign:"left"}}>
+              <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:esApoyo?C.blue:C.mutedD}}>
+                {esApoyo?"🤝 Trabaja en apoyo":"◯ Trabaja en apoyo"}
+              </div>
+              <div style={{fontSize:12,color:C.mutedD,marginTop:3,lineHeight:1.5}}>
+                Desalado y demás trabajo fuera de línea. Saldrá el primero al anotar el apoyo.
+              </div>
+            </button>
             <Sel label="Centro de trabajo" value={centro} onChange={setCentro} placeholder="Seleccionar centro…"
               options={centros.map(c=>({value:c.id,label:`🏭 ${c.nombre}`}))}/>
             <Sel label="Turno" value={turno} onChange={setTurno} placeholder="Seleccionar turno…"
@@ -1974,6 +1987,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                 <div style={{fontFamily:F.h,fontWeight:800,fontSize:17,color:C.text}}>{a.proceso}</div>
                 <div style={{fontSize:14,color:C.mutedD,marginTop:3}}>
                   {num(a.cantidad)} {a.base==="m"?"m":"uds"} · 👤 {a.persona||"—"}
+                  {toNum(a.n_personas)>1 && ` (${a.n_personas} × ${Math.round(toNum(a.minutos_por_persona))} min)`}
                   {a.lote?` · 📦 ${a.lote}`:""}
                   {a.extra && <span style={{color:C.blue,fontWeight:700}}> · extra</span>}
                 </div>
@@ -2035,7 +2049,7 @@ function HojaApoyo({ procesos, mps, gente, perfil, centroId, claveTurno, hoy, pr
   const [minReales, setMinReales] = useState("");
   const [lote, setLote] = useState("");
   const [mpId, setMpId] = useState("");
-  const [quien, setQuien] = useState("");
+  const [quienes, setQuienes] = useState([]);   // pueden ser varios
   const [modal, setModal] = useState(null);
   const [guardando, setGuardando] = useState(false);
 
@@ -2043,20 +2057,27 @@ function HojaApoyo({ procesos, mps, gente, perfil, centroId, claveTurno, hoy, pr
   const porMetro = (proc?.base_tiempo || "ud") === "m";
   const unidad = porMetro ? "m" : "uds";
   const tiempo = toNum(proc?.tiempo_proceso) || toNum(proc?.tiempo_objetivo);
-  const minutos = tiempo * toNum(cant);
+  const minutos = tiempo * toNum(cant);                 // teórico, de una persona
+  const nPers = Math.max(1, quienes.length);
+  // Si han estado 3 a la vez, cada uno echa los minutos que se ponen: el trabajo es la suma
+  const minCadaUno = toNum(minReales) || (minutos / nPers);
+  const minTotales = minCadaUno * nPers;
 
   const guardar = async () => {
     if (!procId || !(toNum(cant) > 0)) { window.alert("Elige la tarea y pon la cantidad"); return; }
-    if (!quien) { window.alert("Di quién lo ha hecho"); return; }
+    if (!quienes.length) { window.alert("Di quién lo ha hecho"); return; }
     setGuardando(true);
     await save("apoyos", uid(), {
       fecha: hoy, turno_clave: claveTurno, centro: centroId,
       proceso_id: procId, proceso: proc?.nombre || "",
       base: porMetro ? "m" : "ud", cantidad: toNum(cant),
-      minutos: Math.round(toNum(minReales) || minutos),   // los que se han tardado
-      minutos_teoricos: Math.round(minutos),              // los que debería haber tardado
+      minutos: Math.round(minTotales),                    // trabajo total, sumando a todos
+      minutos_teoricos: Math.round(minutos),              // lo que debería haber costado
+      minutos_por_persona: Math.round(minCadaUno),
+      n_personas: nPers,
       materia_id: mpId, lote: lote.trim(),
-      persona_id: quien, persona: gente.find(u => u.id === quien)?.nombre || "",
+      personas_id: quienes,
+      persona: quienes.map(id => gente.find(u=>u.id===id)?.nombre).filter(Boolean).join(", "),
       extra: !!pre?.extra,
       registrado_por: perfil?.nombre || "terminal", registrado_at: new Date().toISOString(),
     });
@@ -2097,15 +2118,17 @@ function HojaApoyo({ procesos, mps, gente, perfil, centroId, claveTurno, hoy, pr
         </div>
       </BloqueF>
 
-      <BloqueF titulo="⏱️ ¿Cuánto se ha tardado?" sub="En minutos. Si lo dejas vacío se cuenta el tiempo teórico.">
+      <BloqueF titulo="⏱️ ¿Cuánto ha estado cada uno?"
+        sub="Minutos de cada persona. Si lo dejas vacío se reparte el tiempo teórico entre los que haya.">
         <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
-          <CampoF value={minReales} suf="min" ancho={130}
-            onTocar={()=>setModal({tipo:"num",titulo:"Minutos que se ha tardado",valor:minReales,onOk:v=>setMinReales(v)})}/>
+          <CampoF value={minReales} suf="min cada uno" ancho={130}
+            onTocar={()=>setModal({tipo:"num",titulo:"Minutos de cada persona",valor:minReales,onOk:v=>setMinReales(v)})}/>
           {minutos>0 && (
-            <span style={{fontSize:14,color:C.mutedD,lineHeight:1.5}}>
-              teórico <b style={{color:C.text}}>{Math.round(minutos)} min</b>
+            <span style={{fontSize:14,color:C.mutedD,lineHeight:1.6}}>
+              {quienes.length>1 && <div>{nPers} personas × {Math.round(minCadaUno)} min = <b style={{color:C.text}}>{Math.round(minTotales)} min</b> de trabajo</div>}
+              teórico <b style={{color:C.text}}>{Math.round(minutos)} min</b> en total
               {toNum(minReales)>0 && (() => {
-                const d = toNum(minReales) - minutos;
+                const d = minTotales - minutos;
                 return <div style={{color:Math.abs(d)<1?C.green:d>0?C.red:C.green,fontWeight:700}}>
                   {Math.abs(d)<1 ? "clavado" : `${Math.abs(Math.round(d))} min ${d>0?"de más":"de menos"}`}
                 </div>;
@@ -2132,15 +2155,18 @@ function HojaApoyo({ procesos, mps, gente, perfil, centroId, claveTurno, hoy, pr
         </div>
       </BloqueF>
 
-      <BloqueF titulo="👤 Quién lo ha hecho">
+      <BloqueF titulo={quienes.length>1 ? `👤 Quiénes lo han hecho · ${quienes.length}` : "👤 Quién lo ha hecho"}
+        sub="Toca a todos los que hayan estado. Los de apoyo salen primero.">
         <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:12}}>
-          {gente.map(u=>(
-            <button key={u.id} onClick={()=>setQuien(u.id)}
-              style={{minHeight:96,borderRadius:16,border:`3px solid ${quien===u.id?C.green:C.border}`,
-                background:quien===u.id?C.greenBg:"#fff",cursor:"pointer",
+          {[...gente].sort((a,b)=>(b.es_apoyo?1:0)-(a.es_apoyo?1:0)).map(u=>(
+            <button key={u.id} onClick={()=>setQuienes(q => q.includes(u.id) ? q.filter(x=>x!==u.id) : [...q, u.id])}
+              style={{minHeight:96,borderRadius:16,border:`3px solid ${quienes.includes(u.id)?C.green:C.border}`,
+                background:quienes.includes(u.id)?C.greenBg:"#fff",cursor:"pointer",
                 display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:6,
                 fontFamily:F.h,fontWeight:800,fontSize:17,color:C.text}}>
-              <span style={{width:38,height:38,borderRadius:19,background:C.card2,display:"flex",alignItems:"center",justifyContent:"center",fontSize:19}}>👤</span>
+              <span style={{width:38,height:38,borderRadius:19,background:u.es_apoyo?C.blueBg:C.card2,
+                display:"flex",alignItems:"center",justifyContent:"center",fontSize:19}}>
+                {quienes.includes(u.id) ? "✔" : (u.es_apoyo?"🤝":"👤")}</span>
               {u.nombre}
             </button>
           ))}
@@ -2968,7 +2994,7 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
         onOk={v=>{ modal.onOk(v); setModal(null); }} onCerrar={()=>setModal(null)}/>}
       {modal?.tipo==="lote" && <HojaNumero titulo={modal.titulo} valor={modal.valor} texto
         onOk={v=>{ modal.onOk(v); setModal(null); }} onCerrar={()=>setModal(null)}/>}
-      {modal?.tipo==="persona" && <HojaPersonas titulo={modal.titulo} gente={gente}
+      {modal?.tipo==="persona" && <HojaPersonas titulo={modal.titulo} gente={gente.filter(u=>!u.es_apoyo)}
         onOk={v=>{ modal.onOk(v); setModal(null); }} onCerrar={()=>setModal(null)}/>}
       {modal?.tipo==="proceso" && <HojaProcesos procesos={procesos.filter(z=>!z.apoyo)} puestos={tareas.map(t=>t.proceso_id)}
         onOk={pid=>{ setTareas(ts=>[...ts,{id:uid(),proceso_id:pid,cantidad:0,persona_id:""}]); setModal(null); }}
@@ -3084,7 +3110,7 @@ function HojaTexto({ titulo, valor, onOk, onCerrar }) {
 }
 
 const HojaPersonas = ({ titulo, gente, onOk, onCerrar }) => (
-  <CapaF titulo={titulo} onCerrar={onCerrar} color={C.blue}>
+  <CapaF titulo={titulo} sub="Solo la gente de línea" onCerrar={onCerrar} color={C.blue}>
     <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:14}}>
       {gente.map(u=>(
         <button key={u.id} onClick={()=>onOk(u.id)}
@@ -3095,7 +3121,7 @@ const HojaPersonas = ({ titulo, gente, onOk, onCerrar }) => (
           {u.nombre}
         </button>
       ))}
-      {gente.length===0 && <Empty icon="👥" text="No hay operarios dados de alta"/>}
+      {gente.length===0 && <Empty icon="👥" text="Ningún operario de línea. Revisa la marca “Trabaja en apoyo” en Usuarios."/>}
     </div>
   </CapaF>
 );
