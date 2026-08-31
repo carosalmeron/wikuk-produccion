@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v3.31.0";
+const APP_VERSION = "v3.32.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -3012,11 +3012,17 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
                 paddingBottom:14, marginBottom: i<consumos.length-1?14:0}}>
                 <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap",marginBottom:10}}>
                   <span style={{flex:1,minWidth:150}}>
-                    <button onClick={()=>setModal({tipo:"materia", onOk:v=>setCons(i,"materia_id",v)})}
+                    <button onClick={()=>setModal({tipo:"materia", onOk:v=>setConsumos(cs=>cs.map((z,k)=>
+                      k===i ? { ...z, materia_id:v, capas: capasDe(v) || toNum(z.capas) || 1 } : z))})}
                       style={{background:"none",border:"none",padding:0,cursor:"pointer",textAlign:"left"}}>
                       <b style={{fontSize:18,color:C.text,borderBottom:`2px dotted ${C.border}`}}>{mp?.nombre||"＋ elegir materia"}</b>
                       <span style={{fontSize:13,color:C.blue,marginLeft:6}}>cambiar</span>
                     </button>
+                    {mp && !(p?.materias_asignadas||[]).some(m=>m.mp_id===c.materia_id) && (
+                      <div style={{fontSize:12,color:C.amber,fontWeight:700,marginTop:2,lineHeight:1.4}}>
+                        ⚠️ No es la materia de la ficha: comprueba las capas
+                      </div>
+                    )}
                     <div style={{fontSize:13,color:C.mutedD,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap",marginTop:3}}>
                       <button onClick={()=>setModal({tipo:"num",titulo:`Capas de ${mp?.nombre||""}`,
                         valor:String(toNum(c.capas)||""), onOk:v=>setCons(i,"capas",toNum(v))})}
@@ -3051,6 +3057,18 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
                   background: r==null?C.card2 : bien?C.greenBg:C.redBg,
                   border: r==null?"none":`2px solid ${bien?C.green:C.red}`,
                   color: r==null?C.mutedD : bien?C.green:C.red}}>
+                  {r!=null && (() => {
+                    const esperado = teoricoDe(c) / (obj/100);
+                    const dif = toNum(c.metros_consumidos) - esperado;
+                    return (
+                      <div style={{fontSize:13,fontWeight:600,marginBottom:6,color:C.mutedD}}>
+                        Al {obj}% tocaría gastar <b style={{color:C.text}}>{num(esperado)} m</b>
+                        {Math.abs(dif) > 1 && (
+                          <b style={{color: dif>0?C.red:C.green}}> · {Math.abs(Math.round(dif))} m {dif>0?"de más":"de menos"}</b>
+                        )}
+                      </div>
+                    );
+                  })()}
                   {r==null
                     ? (hecho<=0 ? "Pon primero las unidades fabricadas arriba."
                       : !toNum(c.metros_consumidos) ? "Pon los metros gastados para ver el rendimiento."
