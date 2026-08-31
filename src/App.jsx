@@ -388,21 +388,25 @@ function LoginScreen({ noUsers }) {
   // Operario: usuario y clave. La cuenta se crea sola la primera vez que entra.
   const [usuario, setUsuario] = useState("");
   const entrarOperario = async () => {
-    const u = usuario.trim().toLowerCase();
+    const u = usuario.trim();
     if (!u || !pass) { setErr("Pon tu usuario y tu clave"); return; }
     setBusy(true); setErr("");
-    const correo = correoDeUsuario(u);
-    try {
-      await signInWithEmailAndPassword(auth, correo, pass);
-    } catch (e) {
-      if (e?.code === "auth/user-not-found") {
-        setErr("Ese usuario no existe. Pídeselo a tu responsable.");
-      } else if (e?.code === "auth/wrong-password") {
-        setErr("Clave incorrecta");
-      } else {
-        setErr("No se ha podido entrar");
-      }
+    // Si lleva arroba es un correo de oficina; si no, un usuario de fábrica
+    const esCorreo = u.includes("@");
+    const intentos = esCorreo ? [u.toLowerCase()] : [correoDeUsuario(u), u.toLowerCase()];
+    let ultimo = null;
+    for (const correo of intentos) {
+      try {
+        await signInWithEmailAndPassword(auth, correo, pass);
+        setBusy(false);
+        return;
+      } catch (e) { ultimo = e; }
     }
+    setErr(
+      ultimo?.code === "auth/wrong-password" ? "Clave incorrecta"
+      : ultimo?.code === "auth/user-not-found" || ultimo?.code === "auth/invalid-credential"
+        ? (esCorreo ? "No hay ninguna cuenta con ese correo" : "Ese usuario no existe. Pídeselo a tu responsable.")
+      : "No se ha podido entrar");
     setBusy(false);
   };
 
@@ -454,11 +458,11 @@ function LoginScreen({ noUsers }) {
 
           {modo==="operario" ? (
             <>
-              <Field label="Usuario" value={usuario} onChange={setUsuario} placeholder="Ej: ali"/>
+              <Field label="Usuario o correo" value={usuario} onChange={setUsuario} placeholder="ali · o tu correo"/>
               <Field label="Clave" value={pass} onChange={setPass} type="password" placeholder="••••••"/>
               <Btn onClick={entrarOperario} disabled={busy}>{busy ? "…" : "Entrar a fábrica"}</Btn>
               <div style={{fontSize:12.5,color:C.mutedD,lineHeight:1.55,marginTop:12,textAlign:"center"}}>
-                Tu usuario y tu clave te los da tu responsable. No hace falta correo.
+                Los operarios entran con el usuario que les da su responsable. Si eres de oficina, pon tu correo.
               </div>
             </>
           ) : (
@@ -8836,6 +8840,7 @@ export default function App() {
 
   const perfil = authUser ? usuarios.find(u => u.id === authUser.uid || u.uid === authUser.uid) : null;
   // Al operario no le sale el menú de oficina: entra directo a la pantalla de fábrica
+  // El operario va directo a fábrica; los demás, al menú
   useEffect(()=>{ if (perfil?.rol === "operario") setView("terminal"); }, [perfil?.rol]);
 
   const STYLES = `
