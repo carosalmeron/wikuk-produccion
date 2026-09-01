@@ -1637,6 +1637,25 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
     );
   }
 
+  // ── La cola de días por poner al día: se resuelven en orden, uno cada vez
+  const diasPendientes = (() => {
+    const dias = {};
+    atrasadas.forEach(ot => {
+      const k = `${ot.fecha}__${ot.turno||"T1"}`;
+      if (!dias[k]) dias[k] = { fecha: ot.fecha, clave: ot.turno||"T1", ordenes: [], turnoInfo: null };
+      dias[k].ordenes.push(ot);
+    });
+    turnosSinCerrar.forEach(t => {
+      const k = `${t.fecha}__${claveDeTurno(turnos, t.turno?.id)}`;
+      if (!dias[k]) dias[k] = { fecha: t.fecha, clave: claveDeTurno(turnos, t.turno?.id), ordenes: [], turnoInfo: null };
+      dias[k].turnoInfo = t;
+    });
+    return Object.values(dias)
+      .map(d => ({ ...d, turno: turnosOrdenados(turnos).find((z,i)=>`T${i+1}`===d.clave) || turnos[0] }))
+      .sort((a,b) => a.fecha.localeCompare(b.fecha) || a.clave.localeCompare(b.clave));
+  })();
+  const pendiente = diasPendientes[0] || null;
+
   // ═══ INICIO ═══
   if (vista === "inicio") {
     const nInc = incid.filter(i => (i.fecha||"") >= new Date(Date.now()-7*864e5).toISOString().slice(0,10)).length;
@@ -1683,114 +1702,114 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
             ))}
           </div>
         )}
-        {(atrasadas.length>0 || turnosSinCerrar.length>0) && (() => {
-          // Todo lo pendiente, agrupado por día
-          const dias = {};
-          atrasadas.forEach(ot => {
-            if (!dias[ot.fecha]) dias[ot.fecha] = { fecha: ot.fecha, ordenes: [], turnos: [] };
-            dias[ot.fecha].ordenes.push(ot);
-          });
-          turnosSinCerrar.forEach(t => {
-            if (!dias[t.fecha]) dias[t.fecha] = { fecha: t.fecha, ordenes: [], turnos: [] };
-            dias[t.fecha].turnos.push(t);
-          });
-          const lista = Object.values(dias).sort((a,b)=>
-            (b.ordenes.length?1:0) - (a.ordenes.length?1:0) || a.fecha.localeCompare(b.fecha));
-          const nOrd = atrasadas.length, nTur = turnosSinCerrar.length;
-          return (
-            <div style={{margin:"18px 22px 0"}}>
-              <div style={{background:C.redBg,border:`3px solid ${C.red}`,borderRadius:18,padding:"18px 20px",marginBottom:16}}>
-                <div style={{fontFamily:F.h,fontWeight:900,fontSize:21,color:C.red,marginBottom:4}}>
-                  ⛔ Quedan días sin terminar
+        {/* ═══ PONERSE AL DÍA: un día cada vez, sin salida hasta terminarlo ═══ */}
+        {pendiente && (
+          <div style={{padding:"18px 22px"}}>
+            {esOperario ? (
+              <div style={{background:C.redBg,border:`3px solid ${C.red}`,borderRadius:18,padding:"22px 20px",textAlign:"center"}}>
+                <div style={{fontSize:52,marginBottom:10}}>⛔</div>
+                <div style={{fontFamily:F.h,fontWeight:900,fontSize:22,color:C.red,marginBottom:8}}>
+                  Avisa a tu responsable
                 </div>
-                <div style={{fontSize:15,color:C.text,lineHeight:1.6}}>
-                  {nOrd>0 && <>{nOrd} línea{nOrd!==1?"s":""} sin cerrar</>}
-                  {nOrd>0 && nTur>0 && " · "}
-                  {nTur>0 && <>{nTur} turno{nTur!==1?"s":""} sin informe</>}
-                  <div style={{marginTop:4}}>Antes de trabajar hoy hay que cerrarlos. Primero las líneas, después el turno.</div>
-                  {lista.length>3 && (
-                    <div style={{marginTop:6,fontWeight:700}}>
-                      Son {lista.length} días. Empieza por los de arriba.
-                    </div>
-                  )}
+                <div style={{fontSize:16,color:C.text,lineHeight:1.6}}>
+                  Hay {diasPendientes.length} día{diasPendientes.length!==1?"s":""} sin cerrar desde el {fechaES(diasPendientes[0].fecha)}.
+                  <div style={{marginTop:6,color:C.mutedD}}>Hasta que se cierren no se puede trabajar aquí.</div>
                 </div>
               </div>
-
-              {lista.map(d=>(
-                <div key={d.fecha} style={{background:"#fff",border:`2px solid ${C.border}`,borderRadius:18,
-                  padding:16,marginBottom:14}}>
-                  <div style={{fontFamily:F.h,fontWeight:900,fontSize:18,color:C.text,marginBottom:12}}>
-                    {fechaESLarga(d.fecha)}
+            ) : (
+              <>
+                <div style={{background:C.navy,borderRadius:18,padding:"18px 20px",marginBottom:16,textAlign:"center"}}>
+                  <div style={{fontSize:13,color:"rgba(255,255,255,0.65)",fontWeight:700,letterSpacing:0.5}}>
+                    PONERSE AL DÍA · QUEDAN {diasPendientes.length}
                   </div>
-
-                  {d.ordenes.map((ot,i)=>{
-                    const p = prodDe(ot.producto_id);
-                    return (
-                      <button key={i} onClick={()=>{ setDiaVer(d.fecha); setOtSel(ot); setVista("ot"); }}
-                        style={{width:"100%",background:C.redBg,border:`2px solid ${C.red}`,borderRadius:14,
-                          padding:"13px 15px",marginBottom:9,textAlign:"left",cursor:"pointer"}}>
-                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:10}}>
-                          <span style={{minWidth:0}}>
-                            <div style={{fontFamily:F.h,fontWeight:800,fontSize:16.5,color:C.text}}>{p?.nombre||"?"}</div>
-                            <div style={{fontSize:13.5,color:C.mutedD}}>
-                              {ot.linea} · {num(ot.cantidad)} uds previstas
-                              {(() => {
-                                const t = turnosOrdenados(turnos).find((z,k)=>`T${k+1}`===ot.turno);
-                                return t ? ` · 🕐 ${t.nombre}` : "";
-                              })()}
-                            </div>
-                          </span>
-                          <span style={{flexShrink:0,fontSize:13.5,fontWeight:800,color:C.red}}>línea sin cerrar ›</span>
-                        </div>
-                      </button>
-                    );
-                  })}
-
-                  {(() => {
-                    const conTurno = d.turnos.map(t=>claveDeTurno(turnos, t.turno?.id));
-                    const huerfanas = d.ordenes.filter(o => !conTurno.includes(o.turno||"T1"));
-                    if (!huerfanas.length || !d.turnos.length) return null;
-                    return (
-                      <div style={{fontSize:13,color:C.mutedD,lineHeight:1.5,marginBottom:9,padding:"0 2px"}}>
-                        {huerfanas.length} de esas líneas son de otro turno, que aún no tiene ninguna cerrada.
-                      </div>
-                    );
-                  })()}
-                  {d.turnos.map((t,i)=>{
-                    const claveT = claveDeTurno(turnos, t.turno?.id);
-                    const suyas = d.ordenes.filter(o => (o.turno||"T1") === claveT);
-                    return (
-                    <button key={"t"+i}
-                      disabled={suyas.length>0}
-                      onClick={()=>{ setTurnoId(t.turno?.id||turnoId); setDiaVer(d.fecha); setVista("ordenes"); }}
-                      style={{width:"100%",background: suyas.length ? C.card2 : C.amberBg,
-                        border:`2px solid ${suyas.length ? C.border : C.amber}`,borderRadius:14,
-                        padding:"13px 15px",marginBottom:9,textAlign:"left",
-                        cursor: suyas.length ? "default" : "pointer", opacity: suyas.length ? 0.6 : 1}}>
-                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:10}}>
-                        <span style={{minWidth:0}}>
-                          <div style={{fontFamily:F.h,fontWeight:800,fontSize:16.5,color:C.text}}>
-                            🔒 {t.turno?.nombre||"Turno"}
-                          </div>
-                          <div style={{fontSize:13.5,color:C.mutedD}}>
-                            {t.partes} línea{t.partes!==1?"s":""} cerrada{t.partes!==1?"s":""} · {num(t.uds)} uds · sin informe
-                          </div>
-                        </span>
-                        <span style={{flexShrink:0,fontSize:13.5,fontWeight:800,
-                          color: suyas.length ? C.mutedD : C.amber}}>
-                          {suyas.length ? `faltan ${suyas.length} línea${suyas.length!==1?"s":""}` : "cerrar turno ›"}
-                        </span>
-                      </div>
-                    </button>
-                    );
-                  })}
+                  <div style={{fontFamily:F.h,fontWeight:900,fontSize:24,color:"#fff",marginTop:4,textTransform:"capitalize"}}>
+                    {fechaESLarga(pendiente.fecha)}
+                  </div>
+                  <div style={{fontSize:15,color:"rgba(255,255,255,0.75)",marginTop:2}}>
+                    {pendiente.turno?.nombre || "Turno"}
+                  </div>
                 </div>
-              ))}
-            </div>
+
+                {pendiente.ordenes.length > 0 ? (
+                  <>
+                    <div style={{fontFamily:F.h,fontWeight:800,fontSize:18,color:C.text,marginBottom:4}}>
+                      Cierra estas {pendiente.ordenes.length} línea{pendiente.ordenes.length!==1?"s":""}
+                    </div>
+                    <div style={{fontSize:14.5,color:C.mutedD,lineHeight:1.6,marginBottom:14}}>
+                      Pon lo que se fabricó. Si no se llegó a fabricar, ciérrala con 0.
+                    </div>
+                    {pendiente.ordenes.map((ot,i)=>{
+                      const p = prodDe(ot.producto_id);
+                      return (
+                        <button key={i} onClick={()=>{ setDiaVer(pendiente.fecha); setOtSel(ot); setVista("ot"); }}
+                          style={{width:"100%",background:"#fff",border:`3px solid ${C.red}`,borderRadius:18,
+                            padding:"16px 18px",marginBottom:12,textAlign:"left",cursor:"pointer"}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10}}>
+                            <span style={{minWidth:0}}>
+                              <div style={{fontFamily:F.h,fontWeight:800,fontSize:19,color:C.text}}>{p?.nombre||"?"}</div>
+                              <div style={{fontSize:14,color:C.mutedD,marginTop:2}}>
+                                {ot.linea} · {num(ot.cantidad)} uds previstas
+                              </div>
+                            </span>
+                            <span style={{flexShrink:0,fontSize:26,color:C.red}}>›</span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </>
+                ) : (
+                  <>
+                    <div style={{fontFamily:F.h,fontWeight:800,fontSize:18,color:C.text,marginBottom:4}}>
+                      Todas las líneas están cerradas
+                    </div>
+                    <div style={{fontSize:14.5,color:C.mutedD,lineHeight:1.6,marginBottom:14}}>
+                      {pendiente.turnoInfo
+                        ? <>{pendiente.turnoInfo.partes} línea{pendiente.turnoInfo.partes!==1?"s":""} · {num(pendiente.turnoInfo.uds)} uds. Falta el informe.</>
+                        : "Falta cerrar el turno."}
+                    </div>
+                    <BotonF alto={120} bg={C.navy} color="#fff" borde={C.navy}
+                      sub={`informe del ${fechaES(pendiente.fecha)}`}
+                      onClick={()=>setModal({tipo:"cierreTurno", dia:pendiente.fecha, turnoId:pendiente.turno?.id})}>
+                      🔒 CERRAR ESTE TURNO
+                    </BotonF>
+                  </>
+                )}
+
+                {diasPendientes.length>1 && (
+                  <div style={{background:C.card2,borderRadius:14,padding:"13px 15px",marginTop:16,
+                    fontSize:13.5,color:C.mutedD,lineHeight:1.6}}>
+                    Después de este quedan {diasPendientes.length-1} día{diasPendientes.length-1!==1?"s":""} más:
+                    {" "}{diasPendientes.slice(1,5).map(d=>fechaES(d.fecha)).join(" · ")}
+                    {diasPendientes.length>5 && ` y ${diasPendientes.length-5} más`}.
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+        {modal?.tipo==="cierreTurno" && (() => {
+          const dia = modal.dia || hoy;
+          const t = turnos.find(z=>z.id===(modal.turnoId||turnoId)) || turno;
+          const claveT = claveDeTurno(turnos, t?.id);
+          const otsDia = [
+            ...planesSem.filter(w => !centroId || w.centro === centroId)
+              .flatMap(w => (w.calendario||[]).filter(x => x.fecha===dia && x.turno===claveT)),
+            ...prods.filter(p => p.fecha===dia && p.turno_clave===claveT && toNum(p.cantidad)>0 && !p.reabierta)
+              .map(p => ({ linea:p.linea_nombre, producto_id:p.producto_id,
+                cantidad: toNum(p.objetivo_ot)||toNum(p.cantidad), fecha:dia, turno:claveT }))
+          ].filter((x,i,a) => a.findIndex(z=>z.linea===x.linea && z.producto_id===x.producto_id)===i);
+          return (
+            <CierreTurno ots={otsDia} partes={prods.filter(p=>p.fecha===dia && p.turno_clave===claveT)}
+              apoyos={apoyos.filter(a=>a.fecha===dia && !a.cierre_id && (!centroId || !a.centro || a.centro===centroId))}
+              apoyoPedidoHoy={{}} productos={productos} mps={mps} procesos={procesos}
+              centros={centros} centro={centro} turno={t} hoy={dia} perfil={perfil} usuarios={usuarios}
+              ggMes={ggMes} onCerrar={()=>setModal(null)}
+              onHecho={()=>{ setModal(null); setDiaVer(""); setVista("inicio"); }}/>
           );
         })()}
 
-        {(!esOperario || centroPropio) && atrasadas.length===0 && turnosSinCerrar.length===0 && (() => {
+        {(!esOperario || centroPropio) && !pendiente && (() => {
           // ── Los tres pasos del día
           const apoyoPend = (() => {
             const acum = {};
@@ -2456,8 +2475,9 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
   return <OrdenTrabajo ot={otSel} perfil={perfil} productos={productos} mps={mps} motivos={motivos}
     moldes={moldes} gente={gente} procesos={procesos} claveTurno={claveTurno} turno={turno} hoy={hoy}
     apoyosHoy={apoyos.filter(a=>a.fecha===hoy && (!centroId || !a.centro || a.centro===centroId))}
-    onApoyo={()=>setVista("apoyo")}
-    onSalir={onBack} onVolver={()=>setVista("ordenes")}/>;
+    onApoyo={diaVer ? null : ()=>setVista("apoyo")}
+    onSalir={diaVer ? null : onBack}
+    onVolver={()=>{ if (diaVer) { setDiaVer(""); setVista("inicio"); } else setVista("ordenes"); }}/>;
 }
 
 // ── TRABAJO DE APOYO: desalado y demás, sin atarlo a una orden ─────────────────
@@ -2994,7 +3014,16 @@ function CierreTurno({ ots, partes, apoyos=[], apoyoPedidoHoy={}, productos, mps
   );
 
   return (
-    <CapaF titulo="Cerrar el turno" sub={`${turno?.nombre||""} · ${centro?.nombre||""}`} onCerrar={onCerrar}>
+    <CapaF titulo="Cerrar el turno" sub={`${fechaESLarga(hoy)} · ${turno?.nombre||""}`} onCerrar={onCerrar}>
+      {hoy !== new Date().toISOString().slice(0,10) && (
+        <div style={{background:C.amberBg,border:`3px solid ${C.amber}`,borderRadius:14,padding:"14px 16px",
+          marginBottom:16,fontSize:15.5,color:C.amber,fontWeight:700,lineHeight:1.6}}>
+          📅 Estás cerrando el turno del <b>{fechaES(hoy)}</b>, no el de hoy.
+          <div style={{fontSize:13.5,fontWeight:600,color:C.mutedD,marginTop:3}}>
+            El informe saldrá con esa fecha.
+          </div>
+        </div>
+      )}
       <BloqueF titulo="Lo que se ha producido">
         {filas.map((f,i)=>{
           const pct = f.plan>0 ? f.real/f.plan : 0;
@@ -3245,7 +3274,9 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
   const [guardadoEn, setGuardadoEn] = useState(null);
 
   // ── Lo que se va escribiendo se guarda solo, por si se sale o se apaga la tablet
-  const idBorrador = `${fechaOT}__${claveOT}__${ot?.linea||""}__${ot?.producto_id||""}`;
+  // Sin barras ni espacios: Firebase no los admite en el identificador
+  const limpiaId = (t) => String(t||"").replace(/[^a-zA-Z0-9_-]/g, "_");
+  const idBorrador = [fechaOT, claveOT, limpiaId(ot?.linea), limpiaId(ot?.producto_id)].join("__");
   const [borradores] = useCol("borradores");
   const borrador = borradores.find(b => b.id === idBorrador);
 
@@ -3266,12 +3297,14 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
     if (!total && !consumos.some(c=>c.lote||toNum(c.metros_consumidos))
         && !tareas.some(t=>toNum(t.cantidad)) && !paros.length && !nota) return;
     const reloj = setTimeout(async () => {
+      try {
       await save("borradores", idBorrador, {
         linea: ot?.linea||"", producto_id: ot?.producto_id||"", fecha: fechaOT, turno_clave: claveOT,
         total, consumos, tareas, paros, nota,
         actualizado_at: new Date().toISOString(), por: perfil?.nombre || "",
       });
       setGuardadoEn(new Date());
+      } catch (e) { setGuardadoEn(null); }
     }, 1500);
     return () => clearTimeout(reloj);
   }, [total, consumos, tareas, paros, nota]);
@@ -3296,6 +3329,7 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
   const guardar = async (quien) => {
     if (guardando) return;
     setGuardando(true);
+    try {
     const id = parte?.id || uid();
     await save("producciones", id, {
       orden_id: ot.orden_id || parte?.orden_id || "",
@@ -3312,12 +3346,21 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
       cerrado_por: quien, cerrado_at: new Date().toISOString(), reabierta: false,
     });
     for (const c of consumos) if (c.lote) {
-      const lid = (c.materia_id+"_"+c.lote).replace(/[^a-zA-Z0-9_-]/g,"_");
-      await save("lotes", lid, { materia_id: c.materia_id, codigo: c.lote, ultima_fecha: fechaOT });
+      try {
+        const lid = (c.materia_id+"_"+c.lote).replace(/[^a-zA-Z0-9_-]/g,"_");
+        await save("lotes", lid, { materia_id: c.materia_id, codigo: c.lote, ultima_fecha: fechaOT });
+      } catch(e) { /* el lote es secundario: el parte ya está guardado */ }
     }
-    try { await del("borradores", idBorrador); } catch(e) { /* daba igual */ }
+    // El borrador solo se borra cuando el parte está guardado de verdad
+    try { await del("borradores", idBorrador); } catch(e) { /* puede que no existiera */ }
     setGuardando(false);
     setModal({ tipo:"hecho", quien });
+    } catch (e) {
+      setGuardando(false);
+      window.alert(
+        "No se ha podido guardar el parte.\n\n" + (e?.message || e) +
+        "\n\nLo que has escrito sigue guardado: no se pierde. Vuelve a intentarlo.");
+    }
   };
 
   if (!p) return (
@@ -3640,7 +3683,9 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
           <div style={{fontFamily:F.h,fontWeight:900,fontSize:34,textAlign:"center"}}>{ot.linea} cerrada por {modal.quien}</div>
           <div style={{fontFamily:F.h,fontWeight:900,fontSize:60}}>{num(hecho)} uds</div>
           <div style={{width:"100%",maxWidth:420}}>
-            <BotonF alto={96} bg="#fff" color={C.green} borde="#fff" onClick={onVolver}>VOLVER A LAS ÓRDENES</BotonF>
+            <BotonF alto={96} bg="#fff" color={C.green} borde="#fff" onClick={onVolver}>
+              {fechaOT !== hoy ? "SIGUIENTE" : "VOLVER A LAS ÓRDENES"}
+            </BotonF>
           </div>
         </div>
       )}
