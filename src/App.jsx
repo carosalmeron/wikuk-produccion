@@ -1667,11 +1667,13 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
     const cierresRecientes = cierres.filter(c => (c.fecha||"") >= hace7 && (!centroId || c.centro === centroId));
     // Por dónde va el cierre de la jornada, para el botón
     const turnoYaCerrado = cierres.some(c => c.fecha===hoy && c.turno_id===turnoId && (!centroId || c.centro===centroId));
+    const hayApoyoHoy = otsHoy.some(ot => (prodDe(ot.producto_id)?.procesos_asignados||[])
+      .some(pa => procesos.find(z=>z.id===pa.proceso_id)?.apoyo));
+    const apoyoOk = !hayApoyoHoy || (apoyosHoy.length>0 && apoyosHoy.every(a=>a.validado_por||a.cierre_id));
     const pasoActual = otsHoy.length===0 ? null
       : abiertas.length>0 ? { n:1, t:"cerrar las líneas" }
-      : apoyosHoy.length===0 && otsHoy.some(ot => (prodDe(ot.producto_id)?.procesos_asignados||[])
-          .some(pa => procesos.find(z=>z.id===pa.proceso_id)?.apoyo)) ? { n:2, t:"anotar el apoyo" }
-      : !turnoYaCerrado ? { n:3, t:"cerrar el turno" } : null;
+      : !apoyoOk ? { n:2, t: apoyosHoy.length ? "validar el apoyo" : "anotar el apoyo" }
+      : !turnoYaCerrado ? { n:3, t:"cerrar la jornada" } : null;
     return (
       <div style={{background:C.bg,minHeight:"100vh"}}>
         <CabF titulo={centro?.nombre || "Fábrica"} onSalir={onBack}
@@ -1800,7 +1802,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                 cantidad: toNum(p.objetivo_ot)||toNum(p.cantidad), fecha:dia, turno:claveT }))
           ].filter((x,i,a) => a.findIndex(z=>z.linea===x.linea && z.producto_id===x.producto_id)===i);
           return (
-            <CierreTurno ots={otsDia} partes={prods.filter(p=>p.fecha===dia && p.turno_clave===claveT)}
+            <CierreTurno ots={otsDia} partes={prods.filter(p=>p.fecha===dia)} claveTurno={claveT}
               apoyos={apoyos.filter(a=>a.fecha===dia && !a.cierre_id && (!centroId || !a.centro || a.centro===centroId))}
               apoyoPedidoHoy={{}} productos={productos} mps={mps} procesos={procesos}
               centros={centros} centro={centro} turno={t} hoy={dia} perfil={perfil} usuarios={usuarios}
@@ -1841,30 +1843,46 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
           const actual = pasos.find(p=>!p.ok);
           return (
           <>
+          {otsHoy.length>0 && (
+            <div style={{padding:"18px 22px 0"}}>
+              <div style={{background:pasoActual?C.blueBg:C.greenBg,
+                border:`2px solid ${pasoActual?C.blue:C.green}`,borderRadius:16,padding:"14px 16px",
+                fontSize:15.5,fontWeight:700,color:pasoActual?C.blue:C.green,lineHeight:1.6}}>
+                {pasoActual
+                  ? <>👉 Ahora toca el paso {pasoActual.n}: <b>{pasoActual.t}</b></>
+                  : <>✔ Todo hecho. Ya se puede cerrar la jornada.</>}
+              </div>
+            </div>
+          )}
           <div style={{padding:"24px 22px",display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:20,
             }}>
-          {[["📋","Órdenes de trabajo","Lo que se fabrica hoy",
+          {[["📋","1 · Órdenes de trabajo","Lo que se fabrica hoy",
              abiertas.length ? `${abiertas.length} sin cerrar` : "todo cerrado",
              abiertas.length?C.amber:C.green, ()=>setVista("ordenes")],
             ["⚠️","Incidencias","Problemas con la materia",
              nInc ? `${nInc} esta semana` : "ninguna", nInc?C.red:C.mutedD, ()=>setVista("incidencias")],
             ["⏸","Paradas","Motivo y minutos",
              minHoy ? `${parosHoy.length} hoy · ${Math.round(minHoy)} min` : "ninguna hoy", C.mutedD, ()=>setVista("paradas")],
-            ["🤝","Apoyo","Desalado y similares",
-             apoyosHoy.length ? `${apoyosHoy.length} hoy · ${Math.round(minApoyoHoy)} min` : "nada hoy",
-             apoyosHoy.length?C.blue:C.mutedD, ()=>setVista("apoyo")],
-            ["✅","Cerrar la jornada","Los pasos del final del turno",
+            ["🤝","2 · Apoyo","Desalado y similares",
+             !apoyosHoy.length ? "sin anotar"
+               : apoyosHoy.every(a=>a.validado_por||a.cierre_id) ? `${apoyosHoy.length} · validado`
+               : `${apoyosHoy.length} · falta validar`,
+             !apoyosHoy.length ? C.mutedD
+               : apoyosHoy.every(a=>a.validado_por||a.cierre_id) ? C.green : C.amber,
+             ()=>setVista("apoyo")],
+            ["✅","3 · Cerrar la jornada","Informe del turno y correo",
              otsHoy.length===0 ? "nada que cerrar"
-               : pasoActual ? `paso ${pasoActual.n}: ${pasoActual.t}` : "todo cerrado",
-             pasoActual ? C.amber : C.green, ()=>setVista("cierre")],
+               : pasoActual ? `antes: ${pasoActual.t}` : "listo para cerrar",
+             pasoActual ? C.mutedD : C.green, ()=>setVista("cierre"), !!pasoActual],
             ["🔒","Turnos cerrados","Informes y reenvío",
              (cierresRecientes||[]).length ? `${cierresRecientes.length} esta semana` : "ninguno aún",
              (cierresRecientes||[]).length?C.green:C.mutedD, ()=>setVista("cierresTurno")]
-          ].map(([ic,t,s2,n,col,fn],i)=>(
-            <button key={i} onClick={fn}
-              style={{minHeight:200,borderRadius:22,border:`4px solid ${C.border}`,background:"#fff",cursor:"pointer",
+          ].map(([ic,t,s2,n,col,fn,bloq],i)=>(
+            <button key={i} onClick={fn} disabled={!!bloq}
+              style={{minHeight:200,borderRadius:22,border:`4px solid ${bloq?C.border:C.border}`,
+                background: bloq?C.card2:"#fff", cursor: bloq?"default":"pointer", opacity: bloq?0.5:1,
                 display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:10,
-                boxShadow:"0 3px 10px rgba(15,23,42,0.08)"}}>
+                boxShadow: bloq?"none":"0 3px 10px rgba(15,23,42,0.08)"}}>
               <span style={{fontSize:56}}>{ic}</span>
               <span style={{fontFamily:F.h,fontWeight:900,fontSize:26,color:C.text}}>{t}</span>
               <span style={{fontSize:15,color:C.mutedD,fontWeight:600}}>{s2}</span>
@@ -2031,9 +2049,11 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                       return ya < x.total - 0.5;
                     }).map(([,x]) => x.nombre);
                   })();
-                  const apoyoSinAnotar = !diaVer && apoyoFalta.length>0
-                    && apoyos.filter(a=>a.fecha===hoy && (!centroId || !a.centro || a.centro===centroId)).length===0;
-                  const frena = abiertas.length>0 || reabiertas.length>0 || apoyoSinAnotar;
+                  const delDia = apoyos.filter(a=>a.fecha===hoy && (!centroId || !a.centro || a.centro===centroId));
+                  const apoyoSinAnotar = !diaVer && apoyoFalta.length>0 && delDia.length===0;
+                  const apoyoSinValidar = !diaVer && delDia.length>0
+                    && delDia.some(a=>!a.validado_por && !a.cierre_id);
+                  const frena = abiertas.length>0 || reabiertas.length>0 || apoyoSinAnotar || apoyoSinValidar;
                   return (
                     <>
                       <BotonF alto={110} bg={frena?C.card2:C.navy} color={frena?C.muted:"#fff"}
@@ -2041,6 +2061,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                         sub={abiertas.length ? `faltan ${abiertas.length} línea(s) por cerrar`
                           : reabiertas.length ? `hay ${reabiertas.length} reabierta(s)`
                           : apoyoSinAnotar ? "falta anotar el desalado"
+                          : apoyoSinValidar ? "el desalado está sin validar"
                           : diaVer ? `informe del ${fechaES(diaVer)}`
                           : "genera el informe y lo envía"}
                         onClick={()=>setModal({tipo:"cierreTurno"})}>🔒 CERRAR EL TURNO</BotonF>
@@ -2056,16 +2077,16 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                         const sinValidar = delDia.filter(a=>!a.validado_por && !a.cierre_id).length;
                         if (!apoyoFalta.length && !sinValidar) return null;
                         return (
-                          <div style={{background:C.amberBg,border:`2px solid ${C.amber}`,borderRadius:14,padding:"14px 16px",
-                            fontSize:15,color:C.amber,fontWeight:700,lineHeight:1.6}}>
+                          <div style={{background:C.redBg,border:`2px solid ${C.red}`,borderRadius:14,padding:"14px 16px",
+                            fontSize:15,color:C.red,fontWeight:700,lineHeight:1.6}}>
                             {sinValidar
-                              ? <>🤝 Hay {sinValidar} anotación{sinValidar!==1?"es":""} de desalado sin validar.</>
-                              : <>🤝 ¿Se ha anotado el desalado de hoy?</>}
-                            <div style={{fontSize:13.5,fontWeight:600,marginTop:4}}>
-                              Puedes cerrar igual, pero conviene repasarlo: entra en el coste del turno.
+                              ? <>⛔ Hay {sinValidar} anotación{sinValidar!==1?"es":""} de desalado sin validar.</>
+                              : <>⛔ Falta anotar el desalado de hoy.</>}
+                            <div style={{fontSize:13.5,fontWeight:600,marginTop:4,color:C.mutedD}}>
+                              El desalado entra en el coste del turno: sin él, el informe no vale.
                             </div>
                             <div style={{marginTop:10}}>
-                              <BotonF alto={80} borde={C.amber} color={C.amber} onClick={()=>setVista("apoyo")}>
+                              <BotonF alto={80} borde={C.red} color={C.red} onClick={()=>setVista("apoyo")}>
                                 🤝 Ir a {sinValidar?"validarlo":"anotarlo"}
                               </BotonF>
                             </div>
@@ -2087,7 +2108,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
           </div>
 
           {modal?.tipo==="cierreTurno" && (
-            <CierreTurno ots={otsHoy} partes={prods.filter(p=>p.fecha===hoy)}
+            <CierreTurno ots={otsHoy} partes={prods.filter(p=>p.fecha===hoy)} claveTurno={claveTurno}
               apoyos={apoyos.filter(a=>a.fecha===hoy && !a.cierre_id
                 && (!centroId || !a.centro || a.centro===centroId))}
               apoyoPedidoHoy={(() => {
@@ -2219,18 +2240,24 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
     // ¿Los partes de hoy piden apoyo? ¿Se ha anotado algo?
     const hayApoyo = otsHoy.some(ot => (prodDe(ot.producto_id)?.procesos_asignados||[])
       .some(pa => procesos.find(z=>z.id===pa.proceso_id)?.apoyo));
-    const apoyoAnotado = apoyos.filter(a=>a.fecha===hoy && (!centroId || !a.centro || a.centro===centroId)).length;
+    const delDiaAp = apoyos.filter(a=>a.fecha===hoy && (!centroId || !a.centro || a.centro===centroId));
+    const apoyoAnotado = delDiaAp.length;
+    const apoyoValidado = apoyoAnotado>0 && delDiaAp.every(a=>a.validado_por || a.cierre_id);
     const turnoCerrado = cierres.some(c => c.fecha===hoy && c.turno_id===turnoId && (!centroId || c.centro===centroId));
     const pasos = [
       { n:1, t:"Cerrar las líneas", sub: abiertas.length ? `faltan ${abiertas.length} de ${otsHoy.length}` : "todas cerradas",
         detalle:"Cada línea pone sus unidades, metros y lote.",
         ok: otsHoy.length>0 && abiertas.length===0, ir:()=>setVista("ordenes") },
-      { n:2, t:"Anotar el apoyo", sub: apoyoAnotado ? `${apoyoAnotado} anotaciones` : "sin anotar nada",
-        detalle:"El desalado del día. Se anota al terminar la jornada.",
-        ok: apoyoAnotado>0 || !hayApoyo, ir:()=>setVista("apoyo") },
+      { n:2, t:"Anotar y validar el apoyo",
+        sub: !hayApoyo ? "hoy no hace falta"
+          : !apoyoAnotado ? "sin anotar nada"
+          : !apoyoValidado ? `${apoyoAnotado} anotaciones · falta validar`
+          : `${apoyoAnotado} anotaciones · validado`,
+        detalle:"El desalado del día. Lo anota el operario y lo valida el responsable.",
+        ok: !hayApoyo || apoyoValidado, ir:()=>setVista("apoyo") },
       { n:3, t:"Cerrar el turno", sub: turnoCerrado ? "hecho, informe enviado" : "genera el informe y lo envía",
-        detalle: hayApoyo && apoyoAnotado===0
-          ? "Antes hay que anotar el desalado: entra en el coste."
+        detalle: hayApoyo && !apoyoValidado
+          ? "Antes hay que anotar y validar el desalado: entra en el coste."
           : "Genera el informe con todo y lo manda por correo.",
         ok: turnoCerrado, ir:()=>setVista("ordenes") },
     ];
@@ -2643,8 +2670,13 @@ function HojaApoyo({ procesos, mps, gente, perfil, centroId, claveTurno, hoy, pr
 }
 
 // ── CIERRE DEL TURNO E INFORME ─────────────────────────────────────────────────
-function CierreTurno({ ots, partes, apoyos=[], apoyoPedidoHoy={}, productos, mps, procesos=[], centros, centro, turno, hoy, perfil, usuarios,
+function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], apoyoPedidoHoy={}, productos, mps, procesos=[], centros, centro, turno, hoy, perfil, usuarios,
                        ggMes, onCerrar, onHecho }) {
+  // Un turno solo cierra lo suyo: se filtra aquí para que no dependa de quién llame
+  const ots    = (otsRaw||[]).filter(o => !claveTurno || !o.turno || o.turno === claveTurno);
+  const partes = (partesRaw||[]).filter(p => p.fecha === hoy
+    && (!claveTurno || !p.turno_clave || p.turno_clave === claveTurno));
+  const mezcla = (otsRaw||[]).length - ots.length;
   const [guardando, setGuardando] = useState(false);
 
   const prodDe = (pid) => productos.find(p => p.id === pid);
@@ -2664,7 +2696,8 @@ function CierreTurno({ ots, partes, apoyos=[], apoyoPedidoHoy={}, productos, mps
 
   // ── Producción, línea a línea
   const filas = ots.map(ot => {
-    const parte = partes.find(p => p.linea_nombre===ot.linea && p.producto_id===ot.producto_id && p.fecha===hoy);
+    const parte = partes.find(p => p.linea_nombre===ot.linea && p.producto_id===ot.producto_id
+      && (!ot.turno || !p.turno_clave || p.turno_clave === ot.turno));
     const p = prodDe(ot.producto_id);
     const plan = toNum(ot.cantidad), real = toNum(parte?.cantidad);
     const ritmo = toNum(p?.uds_turno_linea), pers = parseInt(p?.personas_linea)||3;
@@ -3084,6 +3117,12 @@ function CierreTurno({ ots, partes, apoyos=[], apoyoPedidoHoy={}, productos, mps
         </BloqueF>
       )}
 
+      {mezcla>0 && (
+        <div style={{background:C.blueBg,border:`2px solid ${C.blue}`,borderRadius:14,padding:"13px 15px",
+          marginBottom:16,fontSize:14,color:C.blue,fontWeight:700,lineHeight:1.55}}>
+          ℹ️ Se han dejado fuera {mezcla} línea{mezcla!==1?"s":""} de otro turno. Aquí solo entra {turno?.nombre||"este turno"}.
+        </div>
+      )}
       {(() => {
         // ¿Qué apoyo pedían los productos de hoy y no se ha anotado?
         const pedidos = [...new Map(filas.flatMap(f =>
@@ -9076,21 +9115,6 @@ function CierreSemanaTab({ semana, setSemana, semanas, plan, guardar, productos,
 }
 
 function Home({ perfil, onGo, onLogout, counts, ordenes=[], producciones=[], productos=[] }) {
-  const hoy = new Date().toISOString().slice(0,10);
-  const partesHoy = producciones.filter(p=>p.fecha===hoy);
-  const udsHoy = partesHoy.reduce((s,p)=>s+(p.cantidad||0),0);
-  const activas = ordenes.filter(o=>!o.cerrada);
-  const planHome = (o)=>{ if(o.plan_origen==="PROD"){ const pr=productos.find(p=>p.id===o.producto_id); return pr?.objetivo_diario||0; } return o.cantidad||0; };
-  const planHoy = ordenes.filter(o=>o.fecha===hoy).reduce((s,o)=>s+planHome(o),0);
-  const prodDe = (oid) => producciones.filter(p=>p.orden_id===oid).reduce((s,p)=>s+(p.cantidad||0),0);
-  const verDash = perfil.rol!=="operario";
-  const ultimaFecha = producciones.reduce((m,p)=>p.fecha>m?p.fecha:m,"");
-  const esHoy = partesHoy.length>0;
-  const fechaDash = esHoy ? hoy : ultimaFecha;
-  const partesDash = esHoy ? partesHoy : producciones.filter(p=>p.fecha===ultimaFecha);
-  const udsDash = partesDash.reduce((s,p)=>s+(p.cantidad||0),0);
-  const planDash = ordenes.filter(o=>o.fecha===fechaDash).reduce((s,o)=>s+planHome(o),0);
-  const fmtFecha = (f) => fechaES(f, { weekday:"long", day:"numeric", month:"long" });
   const esGerencia = perfil.rol === "gerencia";
   const tiles = [
     { id:"planificacion", grupo:"proc", icon:"📅", bg:"#EEF2FF", label:"Planificación", sub:"Mes · semana · cuadre · cierre", roles:["gerencia","sup_fabrica"] },
@@ -9134,55 +9158,8 @@ function Home({ perfil, onGo, onLogout, counts, ordenes=[], producciones=[], pro
         </div>
       </div>
       <div style={{padding:"14px 12px",maxWidth:900,margin:"0 auto"}}>
-        <div style={{background:C.amberBg,border:`1.5px solid ${C.amber}`,borderRadius:12,padding:"12px 16px",marginBottom:14}}>
-          <div style={{fontFamily:F.h,fontWeight:700,fontSize:15,color:C.amber}}>🏭 FASE 2 — Órdenes y producción</div>
-          <div style={{fontSize:13,color:C.muted,marginTop:3}}>Crea órdenes con nº OT y registra la producción diaria. Próximo: terminal de planta con paros y consumos por lote.</div>
-        </div>
         {perfil.rol==="operario" && (
           <TerminalOperario perfil={perfil} productos={productos}/>
-        )}
-        {verDash && (activas.length>0 || producciones.length>0) && (
-          <div style={{background:"#fff",border:`1px solid ${C.border}`,borderRadius:16,padding:14,marginBottom:14,boxShadow:"0 1px 2px rgba(15,23,42,.04)"}}>
-            <div style={{fontSize:11,color:C.mutedD,fontWeight:800,textTransform:"uppercase",letterSpacing:0.5,marginBottom:10,display:"flex",justifyContent:"space-between"}}>
-              <span>📅 {esHoy?"HOY":"ÚLTIMA JORNADA"} · {fmtFecha(fechaDash)}</span>
-              <button onClick={()=>onGo("diario")} style={{background:"none",border:"none",color:C.blue,fontSize:11,fontWeight:800,cursor:"pointer"}}>Ver diario →</button>
-            </div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
-              {[[activas.length,"Órdenes activas",C.accent],
-                [planDash?`${udsDash}/${planDash}`:String(udsDash),(esHoy?"Uds hoy":"Uds ese día")+(planDash?" / plan":""),C.text],
-                [planDash?Math.round(udsDash/planDash*100)+"%":"—","Del plan",planDash&&udsDash/planDash>=1?C.green:C.amber]].map(([n,l,col],i)=>(
-                <div key={i} style={{background:C.card2,borderRadius:12,padding:"10px 6px",textAlign:"center"}}>
-                  <div style={{fontFamily:F.h,fontWeight:900,fontSize:22,color:col}}>{n}</div>
-                  <div style={{fontSize:10,color:C.muted,marginTop:2}}>{l}</div>
-                </div>
-              ))}
-            </div>
-            {!esHoy && activas.length===0 && partesDash.slice(0,4).map(p2=>{
-              const pr = productos.find(x=>x.id===p2.producto_id);
-              return (
-                <div key={p2.id} onClick={()=>onGo("diario")} style={{display:"flex",justifyContent:"space-between",padding:"9px 0",borderBottom:`1px solid ${C.card2}`,cursor:"pointer",fontSize:13}}>
-                  <b style={{color:C.text}}>{pr?.nombre||"?"}</b>
-                  <span style={{fontWeight:800,color:C.accent}}>{p2.cantidad} uds{p2.n_personas?` · ${p2.n_personas}p`:""}</span>
-                </div>
-              );
-            })}
-            {activas.slice(0,4).map(o=>{
-              const p = productos.find(x=>x.id===o.producto_id);
-              const hechas = prodDe(o.id);
-              const pct = o.cantidad>0?Math.min(100,hechas/o.cantidad*100):0;
-              return (
-                <div key={o.id} onClick={()=>onGo("ordenes")} style={{padding:"9px 0",borderBottom:`1px solid ${C.card2}`,cursor:"pointer"}}>
-                  <div style={{display:"flex",justifyContent:"space-between",fontSize:13,gap:8}}>
-                    <b style={{color:C.text}}>{o.numero?`OT ${o.numero} · `:""}{p?.nombre||"?"}</b>
-                    <span style={{fontWeight:800,color:pct>=100?C.green:C.amber,flexShrink:0}}>{hechas}/{o.cantidad}{pct>=100?" ✓":""}</span>
-                  </div>
-                  <div style={{height:6,background:C.card2,borderRadius:3,overflow:"hidden",marginTop:4}}>
-                    <div style={{width:pct+"%",height:"100%",background:pct>=100?C.green:C.accent,borderRadius:3}}/>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
         )}
         {!esGerencia && perfil.rol!=="operario" && tiles.length===0 && <Empty icon="⏳" text="Tu área estará disponible en la Fase 2"/>}
         <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(250px,1fr))",gap:10}}>
