@@ -2031,13 +2031,16 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                       return ya < x.total - 0.5;
                     }).map(([,x]) => x.nombre);
                   })();
-                  const frena = abiertas.length>0 || reabiertas.length>0;
+                  const apoyoSinAnotar = !diaVer && apoyoFalta.length>0
+                    && apoyos.filter(a=>a.fecha===hoy && (!centroId || !a.centro || a.centro===centroId)).length===0;
+                  const frena = abiertas.length>0 || reabiertas.length>0 || apoyoSinAnotar;
                   return (
                     <>
                       <BotonF alto={110} bg={frena?C.card2:C.navy} color={frena?C.muted:"#fff"}
                         borde={frena?C.border:C.navy} disabled={frena}
                         sub={abiertas.length ? `faltan ${abiertas.length} línea(s) por cerrar`
                           : reabiertas.length ? `hay ${reabiertas.length} reabierta(s)`
+                          : apoyoSinAnotar ? "falta anotar el desalado"
                           : diaVer ? `informe del ${fechaES(diaVer)}`
                           : "genera el informe y lo envía"}
                         onClick={()=>setModal({tipo:"cierreTurno"})}>🔒 CERRAR EL TURNO</BotonF>
@@ -2226,7 +2229,9 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
         detalle:"El desalado del día. Se anota al terminar la jornada.",
         ok: apoyoAnotado>0 || !hayApoyo, ir:()=>setVista("apoyo") },
       { n:3, t:"Cerrar el turno", sub: turnoCerrado ? "hecho, informe enviado" : "genera el informe y lo envía",
-        detalle:"Genera el informe con todo y lo manda por correo.",
+        detalle: hayApoyo && apoyoAnotado===0
+          ? "Antes hay que anotar el desalado: entra en el coste."
+          : "Genera el informe con todo y lo manda por correo.",
         ok: turnoCerrado, ir:()=>setVista("ordenes") },
     ];
     const actual = pasos.find(p=>!p.ok);
