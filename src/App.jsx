@@ -2745,13 +2745,23 @@ function CierreTurno({ ots, partes, apoyos=[], apoyoPedidoHoy={}, productos, mps
   }).sort((a,b) => a.margenUd - b.margenUd);
 
   // ── Rendimientos por lote
-  const rends = filas.flatMap(f => (f.parte?.consumos||[]).map(c=>{
-    const capas = (f.p?.materias_asignadas||[]).find(m=>m.mp_id===c.materia_id)?.capas || 1;
-    const teo = toNum(f.p?.metros_finales) * toNum(capas) * f.real;
-    const gast = toNum(c.metros_consumidos);
-    return { mp: mps.find(m=>m.id===c.materia_id), lote:c.lote, teo, gast,
-      r: (teo>0&&gast>0) ? teo/gast*100 : null, obj: rendObj(c.materia_id) };
-  })).filter(x=>x.r!=null);
+  // Una fila por materia y parte: si hubo varios lotes, se suman los metros
+  const rends = filas.flatMap(f => {
+    const porMateria = {};
+    (f.parte?.consumos||[]).forEach(c => {
+      if (!porMateria[c.materia_id]) porMateria[c.materia_id] = {
+        materia_id: c.materia_id, lotes: [], gast: 0,
+        capas: toNum(c.capas) || toNum((f.p?.materias_asignadas||[]).find(m=>m.mp_id===c.materia_id)?.capas) || 1 };
+      if (c.lote) porMateria[c.materia_id].lotes.push(c.lote);
+      porMateria[c.materia_id].gast += toNum(c.metros_consumidos);
+    });
+    return Object.values(porMateria).map(x => {
+      const teo = toNum(f.p?.metros_finales) * x.capas * f.real;
+      return { mp: mps.find(m=>m.id===x.materia_id),
+        lote: x.lotes.join(" + ") || "sin lote", teo, gast: x.gast,
+        r: (teo>0 && x.gast>0) ? teo/x.gast*100 : null, obj: rendObj(x.materia_id) };
+    });
+  }).filter(x=>x.r!=null);
 
   const paros = filas.flatMap(f => (f.parte?.paros||[]).map(x=>({...x, linea:f.ot.linea})));
   const minParados = paros.reduce((a,x)=>a+toNum(x.minutos),0);
@@ -3319,7 +3329,10 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
   const colPct = pct>=1 ? C.green : pct>=0.9 ? C.amber : C.red;
 
   const teoricoDe = (c) => toNum(p?.metros_finales) * toNum(c.capas) * hecho;
-  const rendDe = (c) => { const t = teoricoDe(c), r = toNum(c.metros_consumidos);
+  // Si la misma materia está en varias líneas (dos lotes), se juntan para el rendimiento
+  const mismaMateria = (c) => consumos.filter(z => z.materia_id === c.materia_id);
+  const gastadoDe = (c) => mismaMateria(c).reduce((a,z)=>a+toNum(z.metros_consumidos), 0);
+  const rendDe = (c) => { const t = teoricoDe(c), r = gastadoDe(c);
     return (t>0 && r>0) ? (t/r)*100 : null; };
   const objRendDe = (c) => toNum(mps.find(m=>m.id===c.materia_id)?.rendimiento_objetivo) || 85;
 
@@ -3483,13 +3496,19 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
                     style={{width:52,height:64,borderRadius:12,border:`2px solid ${C.border}`,background:"#fff",
                       color:C.red,fontSize:20,cursor:"pointer",flexShrink:0}}>✕</button>
                 </div>
+                {consumos.findIndex(z=>z.materia_id===c.materia_id) === i && (
                 <div style={{borderRadius:12,padding:"11px 13px",fontSize:14,fontWeight:700,lineHeight:1.55,
                   background: r==null?C.card2 : bien?C.greenBg:C.redBg,
                   border: r==null?"none":`2px solid ${bien?C.green:C.red}`,
                   color: r==null?C.mutedD : bien?C.green:C.red}}>
-                  {r!=null && (() => {
+                  {mismaMateria(c).length>1 && (
+                    <div style={{fontSize:12.5,fontWeight:800,marginBottom:4}}>
+                      Sumando los {mismaMateria(c).length} lotes de esta materia
+                    </div>
+                  )}
+                  {r!=null && consumos.findIndex(z=>z.materia_id===c.materia_id) === i && (() => {
                     const esperado = teoricoDe(c) / (obj/100);
-                    const dif = toNum(c.metros_consumidos) - esperado;
+                    const dif = gastadoDe(c) - esperado;
                     return (
                       <div style={{fontSize:13,fontWeight:600,marginBottom:6,color:C.mutedD}}>
                         Al {obj}% tocaría gastar <b style={{color:C.text}}>{num(esperado)} m</b>
@@ -3506,8 +3525,9 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
                       : !(toNum(p?.metros_finales)>0) ? "⚠️ Este producto no tiene metros finales por unidad en su ficha."
                       : "No se puede calcular el rendimiento.")
                     : <>Rendimiento <b style={{fontSize:19}}>{Math.round(r)}%</b> · el objetivo es {obj}% —
-                        <span style={{fontWeight:600}}> gastados {num(c.metros_consumidos)} m para {num(teoricoDe(c))} m de producto</span></>}
+                        <span style={{fontWeight:600}}> gastados {num(gastadoDe(c))} m para {num(teoricoDe(c))} m de producto</span></>}
                 </div>
+                )}
               </div>
             );
           })}
