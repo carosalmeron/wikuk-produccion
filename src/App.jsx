@@ -1711,7 +1711,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
           </div>
         )}
 
-        {(!esOperario || centroPropio) && (() => {
+        {(!esOperario || centroPropio) && atrasadas.length===0 && turnosSinCerrar.length===0 && (() => {
           // ── Los tres pasos del día
           const apoyoPend = (() => {
             const acum = {};
@@ -1744,8 +1744,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
           return (
           <>
           <div style={{padding:"24px 22px",display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:20,
-            opacity: (atrasadas.length||turnosSinCerrar.length) ? 0.45 : 1,
-            pointerEvents: (atrasadas.length||turnosSinCerrar.length) ? "none" : "auto"}}>
+            }}>
           {[["📋","Órdenes de trabajo","Lo que se fabrica hoy",
              abiertas.length ? `${abiertas.length} sin cerrar` : "todo cerrado",
              abiertas.length?C.amber:C.green, ()=>setVista("ordenes")],
