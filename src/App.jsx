@@ -1587,10 +1587,14 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
       .sort((a,b) => a.fecha.localeCompare(b.fecha));
   })();
 
-  const parteDe = (ot) => prods.find(p =>
-    (ot.orden_id && p.orden_id === ot.orden_id) ||
-    (p.fecha===(ot.fecha||hoy) && p.linea_nombre===ot.linea
-      && p.turno_clave===(ot.turno||claveTurno) && p.producto_id===ot.producto_id));
+  // El parte tiene que ser del mismo día que la orden, siempre
+  const parteDe = (ot) => {
+    const dia = ot.fecha || hoy;
+    return prods.find(p => p.fecha === dia && (
+      (ot.orden_id && p.orden_id === ot.orden_id) ||
+      (p.linea_nombre===ot.linea && p.turno_clave===(ot.turno||claveTurno) && p.producto_id===ot.producto_id)
+    ));
+  };
   const abiertas = otsHoy.filter(ot => !parteDe(ot));
   const cerradasHoy = otsHoy.filter(ot => parteDe(ot));
   const cerradasTodas = prods.filter(p => p.origen==="terminal" && !p.reabierta).slice(0, 30);
@@ -1969,9 +1973,16 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                       📋 OT {ot.numero||"—"}{ot.cliente?` · ${ot.cliente}`:""}{ot.tipo?` · ${ot.tipo}`:""}
                     </div>
                   )}
-                  {parte && <div style={{fontSize:14,color:C.green,fontWeight:700,marginTop:4}}>
-                    {num(parte.cantidad)} hechas · cerró {parte.cerrado_por||"—"}
-                  </div>}
+                  {parte && (
+                    <div style={{fontSize:14,color:C.green,fontWeight:700,marginTop:4}}>
+                      {num(parte.cantidad)} hechas
+                      {parte.cerrado_por ? ` · cerró ${parte.cerrado_por}` : " · sin firmar"}
+                      <div style={{fontSize:12.5,color: parte.fecha===hoy ? C.mutedD : C.red, fontWeight:700}}>
+                        📅 parte del {fechaES(parte.fecha)}
+                        {parte.fecha!==hoy && " · ¡no es de este día!"}
+                      </div>
+                    </div>
+                  )}
                   {empezada && <div style={{fontSize:14,color:C.blue,fontWeight:700,marginTop:4}}>
                     Hay datos guardados sin cerrar
                   </div>}
@@ -2008,9 +2019,17 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                         borde={frena?C.border:C.navy} disabled={frena}
                         sub={abiertas.length ? `faltan ${abiertas.length} línea(s) por cerrar`
                           : reabiertas.length ? `hay ${reabiertas.length} reabierta(s)`
+                          : diaVer ? `informe del ${fechaES(diaVer)}`
                           : "genera el informe y lo envía"}
                         onClick={()=>setModal({tipo:"cierreTurno"})}>🔒 CERRAR EL TURNO</BotonF>
-                      {abiertas.length===0 && reabiertas.length===0 && (() => {
+                      {diaVer && !frena && (
+                        <div style={{background:C.card2,borderRadius:14,padding:"13px 15px",
+                          fontSize:14,color:C.mutedD,lineHeight:1.6}}>
+                          Es un cierre atrasado: el informe saldrá con fecha del <b style={{color:C.text}}>{fechaES(diaVer)}</b>,
+                          con los datos que se anotaran entonces.
+                        </div>
+                      )}
+                      {!diaVer && abiertas.length===0 && reabiertas.length===0 && (() => {
                         const delDia = apoyos.filter(a=>a.fecha===hoy && (!centroId || !a.centro || a.centro===centroId));
                         const sinValidar = delDia.filter(a=>!a.validado_por && !a.cierre_id).length;
                         if (!apoyoFalta.length && !sinValidar) return null;
