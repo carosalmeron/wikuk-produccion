@@ -1522,9 +1522,30 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
   const otsHoy = [...otsPlan, ...otsManual.filter(m =>
     !otsPlan.some(p => p.linea === m.linea && p.producto_id === m.producto_id))];
 
+  // ── Lo que quedó abierto de días anteriores: hay que cerrarlo antes de seguir
+  const atrasadas = (() => {
+    const desde = new Date(Date.now() - 14*864e5).toISOString().slice(0,10);
+    const delPlan = planesSem
+      .filter(w => !centroId || w.centro === centroId)
+      .flatMap(w => (w.calendario||[])
+        .filter(x => x.fecha >= desde && x.fecha < hoy)
+        .map(x => ({ ...x, origen_ot:"plan" })));
+    const delManual = ordenes
+      .filter(o => !o.cerrada && o.fecha >= desde && o.fecha < hoy
+        && (!centroId || (o.centro || productos.find(p=>p.id===o.producto_id)?.centro) === centroId))
+      .map(o => ({ linea: nombreLinea(o.linea_id) || "Sin línea",
+        turno: o.turno_id ? claveDeTurno(turnos, o.turno_id) : "T1",
+        fecha: o.fecha, producto_id: o.producto_id, cantidad: toNum(o.cantidad),
+        orden_id: o.id, numero: o.numero, origen_ot:"manual" }));
+    return [...delPlan, ...delManual].filter(ot => !prods.some(p =>
+      (ot.orden_id && p.orden_id === ot.orden_id) ||
+      (p.fecha===ot.fecha && p.linea_nombre===ot.linea && p.producto_id===ot.producto_id)));
+  })();
+
   const parteDe = (ot) => prods.find(p =>
     (ot.orden_id && p.orden_id === ot.orden_id) ||
-    (p.fecha===hoy && p.linea_nombre===ot.linea && p.turno_clave===(ot.turno||claveTurno) && p.producto_id===ot.producto_id));
+    (p.fecha===(ot.fecha||hoy) && p.linea_nombre===ot.linea
+      && p.turno_clave===(ot.turno||claveTurno) && p.producto_id===ot.producto_id));
   const abiertas = otsHoy.filter(ot => !parteDe(ot));
   const cerradasHoy = otsHoy.filter(ot => parteDe(ot));
   const cerradasTodas = prods.filter(p => p.origen==="terminal" && !p.reabierta).slice(0, 30);
@@ -1613,6 +1634,36 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
             ))}
           </div>
         )}
+        {atrasadas.length>0 && (
+          <div style={{margin:"18px 22px 0",background:C.redBg,border:`3px solid ${C.red}`,borderRadius:18,padding:"18px 20px"}}>
+            <div style={{fontFamily:F.h,fontWeight:900,fontSize:20,color:C.red,marginBottom:4}}>
+              ⛔ Hay {atrasadas.length} orden{atrasadas.length!==1?"es":""} de días anteriores sin cerrar
+            </div>
+            <div style={{fontSize:15,color:C.text,lineHeight:1.6,marginBottom:12}}>
+              Ciérralas antes de seguir: si no, esa producción no cuenta en ningún sitio y el turno queda mal.
+            </div>
+            {atrasadas.slice(0,6).map((ot,i)=>{
+              const p = prodDe(ot.producto_id);
+              return (
+                <button key={i} onClick={()=>{ setOtSel(ot); setVista("ot"); }}
+                  style={{width:"100%",background:"#fff",border:`2px solid ${C.red}`,borderRadius:14,
+                    padding:"13px 15px",marginBottom:9,textAlign:"left",cursor:"pointer"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:10}}>
+                    <span style={{minWidth:0}}>
+                      <div style={{fontFamily:F.h,fontWeight:800,fontSize:16.5,color:C.text}}>{p?.nombre||"?"}</div>
+                      <div style={{fontSize:13.5,color:C.mutedD}}>{ot.linea} · {num(ot.cantidad)} uds previstas</div>
+                    </span>
+                    <span style={{flexShrink:0,fontSize:13.5,fontWeight:800,color:C.red}}>{fechaES(ot.fecha)} ›</span>
+                  </div>
+                </button>
+              );
+            })}
+            {atrasadas.length>6 && (
+              <div style={{fontSize:13.5,color:C.mutedD,marginTop:4}}>y {atrasadas.length-6} más…</div>
+            )}
+          </div>
+        )}
+
         {(!esOperario || centroPropio) && (() => {
           // ── Los tres pasos del día
           const apoyoPend = (() => {
@@ -1645,7 +1696,8 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
           const actual = pasos.find(p=>!p.ok);
           return (
           <>
-          <div style={{padding:"24px 22px",display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:20}}>
+          <div style={{padding:"24px 22px",display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:20,
+            opacity: atrasadas.length ? 0.45 : 1, pointerEvents: atrasadas.length ? "none" : "auto"}}>
           {[["📋","Órdenes de trabajo","Lo que se fabrica hoy",
              abiertas.length ? `${abiertas.length} sin cerrar` : "todo cerrado",
              abiertas.length?C.amber:C.green, ()=>setVista("ordenes")],
@@ -3136,6 +3188,15 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
             ✔ Guardado solo{guardadoEn ? ` a las ${guardadoEn.toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"})}` : ""}.
             <div style={{fontSize:13,fontWeight:600,color:C.mutedD,marginTop:2}}>
               Puedes salir y volver: lo escrito no se pierde. La orden no queda cerrada hasta que lo hagas abajo.
+            </div>
+          </div>
+        )}
+        {fechaOT !== hoy && !esReabierta && (
+          <div style={{background:C.redBg,border:`2px solid ${C.red}`,borderRadius:14,padding:"14px 16px",
+            marginBottom:16,fontSize:15,color:C.red,fontWeight:700,lineHeight:1.55}}>
+            ⛔ Esta orden es de {fechaES(fechaOT)}, no de hoy.
+            <div style={{fontSize:13.5,fontWeight:600,color:C.mutedD,marginTop:4}}>
+              Se guardará con su fecha, así que la producción cuenta en el día que se hizo.
             </div>
           </div>
         )}
