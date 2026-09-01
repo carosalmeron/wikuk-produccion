@@ -1472,7 +1472,8 @@ const GRAVEDAD = [["madeja","🟡","Alguna madeja"],["media","🟠","Media parte
 
 function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mps, motivos, moldes=[], usuarios=[], procesos=[] }) {
   const hoyReal = new Date().toISOString().slice(0,10);
-  const [vista, setVista] = useState("inicio");     // inicio·ordenes·ot·cerradas·incidencias·paradas
+  const [vistaRaw, setVistaRaw] = useState("inicio");  // inicio·ordenes·ot·cerradas·incidencias·paradas
+  const vista = vistaRaw;
   // El centro y el turno salen de la ficha del operario
   const esOperario = perfil?.rol === "operario";
   const centroPropio = centros.find(c => c.id === perfil?.centro) || null;
@@ -1485,6 +1486,8 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
   const [otSel, setOtSel] = useState(null);         // {linea, producto_id, cantidad, ...}
   const [verDia, setVerDia] = useState(false);      // supervisión: los dos turnos a la vez
   const [diaVer, setDiaVer] = useState("");         // para cerrar un turno atrasado
+  // Salir a la entrada devuelve siempre al día de hoy: así no se arrastra un día viejo
+  const setVista = (v) => { if (v === "inicio") setDiaVer(""); setVistaRaw(v); };
   const [modal, setModal] = useState(null);
 
   const hoy = diaVer || hoyReal;
@@ -1858,7 +1861,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
   if (vista === "ordenes") {
     return (
       <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
-        <CabF titulo="Órdenes de trabajo"
+        <CabF titulo={diaVer ? `Órdenes del ${fechaES(diaVer)}` : "Órdenes de trabajo"}
           sub={`${centro?.nombre||"sin centro"} · ${verDia ? "todo el día" : (turno?.nombre||"")} · toca tu línea`}
           atras={()=>{ setDiaVer(""); setVista("inicio"); }} onSalir={onBack}
           color={diaVer ? C.amber : C.navy}/>
