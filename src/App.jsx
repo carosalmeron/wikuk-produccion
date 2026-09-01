@@ -1530,10 +1530,10 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
     const delPlan = planesSem
       .filter(w => !centroId || w.centro === centroId)
       .flatMap(w => (w.calendario||[])
-        .filter(x => x.fecha >= desde && x.fecha < hoy)
+        .filter(x => x.fecha >= desde && x.fecha < hoyReal)
         .map(x => ({ ...x, origen_ot:"plan" })));
     const delManual = ordenes
-      .filter(o => !o.cerrada && o.fecha >= desde && o.fecha < hoy
+      .filter(o => !o.cerrada && o.fecha >= desde && o.fecha < hoyReal
         && (!centroId || (o.centro || productos.find(p=>p.id===o.producto_id)?.centro) === centroId))
       .map(o => ({ linea: nombreLinea(o.linea_id) || "Sin línea",
         turno: o.turno_id ? claveDeTurno(turnos, o.turno_id) : "T1",
@@ -1548,16 +1548,27 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
   const turnosSinCerrar = (() => {
     const desde = new Date(Date.now() - 14*864e5).toISOString().slice(0,10);
     const conParte = {};
-    prods.filter(p => p.origen==="terminal" && p.fecha >= desde && p.fecha < hoy && !p.reabierta)
+    prods.filter(p => p.fecha >= desde && p.fecha < hoyReal && !p.reabierta && toNum(p.cantidad) > 0)
+      .filter(p => {
+        // Solo los de este centro: por el producto o por la línea
+        if (!centroId) return true;
+        const prod = productos.find(z => z.id === p.producto_id);
+        if (prod?.centro) return prod.centro === centroId;
+        return lineas.some(l => l.nombre === p.linea_nombre && l.centro === centroId);
+      })
       .forEach(p => {
-        const t = turnos.find(z => claveDeTurno(turnos, z.id) === p.turno_clave) || turnos[0];
+        // El turno, por su id si lo trae; si no, por la clave
+        const t = turnos.find(z => z.id === p.turno_id)
+          || turnos.find(z => claveDeTurno(turnos, z.id) === p.turno_clave)
+          || turnos[0];
         const k = `${p.fecha}__${t?.id||""}`;
         if (!conParte[k]) conParte[k] = { fecha:p.fecha, turno:t, partes:0, uds:0 };
         conParte[k].partes++; conParte[k].uds += toNum(p.cantidad);
       });
-    return Object.entries(conParte)
-      .filter(([k]) => !cierres.some(c => `${c.fecha}__${c.turno_id}` === k && (!centroId || c.centro === centroId)))
-      .map(([,v]) => v)
+    return Object.values(conParte)
+      .filter(v => !cierres.some(c => c.fecha === v.fecha
+        && (c.turno_id === v.turno?.id || !c.turno_id)
+        && (!centroId || !c.centro || c.centro === centroId)))
       .sort((a,b) => a.fecha.localeCompare(b.fecha));
   })();
 
@@ -1653,63 +1664,82 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
             ))}
           </div>
         )}
-        {atrasadas.length>0 && (
-          <div style={{margin:"18px 22px 0",background:C.redBg,border:`3px solid ${C.red}`,borderRadius:18,padding:"18px 20px"}}>
-            <div style={{fontFamily:F.h,fontWeight:900,fontSize:20,color:C.red,marginBottom:4}}>
-              ⛔ Hay {atrasadas.length} orden{atrasadas.length!==1?"es":""} de días anteriores sin cerrar
-            </div>
-            <div style={{fontSize:15,color:C.text,lineHeight:1.6,marginBottom:12}}>
-              Ciérralas antes de seguir: si no, esa producción no cuenta en ningún sitio y el turno queda mal.
-            </div>
-            {atrasadas.slice(0,6).map((ot,i)=>{
-              const p = prodDe(ot.producto_id);
-              return (
-                <button key={i} onClick={()=>{ setOtSel(ot); setVista("ot"); }}
-                  style={{width:"100%",background:"#fff",border:`2px solid ${C.red}`,borderRadius:14,
-                    padding:"13px 15px",marginBottom:9,textAlign:"left",cursor:"pointer"}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:10}}>
-                    <span style={{minWidth:0}}>
-                      <div style={{fontFamily:F.h,fontWeight:800,fontSize:16.5,color:C.text}}>{p?.nombre||"?"}</div>
-                      <div style={{fontSize:13.5,color:C.mutedD}}>{ot.linea} · {num(ot.cantidad)} uds previstas</div>
-                    </span>
-                    <span style={{flexShrink:0,fontSize:13.5,fontWeight:800,color:C.red}}>{fechaES(ot.fecha)} ›</span>
-                  </div>
-                </button>
-              );
-            })}
-            {atrasadas.length>6 && (
-              <div style={{fontSize:13.5,color:C.mutedD,marginTop:4}}>y {atrasadas.length-6} más…</div>
-            )}
-          </div>
-        )}
-
-        {atrasadas.length===0 && turnosSinCerrar.length>0 && (
-          <div style={{margin:"18px 22px 0",background:C.amberBg,border:`3px solid ${C.amber}`,borderRadius:18,padding:"18px 20px"}}>
-            <div style={{fontFamily:F.h,fontWeight:900,fontSize:20,color:C.amber,marginBottom:4}}>
-              ⛔ Hay {turnosSinCerrar.length} turno{turnosSinCerrar.length!==1?"s":""} sin cerrar
-            </div>
-            <div style={{fontSize:15,color:C.text,lineHeight:1.6,marginBottom:12}}>
-              Las líneas están cerradas, pero nadie cerró el turno: no salió informe y esa jornada no cuenta.
-            </div>
-            {turnosSinCerrar.slice(0,5).map((t,i)=>(
-              <button key={i} onClick={()=>{ setTurnoId(t.turno?.id||turnoId); setDiaVer(t.fecha); setVista("ordenes"); }}
-                style={{width:"100%",background:"#fff",border:`2px solid ${C.amber}`,borderRadius:14,
-                  padding:"13px 15px",marginBottom:9,textAlign:"left",cursor:"pointer"}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:10}}>
-                  <span style={{minWidth:0}}>
-                    <div style={{fontFamily:F.h,fontWeight:800,fontSize:16.5,color:C.text}}>
-                      {fechaES(t.fecha)} · {t.turno?.nombre||"—"}
-                    </div>
-                    <div style={{fontSize:13.5,color:C.mutedD}}>
-                      {t.partes} línea{t.partes!==1?"s":""} cerrada{t.partes!==1?"s":""} · {num(t.uds)} uds
-                    </div>
-                  </span>
-                  <span style={{flexShrink:0,fontSize:13.5,fontWeight:800,color:C.amber}}>cerrar ›</span>
+        {(atrasadas.length>0 || turnosSinCerrar.length>0) && (() => {
+          // Todo lo pendiente, agrupado por día
+          const dias = {};
+          atrasadas.forEach(ot => {
+            if (!dias[ot.fecha]) dias[ot.fecha] = { fecha: ot.fecha, ordenes: [], turnos: [] };
+            dias[ot.fecha].ordenes.push(ot);
+          });
+          turnosSinCerrar.forEach(t => {
+            if (!dias[t.fecha]) dias[t.fecha] = { fecha: t.fecha, ordenes: [], turnos: [] };
+            dias[t.fecha].turnos.push(t);
+          });
+          const lista = Object.values(dias).sort((a,b)=>a.fecha.localeCompare(b.fecha));
+          return (
+            <div style={{margin:"18px 22px 0"}}>
+              <div style={{background:C.redBg,border:`3px solid ${C.red}`,borderRadius:18,padding:"18px 20px",marginBottom:16}}>
+                <div style={{fontFamily:F.h,fontWeight:900,fontSize:21,color:C.red,marginBottom:4}}>
+                  ⛔ Quedan días sin terminar
                 </div>
-              </button>
-            ))}
-          </div>
-        )}
+                <div style={{fontSize:15,color:C.text,lineHeight:1.6}}>
+                  Antes de trabajar hoy hay que cerrarlos. Primero las líneas, después el turno.
+                </div>
+              </div>
+
+              {lista.map(d=>(
+                <div key={d.fecha} style={{background:"#fff",border:`2px solid ${C.border}`,borderRadius:18,
+                  padding:16,marginBottom:14}}>
+                  <div style={{fontFamily:F.h,fontWeight:900,fontSize:18,color:C.text,marginBottom:12}}>
+                    {fechaESLarga(d.fecha)}
+                  </div>
+
+                  {d.ordenes.map((ot,i)=>{
+                    const p = prodDe(ot.producto_id);
+                    return (
+                      <button key={i} onClick={()=>{ setDiaVer(d.fecha); setOtSel(ot); setVista("ot"); }}
+                        style={{width:"100%",background:C.redBg,border:`2px solid ${C.red}`,borderRadius:14,
+                          padding:"13px 15px",marginBottom:9,textAlign:"left",cursor:"pointer"}}>
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:10}}>
+                          <span style={{minWidth:0}}>
+                            <div style={{fontFamily:F.h,fontWeight:800,fontSize:16.5,color:C.text}}>{p?.nombre||"?"}</div>
+                            <div style={{fontSize:13.5,color:C.mutedD}}>{ot.linea} · {num(ot.cantidad)} uds previstas</div>
+                          </span>
+                          <span style={{flexShrink:0,fontSize:13.5,fontWeight:800,color:C.red}}>línea sin cerrar ›</span>
+                        </div>
+                      </button>
+                    );
+                  })}
+
+                  {d.turnos.map((t,i)=>(
+                    <button key={"t"+i}
+                      disabled={d.ordenes.length>0}
+                      onClick={()=>{ setTurnoId(t.turno?.id||turnoId); setDiaVer(d.fecha); setVista("ordenes"); }}
+                      style={{width:"100%",background: d.ordenes.length ? C.card2 : C.amberBg,
+                        border:`2px solid ${d.ordenes.length ? C.border : C.amber}`,borderRadius:14,
+                        padding:"13px 15px",marginBottom:9,textAlign:"left",
+                        cursor: d.ordenes.length ? "default" : "pointer", opacity: d.ordenes.length ? 0.6 : 1}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:10}}>
+                        <span style={{minWidth:0}}>
+                          <div style={{fontFamily:F.h,fontWeight:800,fontSize:16.5,color:C.text}}>
+                            🔒 {t.turno?.nombre||"Turno"}
+                          </div>
+                          <div style={{fontSize:13.5,color:C.mutedD}}>
+                            {t.partes} línea{t.partes!==1?"s":""} cerrada{t.partes!==1?"s":""} · {num(t.uds)} uds · sin informe
+                          </div>
+                        </span>
+                        <span style={{flexShrink:0,fontSize:13.5,fontWeight:800,
+                          color: d.ordenes.length ? C.mutedD : C.amber}}>
+                          {d.ordenes.length ? "espera a las líneas" : "cerrar turno ›"}
+                        </span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              ))}
+            </div>
+          );
+        })()}
 
         {(!esOperario || centroPropio) && atrasadas.length===0 && turnosSinCerrar.length===0 && (() => {
           // ── Los tres pasos del día
