@@ -1471,7 +1471,7 @@ const TIPOS_INC = [
 const GRAVEDAD = [["madeja","🟡","Alguna madeja"],["media","🟠","Media parte"],["todo","🔴","Todo el lote"]];
 
 function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mps, motivos, moldes=[], usuarios=[], procesos=[] }) {
-  const hoy = new Date().toISOString().slice(0,10);
+  const hoyReal = new Date().toISOString().slice(0,10);
   const [vista, setVista] = useState("inicio");     // inicio·ordenes·ot·cerradas·incidencias·paradas
   // El centro y el turno salen de la ficha del operario
   const esOperario = perfil?.rol === "operario";
@@ -1484,8 +1484,10 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
   useEffect(()=>{ if (perfil?.turno) setTurnoId(perfil.turno); }, [perfil?.turno]);
   const [otSel, setOtSel] = useState(null);         // {linea, producto_id, cantidad, ...}
   const [verDia, setVerDia] = useState(false);      // supervisión: los dos turnos a la vez
+  const [diaVer, setDiaVer] = useState("");         // para cerrar un turno atrasado
   const [modal, setModal] = useState(null);
 
+  const hoy = diaVer || hoyReal;
   const [planesSem] = useCol("planes_semana");
   const [prods]     = useCol("producciones");
   const [incid]     = useCol("incidencias");
@@ -1540,6 +1542,23 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
     return [...delPlan, ...delManual].filter(ot => !prods.some(p =>
       (ot.orden_id && p.orden_id === ot.orden_id) ||
       (p.fecha===ot.fecha && p.linea_nombre===ot.linea && p.producto_id===ot.producto_id)));
+  })();
+
+  // ── Turnos de días anteriores con partes pero sin informe: falta cerrarlos
+  const turnosSinCerrar = (() => {
+    const desde = new Date(Date.now() - 14*864e5).toISOString().slice(0,10);
+    const conParte = {};
+    prods.filter(p => p.origen==="terminal" && p.fecha >= desde && p.fecha < hoy && !p.reabierta)
+      .forEach(p => {
+        const t = turnos.find(z => claveDeTurno(turnos, z.id) === p.turno_clave) || turnos[0];
+        const k = `${p.fecha}__${t?.id||""}`;
+        if (!conParte[k]) conParte[k] = { fecha:p.fecha, turno:t, partes:0, uds:0 };
+        conParte[k].partes++; conParte[k].uds += toNum(p.cantidad);
+      });
+    return Object.entries(conParte)
+      .filter(([k]) => !cierres.some(c => `${c.fecha}__${c.turno_id}` === k && (!centroId || c.centro === centroId)))
+      .map(([,v]) => v)
+      .sort((a,b) => a.fecha.localeCompare(b.fecha));
   })();
 
   const parteDe = (ot) => prods.find(p =>
@@ -1608,7 +1627,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
       <div style={{background:C.bg,minHeight:"100vh"}}>
         <CabF titulo={centro?.nombre || "Fábrica"} onSalir={onBack}
           atras={!esOperario && centros.length>1 ? ()=>setCentroElegido("") : null}
-          sub={`${fechaESLarga(hoy)} · ${turno?.nombre||"sin turno"}`}/>
+          sub={`${fechaESLarga(hoyReal)} · ${turno?.nombre||"sin turno"}`}/>
         {esOperario && !centroPropio && (
           <div style={{margin:"18px 22px",background:C.redBg,border:`3px solid ${C.red}`,borderRadius:16,
             padding:"20px",fontSize:17,color:C.red,fontWeight:700,lineHeight:1.6}}>
@@ -1664,6 +1683,34 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
           </div>
         )}
 
+        {atrasadas.length===0 && turnosSinCerrar.length>0 && (
+          <div style={{margin:"18px 22px 0",background:C.amberBg,border:`3px solid ${C.amber}`,borderRadius:18,padding:"18px 20px"}}>
+            <div style={{fontFamily:F.h,fontWeight:900,fontSize:20,color:C.amber,marginBottom:4}}>
+              ⛔ Hay {turnosSinCerrar.length} turno{turnosSinCerrar.length!==1?"s":""} sin cerrar
+            </div>
+            <div style={{fontSize:15,color:C.text,lineHeight:1.6,marginBottom:12}}>
+              Las líneas están cerradas, pero nadie cerró el turno: no salió informe y esa jornada no cuenta.
+            </div>
+            {turnosSinCerrar.slice(0,5).map((t,i)=>(
+              <button key={i} onClick={()=>{ setTurnoId(t.turno?.id||turnoId); setDiaVer(t.fecha); setVista("ordenes"); }}
+                style={{width:"100%",background:"#fff",border:`2px solid ${C.amber}`,borderRadius:14,
+                  padding:"13px 15px",marginBottom:9,textAlign:"left",cursor:"pointer"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:10}}>
+                  <span style={{minWidth:0}}>
+                    <div style={{fontFamily:F.h,fontWeight:800,fontSize:16.5,color:C.text}}>
+                      {fechaES(t.fecha)} · {t.turno?.nombre||"—"}
+                    </div>
+                    <div style={{fontSize:13.5,color:C.mutedD}}>
+                      {t.partes} línea{t.partes!==1?"s":""} cerrada{t.partes!==1?"s":""} · {num(t.uds)} uds
+                    </div>
+                  </span>
+                  <span style={{flexShrink:0,fontSize:13.5,fontWeight:800,color:C.amber}}>cerrar ›</span>
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+
         {(!esOperario || centroPropio) && (() => {
           // ── Los tres pasos del día
           const apoyoPend = (() => {
@@ -1697,7 +1744,8 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
           return (
           <>
           <div style={{padding:"24px 22px",display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:20,
-            opacity: atrasadas.length ? 0.45 : 1, pointerEvents: atrasadas.length ? "none" : "auto"}}>
+            opacity: (atrasadas.length||turnosSinCerrar.length) ? 0.45 : 1,
+            pointerEvents: (atrasadas.length||turnosSinCerrar.length) ? "none" : "auto"}}>
           {[["📋","Órdenes de trabajo","Lo que se fabrica hoy",
              abiertas.length ? `${abiertas.length} sin cerrar` : "todo cerrado",
              abiertas.length?C.amber:C.green, ()=>setVista("ordenes")],
@@ -1741,7 +1789,17 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
       <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
         <CabF titulo="Órdenes de trabajo"
           sub={`${centro?.nombre||"sin centro"} · ${verDia ? "todo el día" : (turno?.nombre||"")} · toca tu línea`}
-          atras={()=>setVista("inicio")} onSalir={onBack}/>
+          atras={()=>{ setDiaVer(""); setVista("inicio"); }} onSalir={onBack}
+          color={diaVer ? C.amber : C.navy}/>
+        {diaVer && (
+          <div style={{margin:"16px 22px 0",background:C.amberBg,border:`3px solid ${C.amber}`,borderRadius:16,
+            padding:"14px 16px",fontSize:15,color:C.amber,fontWeight:700,lineHeight:1.6}}>
+            📅 Estás cerrando el turno de <b>{fechaES(diaVer)}</b>, no el de hoy.
+            <div style={{marginTop:10}}>
+              <BotonF alto={72} borde={C.amber} color={C.amber} onClick={()=>setDiaVer("")}>Volver a hoy</BotonF>
+            </div>
+          </div>
+        )}
         {!esOperario && turnos.length>1 && (
           <div style={{padding:"16px 22px 0"}}>
             <div style={{display:"flex",gap:10}}>
