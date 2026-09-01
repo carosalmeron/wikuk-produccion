@@ -1521,8 +1521,20 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
       orden_id: o.id, numero: o.numero, cliente: o.cliente, tipo: o.tipo, origen_ot: "manual" }));
 
   // Si una orden a mano coincide con un hueco del calendario, no se repite
-  const otsHoy = [...otsPlan, ...otsManual.filter(m =>
-    !otsPlan.some(p => p.linea === m.linea && p.producto_id === m.producto_id))];
+  // De los partes ya cerrados de ese día: así un día antiguo sin calendario también se puede cerrar
+  const otsDePartes = prods
+    .filter(p => p.fecha === hoy && toNum(p.cantidad) > 0 && !p.reabierta
+      && (verDia || p.turno_clave === claveTurno || !p.turno_clave))
+    .map(p => ({ linea: p.linea_nombre || "Sin línea", turno: p.turno_clave || claveTurno,
+      fecha: p.fecha, producto_id: p.producto_id,
+      cantidad: toNum(p.objetivo_ot) || toNum(p.cantidad),
+      orden_id: p.orden_id || "", origen_ot: "parte" }));
+
+  const otsHoy = [...otsPlan,
+    ...otsManual.filter(m => !otsPlan.some(p => p.linea === m.linea && p.producto_id === m.producto_id)),
+    ...otsDePartes.filter(d =>
+      !otsPlan.some(p => p.linea === d.linea && p.producto_id === d.producto_id) &&
+      !otsManual.some(m => m.linea === d.linea && m.producto_id === d.producto_id))];
 
   // ── Lo que quedó abierto de días anteriores: hay que cerrarlo antes de seguir
   const atrasadas = (() => {
@@ -1675,7 +1687,9 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
             if (!dias[t.fecha]) dias[t.fecha] = { fecha: t.fecha, ordenes: [], turnos: [] };
             dias[t.fecha].turnos.push(t);
           });
-          const lista = Object.values(dias).sort((a,b)=>a.fecha.localeCompare(b.fecha));
+          const lista = Object.values(dias).sort((a,b)=>
+            (b.ordenes.length?1:0) - (a.ordenes.length?1:0) || a.fecha.localeCompare(b.fecha));
+          const nOrd = atrasadas.length, nTur = turnosSinCerrar.length;
           return (
             <div style={{margin:"18px 22px 0"}}>
               <div style={{background:C.redBg,border:`3px solid ${C.red}`,borderRadius:18,padding:"18px 20px",marginBottom:16}}>
@@ -1683,7 +1697,15 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                   ⛔ Quedan días sin terminar
                 </div>
                 <div style={{fontSize:15,color:C.text,lineHeight:1.6}}>
-                  Antes de trabajar hoy hay que cerrarlos. Primero las líneas, después el turno.
+                  {nOrd>0 && <>{nOrd} línea{nOrd!==1?"s":""} sin cerrar</>}
+                  {nOrd>0 && nTur>0 && " · "}
+                  {nTur>0 && <>{nTur} turno{nTur!==1?"s":""} sin informe</>}
+                  <div style={{marginTop:4}}>Antes de trabajar hoy hay que cerrarlos. Primero las líneas, después el turno.</div>
+                  {lista.length>3 && (
+                    <div style={{marginTop:6,fontWeight:700}}>
+                      Son {lista.length} días. Empieza por los de arriba.
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1703,7 +1725,13 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:10}}>
                           <span style={{minWidth:0}}>
                             <div style={{fontFamily:F.h,fontWeight:800,fontSize:16.5,color:C.text}}>{p?.nombre||"?"}</div>
-                            <div style={{fontSize:13.5,color:C.mutedD}}>{ot.linea} · {num(ot.cantidad)} uds previstas</div>
+                            <div style={{fontSize:13.5,color:C.mutedD}}>
+                              {ot.linea} · {num(ot.cantidad)} uds previstas
+                              {(() => {
+                                const t = turnosOrdenados(turnos).find((z,k)=>`T${k+1}`===ot.turno);
+                                return t ? ` · 🕐 ${t.nombre}` : "";
+                              })()}
+                            </div>
                           </span>
                           <span style={{flexShrink:0,fontSize:13.5,fontWeight:800,color:C.red}}>línea sin cerrar ›</span>
                         </div>
@@ -1711,14 +1739,27 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                     );
                   })}
 
-                  {d.turnos.map((t,i)=>(
+                  {(() => {
+                    const conTurno = d.turnos.map(t=>claveDeTurno(turnos, t.turno?.id));
+                    const huerfanas = d.ordenes.filter(o => !conTurno.includes(o.turno||"T1"));
+                    if (!huerfanas.length || !d.turnos.length) return null;
+                    return (
+                      <div style={{fontSize:13,color:C.mutedD,lineHeight:1.5,marginBottom:9,padding:"0 2px"}}>
+                        {huerfanas.length} de esas líneas son de otro turno, que aún no tiene ninguna cerrada.
+                      </div>
+                    );
+                  })()}
+                  {d.turnos.map((t,i)=>{
+                    const claveT = claveDeTurno(turnos, t.turno?.id);
+                    const suyas = d.ordenes.filter(o => (o.turno||"T1") === claveT);
+                    return (
                     <button key={"t"+i}
-                      disabled={d.ordenes.length>0}
+                      disabled={suyas.length>0}
                       onClick={()=>{ setTurnoId(t.turno?.id||turnoId); setDiaVer(d.fecha); setVista("ordenes"); }}
-                      style={{width:"100%",background: d.ordenes.length ? C.card2 : C.amberBg,
-                        border:`2px solid ${d.ordenes.length ? C.border : C.amber}`,borderRadius:14,
+                      style={{width:"100%",background: suyas.length ? C.card2 : C.amberBg,
+                        border:`2px solid ${suyas.length ? C.border : C.amber}`,borderRadius:14,
                         padding:"13px 15px",marginBottom:9,textAlign:"left",
-                        cursor: d.ordenes.length ? "default" : "pointer", opacity: d.ordenes.length ? 0.6 : 1}}>
+                        cursor: suyas.length ? "default" : "pointer", opacity: suyas.length ? 0.6 : 1}}>
                       <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:10}}>
                         <span style={{minWidth:0}}>
                           <div style={{fontFamily:F.h,fontWeight:800,fontSize:16.5,color:C.text}}>
@@ -1729,12 +1770,13 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                           </div>
                         </span>
                         <span style={{flexShrink:0,fontSize:13.5,fontWeight:800,
-                          color: d.ordenes.length ? C.mutedD : C.amber}}>
-                          {d.ordenes.length ? "espera a las líneas" : "cerrar turno ›"}
+                          color: suyas.length ? C.mutedD : C.amber}}>
+                          {suyas.length ? `faltan ${suyas.length} línea${suyas.length!==1?"s":""}` : "cerrar turno ›"}
                         </span>
                       </div>
                     </button>
-                  ))}
+                    );
+                  })}
                 </div>
               ))}
             </div>
