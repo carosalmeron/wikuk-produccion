@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.9.0";
+const APP_VERSION = "v4.9.1";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -2796,8 +2796,9 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
 
   // ── El desvío tiene dos causas y conviene separarlas:
   //    lo que se dejó de fabricar, y lo que costó de más lo que sí se fabricó.
-  const costeObjUd = T.plan > 0 ? costeObj / T.plan : 0;          // lo que debería costar cada unidad
-  const costeEsperado = costeObjUd * T.real;                       // lo que debería haber costado lo hecho
+  // Lo esperado se calcula producto a producto, igual que en la tabla de arriba
+  const costeEsperado = costeHecho;                                // lo que debería haber costado lo hecho
+  const costeObjUd = T.real > 0 ? costeEsperado / T.real : 0;      // lo que debería costar cada unidad
   const desvioCoste = costeReal - costeEsperado;                   // de más (+) o de menos (−)
   const pvMedio = T.plan > 0 ? T.ventaObj / T.plan : 0;
   const margenUd = pvMedio - costeObjUd;                           // lo que deja cada unidad si todo va bien
