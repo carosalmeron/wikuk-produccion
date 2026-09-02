@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.9.1";
+const APP_VERSION = "v4.10.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -2828,6 +2828,7 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
     return Object.values(porMateria).map(x => {
       const teo = toNum(f.p?.metros_finales) * x.capas * f.real;
       return { mp: mps.find(m=>m.id===x.materia_id),
+        producto: f.p?.nombre || "?", linea: f.ot.linea, uds: f.real,
         lote: x.lotes.join(" + ") || "sin lote", teo, gast: x.gast,
         r: (teo>0 && x.gast>0) ? teo/x.gast*100 : null, obj: rendObj(x.materia_id) };
     });
@@ -2906,8 +2907,11 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
 
       ${rends.length ? `<h3 style="font-size:13px;text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid #111;padding-bottom:4px">Rendimientos</h3>
       <table style="width:100%;border-collapse:collapse;margin-bottom:18px">
-        <tr><th ${th}>Materia · lote</th><th ${th}>Teórico</th><th ${th}>Gastado</th><th ${th}>Rend.</th><th ${th}>Obj.</th></tr>
-        ${rends.map(x=>`<tr><td ${est}>${esc(x.mp?.nombre||"?")} · ${esc(x.lote||"sin lote")}</td>
+        <tr><th ${th}>Producto · línea</th><th ${th}>Materia · lote</th><th ${th}>Teórico</th><th ${th}>Gastado</th><th ${th}>Rend.</th><th ${th}>Obj.</th></tr>
+        ${rends.map(x=>`<tr><td ${est}><b>${esc(x.producto)}</b>
+            <div style="font-size:11px;color:#777">${esc(x.linea)} · ${num(x.uds)} uds</div></td>
+          <td ${est}>${esc(x.mp?.nombre||"?")}
+            <div style="font-size:11px;color:#777">${esc(x.lote||"sin lote")}</div></td>
           <td ${n}>${num(x.teo)} m</td><td ${n}>${num(x.gast)} m</td>
           <td ${n}><b style="color:${x.r>=x.obj?"#166534":"#b91c1c"}">${Math.round(x.r)}%</b></td>
           <td ${n}>${x.obj}%</td></tr>`).join("")}
@@ -2994,7 +2998,7 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
     `\n\nTOTAL ${num(T.real)}/${num(T.plan)} uds` +
     (paros.length?`\nParadas: ${paros.length} · ${Math.round(minParados)} min`:"") +
     (minApoyo>0?`\nApoyo (aparte): ${Math.round(minApoyo)} min · ${eur(costeApoyo)} de ${eur(costeApoyoTeo)} teóricos`:"") +
-    (rends.length?`\nRendimiento: ${rends.map(x=>`${x.lote} ${Math.round(x.r)}%`).join(", ")}`:"") +
+    (rends.length?`\nRendimientos:\n` + rends.map(x=>`  ${x.producto}: ${x.mp?.nombre||""} ${Math.round(x.r)}% (obj ${x.obj}%)`).join("\n") : "") +
     `\n\nCoste objetivo ${eur(costeObj)} · real ${eur(costeReal)}` +
     `\n` + porProducto.map(x=>`${x.p?.nombre}: ${num(x.real)} uds · ${x.margenUd.toFixed(2)} €/ud · ${eur(x.beneficio)}`).join("\n") +
     `\nBeneficio ${eur(benefReal)}` +
@@ -3131,9 +3135,18 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
       {rends.length>0 && (
         <BloqueF titulo="Rendimientos">
           {rends.map((x,i)=>(
-            <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"7px 0",fontSize:14.5}}>
-              <span style={{color:C.mutedD}}>{x.mp?.nombre} · {x.lote||"sin lote"}</span>
-              <b style={{color:x.r>=x.obj?C.green:C.red,flexShrink:0,marginLeft:10}}>{Math.round(x.r)}% <span style={{color:C.mutedD,fontWeight:600}}>obj {x.obj}%</span></b>
+            <div key={i} style={{display:"flex",justifyContent:"space-between",gap:10,padding:"9px 0",fontSize:14.5,
+              borderBottom: i<rends.length-1?`1px solid ${C.card2}`:"none"}}>
+              <span style={{minWidth:0}}>
+                <div style={{color:C.text,fontWeight:700}}>{x.producto} · {x.linea}</div>
+                <div style={{fontSize:12.5,color:C.mutedD}}>
+                  {x.mp?.nombre} · {x.lote||"sin lote"} · {num(x.gast)} m para {num(x.uds)} uds
+                </div>
+              </span>
+              <b style={{color:x.r>=x.obj?C.green:C.red,flexShrink:0,textAlign:"right"}}>
+                {Math.round(x.r)}%
+                <div style={{fontSize:11.5,color:C.mutedD,fontWeight:600}}>obj {x.obj}%</div>
+              </b>
             </div>
           ))}
         </BloqueF>
