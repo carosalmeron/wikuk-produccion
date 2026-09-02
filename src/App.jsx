@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.7.0";
+const APP_VERSION = "v4.8.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -2105,6 +2105,26 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                 vuelve a <b style={{color:C.text}}>{turno?.nombre||"tu turno"}</b> para cerrarlo.
               </div>
             )}
+            {!diaVer && (() => {
+              // El apoyo, a mano justo antes de cerrar
+              const delDia = apoyos.filter(a=>a.fecha===hoy && (!centroId || !a.centro || a.centro===centroId));
+              const pideApoyo = otsHoy.some(ot => (prodDe(ot.producto_id)?.procesos_asignados||[])
+                .some(pa => procesos.find(z=>z.id===pa.proceso_id)?.apoyo));
+              if (!pideApoyo) return null;
+              const validado = delDia.length>0 && delDia.every(a=>a.validado_por || a.cierre_id);
+              const min = delDia.reduce((a,x)=>a+toNum(x.minutos),0);
+              return (
+                <BotonF alto={96}
+                  bg={validado?C.greenBg:"#fff"}
+                  borde={validado?C.green:C.amber} color={validado?C.green:C.amber}
+                  sub={!delDia.length ? "hace falta antes de cerrar"
+                    : validado ? `${delDia.length} anotaciones · ${Math.round(min)} min`
+                    : `${delDia.length} anotaciones · falta validar`}
+                  onClick={()=>setVista("apoyo")}>
+                  {validado ? "✔ Apoyo anotado y validado" : "🤝 Anotar el apoyo"}
+                </BotonF>
+              );
+            })()}
             <BotonF alto={88} borde={C.border} onClick={()=>setVista("cerradas")}>🗂️ Ver órdenes cerradas</BotonF>
           </div>
 
