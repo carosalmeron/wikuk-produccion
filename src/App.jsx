@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.11.0";
+const APP_VERSION = "v4.12.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -1807,7 +1807,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
               apoyos={apoyos.filter(a=>a.fecha===dia && !a.cierre_id && (!centroId || !a.centro || a.centro===centroId))}
               apoyoPedidoHoy={{}} productos={productos} mps={mps} procesos={procesos}
               centros={centros} centro={centro} turno={t} hoy={dia} perfil={perfil} usuarios={usuarios}
-              ggMes={ggMes} onCerrar={()=>setModal(null)}
+              ggMes={ggMes} historico={prods} onCerrar={()=>setModal(null)}
               onHecho={()=>{ setModal(null); setDiaVer(""); setVista("inicio"); }}/>
           );
         })()}
@@ -2150,7 +2150,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
               })()}
               productos={productos} mps={mps} procesos={procesos}
               centros={centros} centro={centro} turno={turno} hoy={hoy} perfil={perfil} usuarios={usuarios}
-              ggMes={ggMes} onCerrar={()=>setModal(null)} onHecho={()=>{ setModal(null); setVista("inicio"); }}/>
+              ggMes={ggMes} historico={prods} onCerrar={()=>setModal(null)} onHecho={()=>{ setModal(null); setVista("inicio"); }}/>
           )}
         </div>
       </div>
@@ -2694,7 +2694,7 @@ function HojaApoyo({ procesos, mps, gente, perfil, centroId, claveTurno, hoy, pr
 
 // ── CIERRE DEL TURNO E INFORME ─────────────────────────────────────────────────
 function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], apoyoPedidoHoy={}, productos, mps, procesos=[], centros, centro, turno, hoy, perfil, usuarios,
-                       ggMes, onCerrar, onHecho }) {
+                       ggMes, historico=[], onCerrar, onHecho }) {
   // Un turno solo cierra lo suyo: se filtra aquí para que no dependa de quién llame
   const ots    = (otsRaw||[]).filter(o => !claveTurno || !o.turno || o.turno === claveTurno);
   const partes = (partesRaw||[]).filter(p => p.fecha === hoy
@@ -2857,6 +2857,26 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
     return Object.values(acum).map(x => ({ ...x, minUd: x.cant>0 ? x.min/x.cant : 0 }));
   })();
 
+  // Lo que hizo cada uno los 60 días anteriores, para saber si hoy es lo normal
+  const hist = (() => {
+    const desde = new Date(new Date(hoy).getTime() - 60*864e5).toISOString().slice(0,10);
+    const acum = {};
+    historico.filter(p => p.fecha >= desde && p.fecha < hoy).forEach(p => {
+      (p.procesos_realizados||[]).forEach(pr => {
+        const cant = toNum(pr.cantidad), horas = toNum(pr.horas);
+        if (!cant || !horas || !pr.persona_id) return;
+        const k = `${pr.proceso_id}|${pr.persona_id}`;
+        if (!acum[k]) acum[k] = { cant:0, min:0, dias:new Set() };
+        acum[k].cant += cant; acum[k].min += horas*60; acum[k].dias.add(p.fecha);
+      });
+    });
+    const r = {};
+    Object.entries(acum).forEach(([k,x]) => {
+      if (x.cant>0) r[k] = { minUd: x.min/x.cant, uds: x.cant, dias: x.dias.size };
+    });
+    return r;
+  })();
+
   // Media de cada proceso, para saber quién va por encima y quién por debajo
   const mediaProceso = {};
   porPersona.forEach(x => {
@@ -2962,18 +2982,20 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
 
       ${porPersona.length ? `<h3 style="font-size:13px;text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid #111;padding-bottom:4px">Quién ha ido a qué ritmo</h3>
       <table style="width:100%;border-collapse:collapse;margin-bottom:18px">
-        <tr><th ${th}>Proceso · persona</th><th ${th}>Uds</th><th ${th}>Horas</th><th ${th}>min/ud</th><th ${th}>Ficha</th></tr>
+        <tr><th ${th}>Proceso · persona</th><th ${th}>Uds</th><th ${th}>Horas</th><th ${th}>min/ud</th><th ${th}>Suyo (60 d)</th><th ${th}>Ficha</th></tr>
         ${Object.entries(mediaProceso).map(([pid,m])=>{
           const g = porPersona.filter(x=>x.proceso_id===pid).sort((a,b)=>a.minUd-b.minUd);
           return g.map((x,i)=>`<tr>
             <td ${est}>${i===0?`<b>${esc(m.nombre)}</b><br/>`:""}${i===0&&g.length>1?"🥇 ":""}${esc(x.persona)}</td>
             <td ${n}>${num(x.cant)}</td><td ${n}>${(x.min/60).toFixed(1)} h</td>
             <td ${n}><b style="color:${x.estandar>0&&x.minUd>x.estandar?"#b91c1c":"#166534"}">${x.minUd.toFixed(2)}</b></td>
+            <td ${n}>${hist[`${x.proceso_id}|${x.persona_id}`] ? hist[`${x.proceso_id}|${x.persona_id}`].minUd.toFixed(2) : "—"}</td>
             <td ${n}>${x.estandar||"—"}</td></tr>`).join("")
             + `<tr><td ${est} style="background:#f7f7f7"><i>media de ${esc(m.nombre)}</i></td>
                <td ${n} style="background:#f7f7f7">${num(m.cant)}</td>
                <td ${n} style="background:#f7f7f7">${(m.min/60).toFixed(1)} h</td>
                <td ${n} style="background:#f7f7f7"><b>${m.minUd.toFixed(2)}</b></td>
+               <td ${n} style="background:#f7f7f7">—</td>
                <td ${n} style="background:#f7f7f7">${m.estandar||"—"}</td></tr>`;
         }).join("")}
       </table>` : ""}
@@ -3241,7 +3263,7 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
       })()}
       {porPersona.length>0 && (
         <BloqueF titulo="👥 Quién ha ido a qué ritmo"
-          sub="Minutos por unidad de cada persona en cada proceso, comparado con el estándar de la ficha.">
+          sub="Minutos por unidad. Se compara con el resto de hoy y con lo que suele hacer cada uno en 60 días.">
           {Object.entries(mediaProceso).map(([pid,m])=>{
             const gente2 = porPersona.filter(x=>x.proceso_id===pid).sort((a,b)=>a.minUd-b.minUd);
             if (gente2.length===0) return null;
@@ -3258,12 +3280,17 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
                 {gente2.map((x,i)=>{
                   const vsMedia = m.minUd>0 ? (x.minUd/m.minUd - 1)*100 : 0;
                   const mejor = i===0 && gente2.length>1;
+                  const h = hist[`${x.proceso_id}|${x.persona_id}`];
+                  const vsHist = h?.minUd>0 ? (x.minUd/h.minUd - 1)*100 : null;
                   return (
                     <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",
-                      gap:10,padding:"6px 0",fontSize:14}}>
+                      gap:10,padding:"7px 0",fontSize:14}}>
                       <span style={{minWidth:0,color:C.text}}>
                         {mejor && "🥇 "}{x.persona}
-                        <span style={{fontSize:12,color:C.mutedD}}> · {num(x.cant)} uds en {(x.min/60).toFixed(1)} h</span>
+                        <div style={{fontSize:12,color:C.mutedD}}>
+                          {num(x.cant)} uds en {(x.min/60).toFixed(1)} h
+                          {h && ` · suele hacer ${h.minUd.toFixed(2)} (${h.dias} días)`}
+                        </div>
                       </span>
                       <span style={{flexShrink:0,textAlign:"right"}}>
                         <b style={{color: x.estandar>0 ? (x.minUd<=x.estandar?C.green:C.red) : C.text}}>
@@ -3271,7 +3298,12 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
                         </b>
                         {gente2.length>1 && Math.abs(vsMedia)>2 && (
                           <div style={{fontSize:11.5,color: vsMedia<0?C.green:C.amber,fontWeight:700}}>
-                            {vsMedia<0?"−":"+"}{Math.abs(Math.round(vsMedia))}% vs media
+                            {vsMedia<0?"−":"+"}{Math.abs(Math.round(vsMedia))}% vs hoy
+                          </div>
+                        )}
+                        {vsHist!=null && Math.abs(vsHist)>5 && (
+                          <div style={{fontSize:11.5,color: vsHist<0?C.green:C.amber,fontWeight:700}}>
+                            {vsHist<0?"↓":"↑"}{Math.abs(Math.round(vsHist))}% vs lo suyo
                           </div>
                         )}
                       </span>
