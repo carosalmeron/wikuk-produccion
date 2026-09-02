@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v3.34.0";
+const APP_VERSION = "v4.7.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -86,6 +86,7 @@ const toNum = (v) => {
 };
 
 // ── PLANIFICACIÓN: constantes y utilidades de calendario ───────────────────────
+const HORAS_JORNADA = 7.5;   // 8 h menos 0,5 de descanso
 const TARIFA_MO = 15.25;            // €/h coste real (27.444 €/año ÷ 1.800 h)
 const LINEAS_FISICAS = 2;
 const TURNOS_ABIERTOS = 2;
@@ -2706,7 +2707,9 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
     const moUdObj = ritmo>0 ? (pers*8*TARIFA_MO)/ritmo : 0;
     // real
     const matReal = (parte?.consumos||[]).reduce((a,c)=>a+toNum(c.metros_consumidos)*precioMP(c.materia_id), 0);
-    const moReal  = (parseInt(parte?.n_personas)||pers) * (toNum(parte?.horas_equipo)||8) * TARIFA_MO;
+    const horasReales = toNum(parte?.horas_totales)
+      || ((parseInt(parte?.n_personas)||pers) * (toNum(parte?.horas_equipo)||8));
+    const moReal  = horasReales * TARIFA_MO;
     const pv = toNum(p?.precio_venta);
     const apUd = apoyoUdDe(p);          // el apoyo que lleva dentro cada unidad
     return { ot, parte, p, plan, real, pv, apUd,
@@ -3319,7 +3322,8 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
   // Las tareas de apoyo (desalado y similares) no van aquí: tienen su propia entrada
   const enLineaSolo = (lista) => lista.filter(x => !procesos.find(z=>z.id===x.proceso_id)?.apoyo);
   const [tareas, setTareas] = useState(enLineaSolo(parte?.procesos_realizados || (p?.procesos_asignados||[]).map(x=>({
-    id: uid(), proceso_id: x.proceso_id, cantidad: 0, persona_id: "" }))).map(x=>({ id:x.id||uid(), ...x })));
+    id: uid(), proceso_id: x.proceso_id, cantidad: 0, persona_id: "", horas: 0 })))
+    .map(x=>({ id:x.id||uid(), ...x, horas: toNum(x.horas) })));
   const [paros, setParos] = useState(parte?.paros || []);
   const [nota, setNota] = useState(parte?.observacion || "");
   const [modal, setModal] = useState(null);
@@ -3393,12 +3397,17 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
       producto_id: ot.producto_id, fecha: fechaOT, turno_id: parte?.turno_id || turno?.id || "", turno_clave: claveOT,
       linea_nombre: ot.linea, cantidad: hecho, objetivo_ot: objetivo,
       n_personas: [...new Set(tareas.map(t=>t.persona_id).filter(Boolean))].length || 3,
-      horas_equipo: 8,
+      // Horas de verdad: si alguien entra 3 h, cuentan 3, no 8
+      horas_totales: (() => {
+        const suma = tareas.filter(t=>t.persona_id).reduce((a,t)=>a+(toNum(t.horas)||0), 0);
+        return suma || ((parseInt(p?.personas_linea)||3) * HORAS_JORNADA);
+      })(),
+      horas_equipo: HORAS_JORNADA,
       consumos: consumos.filter(c=>c.lote || toNum(c.metros_consumidos)).map(c=>({
         materia_id: c.materia_id, lote: c.lote||"", metros_consumidos: toNum(c.metros_consumidos),
         capas: toNum(c.capas)||1 })),
       procesos_realizados: tareas.filter(t=>toNum(t.cantidad)>0).map(t=>({
-        proceso_id: t.proceso_id, cantidad: toNum(t.cantidad), persona_id: t.persona_id||"" })),
+        proceso_id: t.proceso_id, cantidad: toNum(t.cantidad), persona_id: t.persona_id||"", horas: toNum(t.horas)||8 })),
       paros, observacion: nota.trim(), origen: "terminal",
       cerrado_por: quien, cerrado_at: new Date().toISOString(), reabierta: false,
     });
@@ -3588,7 +3597,7 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
 
         {/* TAREAS */}
         <BloqueF titulo="🛠️ Tareas y cantidades"
-          sub="Lo que ha hecho cada uno en la línea. El desalado y demás trabajo de apoyo se anota aparte, en 🤝 Apoyo.">
+          sub="Lo que ha hecho cada uno y cuántas horas ha estado. El desalado se anota aparte, en 🤝 Apoyo.">
           {tareas.map((t,idx)=>{
             // Si el proceso está repartido entre varios, cuenta la suma
             const mismos = tareas.filter(z=>z.proceso_id===t.proceso_id);
@@ -3613,6 +3622,14 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
                       borderRadius:12,fontFamily:F.h,fontWeight:800,fontSize:15,cursor:"pointer",whiteSpace:"nowrap"}}>
                     👤 {t.persona_id?nombrePers(t.persona_id):"quién"}
                   </button>
+                  <button onClick={()=>setModal({tipo:"num",titulo:`Horas en ${nombreProc(t.proceso_id)}`,
+                    valor:String(toNum(t.horas)||""), onOk:v=>setTarea(t.id,"horas",toNum(v))})}
+                    style={{height:64,padding:"0 12px",background:toNum(t.horas)?"#fff":C.amberBg,
+                      border:`2px solid ${toNum(t.horas)?C.border:C.amber}`,
+                      color:toNum(t.horas)?C.text:C.amber,
+                      borderRadius:12,fontFamily:F.h,fontWeight:800,fontSize:15,cursor:"pointer",whiteSpace:"nowrap"}}>
+                    ⏱ {toNum(t.horas) ? `${toNum(t.horas)} h` : "horas"}
+                  </button>
                   <button onClick={()=>setTareas(ts=>ts.filter(z=>z.id!==t.id))}
                     style={{width:52,height:64,borderRadius:12,border:`2px solid ${C.border}`,background:"#fff",
                       color:C.red,fontSize:20,cursor:"pointer"}}>✕</button>
@@ -3630,9 +3647,59 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
               </div>
             );
           })}
+          {(() => {
+            // Las horas de una persona se suman: puede hacer varias tareas
+            const porPersona = {};
+            tareas.filter(t=>t.persona_id).forEach(t => {
+              if (!porPersona[t.persona_id]) porPersona[t.persona_id] = { horas:0, tareas:0 };
+              porPersona[t.persona_id].horas += toNum(t.horas);
+              porPersona[t.persona_id].tareas++;
+            });
+            const gente2 = Object.entries(porPersona);
+            if (!gente2.length) return null;
+            const horas = gente2.reduce((a,[,x])=>a+x.horas, 0);
+            const previsto = (parseInt(p?.personas_linea)||3) * HORAS_JORNADA;
+            const sinHoras = tareas.filter(t=>t.persona_id && !toNum(t.horas)).length;
+            return (
+              <div style={{background:C.card2,borderRadius:12,padding:"12px 14px",marginTop:12,fontSize:13.5,lineHeight:1.7}}>
+                <div style={{fontFamily:F.h,fontWeight:800,fontSize:12.5,color:C.mutedD,marginBottom:5}}>MANO DE OBRA DE LA LÍNEA</div>
+                {gente2.map(([id,x])=>{
+                  const pasa = x.horas > HORAS_JORNADA + 0.01;
+                  return (
+                    <div key={id} style={{display:"flex",justifyContent:"space-between"}}>
+                      <span style={{color:C.mutedD}}>
+                        {nombrePers(id)}{x.tareas>1 && <span style={{fontSize:11.5}}> · {x.tareas} tareas</span>}
+                      </span>
+                      <b style={{color: pasa?C.red : x.horas===HORAS_JORNADA?C.text:C.amber}}>
+                        {x.horas} h{pasa && " ⚠️"}
+                      </b>
+                    </div>
+                  );
+                })}
+                <div style={{display:"flex",justifyContent:"space-between",borderTop:`1px solid ${C.border}`,marginTop:5,paddingTop:5}}>
+                  <span style={{color:C.text,fontWeight:700}}>{gente2.length} personas · {horas} h</span>
+                  <b style={{color: horas>previsto?C.red:C.green}}>{eur(horas*TARIFA_MO)}</b>
+                </div>
+                <div style={{fontSize:12,color:C.mutedD,marginTop:2}}>
+                  previsto {previsto} h ({eur(previsto*TARIFA_MO)}) · jornada de {HORAS_JORNADA} h
+                </div>
+                {gente2.some(([,x])=>x.horas > HORAS_JORNADA + 0.01) && (
+                  <div style={{color:C.red,fontWeight:700,fontSize:12.5,marginTop:5,lineHeight:1.5}}>
+                    ⚠️ Alguien pasa de las {HORAS_JORNADA} h de jornada. Revisa las horas de cada tarea.
+                  </div>
+                )}
+                {sinHoras>0 && (
+                  <div style={{color:C.amber,fontWeight:700,fontSize:12.5,marginTop:5,lineHeight:1.5}}>
+                    ⚠️ {sinHoras} tarea{sinHoras!==1?"s":""} sin horas: no cuentan en el coste.
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
           <button onClick={()=>setModal({tipo:"proceso"})}
             style={{width:"100%",minHeight:70,borderRadius:14,border:`3px dashed ${C.border}`,background:"#fff",
-              fontFamily:F.h,fontWeight:800,fontSize:17,color:C.mutedD,cursor:"pointer"}}>＋ Añadir otra tarea</button>
+              fontFamily:F.h,fontWeight:800,fontSize:17,color:C.mutedD,cursor:"pointer",marginTop:12}}>＋ Añadir otra tarea</button>
         </BloqueF>
 
         {/* APOYO QUE LLEVA ESTE PRODUCTO */}
