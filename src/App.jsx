@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.10.0";
+const APP_VERSION = "v4.10.1";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -2096,7 +2096,9 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                       {!diaVer && abiertas.length===0 && reabiertas.length===0 && (() => {
                         const delDia = apoyos.filter(a=>a.fecha===hoy && (!centroId || !a.centro || a.centro===centroId));
                         const sinValidar = delDia.filter(a=>!a.validado_por && !a.cierre_id).length;
-                        if (!apoyoFalta.length && !sinValidar) return null;
+                        // Solo se avisa de lo que impide cerrar: nada anotado, o algo sin validar
+                        const nadaAnotado = apoyoFalta.length>0 && delDia.length===0;
+                        if (!nadaAnotado && !sinValidar) return null;
                         return (
                           <div style={{background:C.redBg,border:`2px solid ${C.red}`,borderRadius:14,padding:"14px 16px",
                             fontSize:15,color:C.red,fontWeight:700,lineHeight:1.6}}>
