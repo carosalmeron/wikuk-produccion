@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.8.1";
+const APP_VERSION = "v4.9.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -2780,7 +2780,15 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
   // Generales que le tocan al turno: el mes entre días laborables y turnos abiertos
   const turnosAb = parseInt(centro?.turnos_abiertos) || 2;
   const ggTurno = ggMes / 21 / turnosAb;
-  const costeObj  = T.objMat + T.objMO + T.objApoyo + ggTurno;
+  // Lo que debería haber costado LO FABRICADO: es lo único comparable con el real
+  const paraLoHecho = filas.reduce((a,f)=>({
+    mat: a.mat + (f.plan>0 ? f.objMat/f.plan : 0) * f.real,
+    mo:  a.mo  + (f.plan>0 ? f.objMO /f.plan : 0) * f.real,
+    ap:  a.ap  + f.realApoyo,
+  }), {mat:0,mo:0,ap:0});
+
+  const costeObj  = T.objMat + T.objMO + T.objApoyo + ggTurno;      // el plan entero
+  const costeHecho = paraLoHecho.mat + paraLoHecho.mo + paraLoHecho.ap + ggTurno;
   const costeReal = T.realMat + T.realMO + T.realApoyo + ggTurno;
   const benefObj  = T.ventaObj - costeObj;
   const benefReal = T.ventaReal - costeReal;
@@ -2928,16 +2936,17 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
       </table>` : ""}
 
       <h3 style="font-size:13px;text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid #111;padding-bottom:4px">Lo que ha costado el turno</h3>
-      <div style="font-size:12px;color:#777;margin-bottom:8px">El apoyo entra al coste teórico del escandallo, para que el producto lleve su coste completo. Lo que se tardó de verdad se compara en la tabla de arriba.</div>
+      <div style="font-size:12px;color:#777;margin-bottom:8px">Comparado con lo que debería haber costado <b>lo que sí se ha fabricado</b> (${num(T.real)} uds), no el plan entero (${num(T.plan)} uds, ${eur(costeObj)}).</div>
       <table style="width:100%;border-collapse:collapse;margin-bottom:18px">
         <tr><th ${th}>Concepto</th><th ${th}>Objetivo</th><th ${th}>Real</th><th ${th}>Desvío</th></tr>
         <tr><td ${est}>Materia prima</td><td ${n}>${eur(T.objMat)}</td><td ${n}>${eur(T.realMat)}</td><td ${n}>${T.realMat-T.objMat>=0?"+":""}${eur(T.realMat-T.objMat)}</td></tr>
-        <tr><td ${est}>Mano de obra</td><td ${n}>${eur(T.objMO)}</td><td ${n}>${eur(T.realMO)}</td><td ${n}>${T.realMO-T.objMO>=0?"+":""}${eur(T.realMO-T.objMO)}</td></tr>
-        ${T.objApoyo>0?`<tr><td ${est}>Apoyo del escandallo</td><td ${n}>${eur(T.objApoyo)}</td><td ${n}>${eur(T.realApoyo)}</td>
-          <td ${n}>${T.realApoyo-T.objApoyo>=0?"+":""}${eur(T.realApoyo-T.objApoyo)}</td></tr>`:""}
+        <tr><td ${est}>Mano de obra</td><td ${n}>${eur(paraLoHecho.mo)}</td><td ${n}>${eur(T.realMO)}</td>
+          <td ${n}>${T.realMO-paraLoHecho.mo>=0?"+":""}${eur(T.realMO-paraLoHecho.mo)}</td></tr>
+        ${paraLoHecho.ap>0?`<tr><td ${est}>Apoyo del escandallo</td><td ${n}>${eur(paraLoHecho.ap)}</td><td ${n}>${eur(T.realApoyo)}</td>
+          <td ${n}>—</td></tr>`:""}
         <tr><td ${est}>Gastos generales</td><td ${n}>${eur(ggTurno)}</td><td ${n}>${eur(ggTurno)}</td><td ${n}>—</td></tr>
-        <tr><td ${est}><b>COSTE TOTAL</b></td><td ${n}><b>${eur(costeObj)}</b></td><td ${n}><b>${eur(costeReal)}</b></td>
-          <td ${n}><b>${costeReal-costeObj>=0?"+":""}${eur(costeReal-costeObj)}</b></td></tr>
+        <tr><td ${est}><b>COSTE TOTAL</b></td><td ${n}><b>${eur(costeHecho)}</b></td><td ${n}><b>${eur(costeReal)}</b></td>
+          <td ${n}><b>${costeReal-costeHecho>=0?"+":""}${eur(costeReal-costeHecho)}</b></td></tr>
       </table>
 
       <div style="border:3px solid ${desvio>=0?"#16a34a":"#ef4444"};background:${desvio>=0?"#f0fdf4":"#fef2f2"};
@@ -3021,7 +3030,7 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
       fecha: hoy, turno_id: turno?.id||"", turno_nombre: turno?.nombre||"",
       centro: centro?.id||"", centro_nombre: centro?.nombre||"",
       uds_plan: T.plan, uds_real: T.real,
-      coste_objetivo: costeObj, coste_real: costeReal,
+      coste_objetivo: costeObj, coste_para_lo_hecho: costeHecho, coste_real: costeReal,
       beneficio_objetivo: benefObj, beneficio_real: benefReal, desvio,
       desvio_volumen: desvioVolumen, desvio_coste: desvioCoste,
       coste_ud_objetivo: costeObjUd, coste_ud_real: costeUdReal,
@@ -3213,12 +3222,21 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
       )}
 
       <BloqueF titulo="Lo que ha costado el turno" borde={desvio>=0?C.green:C.red}>
-        {fila("Materia prima", eur(T.objMat)+" →", eur(T.realMat), (T.realMat-T.objMat>=0?"+":"")+eur(T.realMat-T.objMat))}
-        {fila("Mano de obra", eur(T.objMO)+" →", eur(T.realMO), (T.realMO-T.objMO>=0?"+":"")+eur(T.realMO-T.objMO))}
-        {T.objApoyo>0 && fila("Apoyo del escandallo", eur(T.objApoyo)+" →", eur(T.realApoyo),
-          (T.realApoyo-T.objApoyo>=0?"+":"")+eur(T.realApoyo-T.objApoyo))}
+        <div style={{fontSize:12.5,color:C.mutedD,lineHeight:1.55,marginBottom:8}}>
+          Comparado con lo que debería haber costado <b style={{color:C.text}}>lo que sí se ha fabricado</b> ({num(T.real)} uds),
+          no el plan entero.
+        </div>
+        {fila("Materia prima", eur(paraLoHecho.mat)+" →", eur(T.realMat),
+          (T.realMat-paraLoHecho.mat>=0?"+":"")+eur(T.realMat-paraLoHecho.mat))}
+        {fila("Mano de obra", eur(paraLoHecho.mo)+" →", eur(T.realMO),
+          (T.realMO-paraLoHecho.mo>=0?"+":"")+eur(T.realMO-paraLoHecho.mo))}
+        {paraLoHecho.ap>0 && fila("Apoyo del escandallo", eur(paraLoHecho.ap)+" →", eur(T.realApoyo), null)}
         {fila("Gastos generales", "", eur(ggTurno))}
-        {fila("Coste total", eur(costeObj)+" →", eur(costeReal), (costeReal-costeObj>=0?"+":"")+eur(costeReal-costeObj))}
+        {fila("Coste total", eur(costeHecho)+" →", eur(costeReal),
+          (costeReal-costeHecho>=0?"+":"")+eur(costeReal-costeHecho))}
+        <div style={{fontSize:12,color:C.mutedD,marginTop:6,lineHeight:1.55,borderTop:`1px solid ${C.border}`,paddingTop:6}}>
+          El plan entero ({num(T.plan)} uds) habría costado {eur(costeObj)}.
+        </div>
 
         <div style={{background:desvioCoste>0?C.redBg:C.greenBg,border:`3px solid ${desvioCoste>0?C.red:C.green}`,
           borderRadius:16,padding:20,textAlign:"center",marginTop:14}}>
