@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.10.1";
+const APP_VERSION = "v4.11.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -2836,6 +2836,36 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
     });
   }).filter(x=>x.r!=null);
 
+  // ── Quién ha hecho qué, a qué ritmo y contra el estándar de la ficha
+  const porPersona = (() => {
+    const acum = {};
+    filas.forEach(f => {
+      (f.parte?.procesos_realizados||[]).forEach(pr => {
+        const cant = toNum(pr.cantidad), horas = toNum(pr.horas);
+        if (!cant || !horas || !pr.persona_id) return;
+        const cat = procesos.find(z=>z.id===pr.proceso_id);
+        const asig = (f.p?.procesos_asignados||[]).find(z=>z.proceso_id===pr.proceso_id);
+        const estandar = toNum(asig?.min_real) || toNum(asig?.min_obj) || toNum(cat?.tiempo_proceso);
+        const k = `${pr.proceso_id}|${pr.persona_id}`;
+        if (!acum[k]) acum[k] = { proceso_id: pr.proceso_id, proceso: cat?.nombre || "?",
+          persona_id: pr.persona_id, persona: usuarios.find(u=>u.id===pr.persona_id)?.nombre || "—",
+          cant: 0, min: 0, estandar };
+        acum[k].cant += cant;
+        acum[k].min  += horas * 60;
+      });
+    });
+    return Object.values(acum).map(x => ({ ...x, minUd: x.cant>0 ? x.min/x.cant : 0 }));
+  })();
+
+  // Media de cada proceso, para saber quién va por encima y quién por debajo
+  const mediaProceso = {};
+  porPersona.forEach(x => {
+    if (!mediaProceso[x.proceso_id]) mediaProceso[x.proceso_id] = { cant:0, min:0, estandar:x.estandar, nombre:x.proceso };
+    mediaProceso[x.proceso_id].cant += x.cant;
+    mediaProceso[x.proceso_id].min  += x.min;
+  });
+  Object.values(mediaProceso).forEach(m => { m.minUd = m.cant>0 ? m.min/m.cant : 0; });
+
   const paros = filas.flatMap(f => (f.parte?.paros||[]).map(x=>({...x, linea:f.ot.linea})));
   const minParados = paros.reduce((a,x)=>a+toNum(x.minutos),0);
   const notas = filas.filter(f=>f.parte?.observacion).map(f=>({ linea:f.ot.linea, txt:f.parte.observacion }));
@@ -2929,6 +2959,24 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
       ${notas.length ? `<h3 style="font-size:13px;text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid #111;padding-bottom:4px">Observaciones</h3>
       <div style="font-size:13px;line-height:1.8;margin-bottom:18px;color:#555">
         ${notas.map(x=>`${esc(x.linea)}: <i>“${esc(x.txt)}”</i>`).join("<br/>")}</div>` : ""}
+
+      ${porPersona.length ? `<h3 style="font-size:13px;text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid #111;padding-bottom:4px">Quién ha ido a qué ritmo</h3>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:18px">
+        <tr><th ${th}>Proceso · persona</th><th ${th}>Uds</th><th ${th}>Horas</th><th ${th}>min/ud</th><th ${th}>Ficha</th></tr>
+        ${Object.entries(mediaProceso).map(([pid,m])=>{
+          const g = porPersona.filter(x=>x.proceso_id===pid).sort((a,b)=>a.minUd-b.minUd);
+          return g.map((x,i)=>`<tr>
+            <td ${est}>${i===0?`<b>${esc(m.nombre)}</b><br/>`:""}${i===0&&g.length>1?"🥇 ":""}${esc(x.persona)}</td>
+            <td ${n}>${num(x.cant)}</td><td ${n}>${(x.min/60).toFixed(1)} h</td>
+            <td ${n}><b style="color:${x.estandar>0&&x.minUd>x.estandar?"#b91c1c":"#166534"}">${x.minUd.toFixed(2)}</b></td>
+            <td ${n}>${x.estandar||"—"}</td></tr>`).join("")
+            + `<tr><td ${est} style="background:#f7f7f7"><i>media de ${esc(m.nombre)}</i></td>
+               <td ${n} style="background:#f7f7f7">${num(m.cant)}</td>
+               <td ${n} style="background:#f7f7f7">${(m.min/60).toFixed(1)} h</td>
+               <td ${n} style="background:#f7f7f7"><b>${m.minUd.toFixed(2)}</b></td>
+               <td ${n} style="background:#f7f7f7">${m.estandar||"—"}</td></tr>`;
+        }).join("")}
+      </table>` : ""}
 
       ${apoyos.length ? `<h3 style="font-size:13px;text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid #111;padding-bottom:4px">Trabajo de apoyo</h3>
       <div style="font-size:12px;color:#777;margin-bottom:8px">Cuenta aparte: lo desalado hoy puede ser para mañana.</div>
@@ -3043,6 +3091,8 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
       coste_ud_objetivo: costeObjUd, coste_ud_real: costeUdReal,
       min_parados: minParados, n_paradas: paros.length,
       apoyo_escandallo_obj: T.objApoyo, apoyo_escandallo_real: T.realApoyo,
+      por_persona: porPersona.map(x=>({ proceso: x.proceso, persona: x.persona,
+        uds: x.cant, minutos: Math.round(x.min), min_ud: x.minUd, estandar: x.estandar })),
       por_producto: porProducto.map(x=>({ producto_id: x.ot.producto_id, nombre: x.p?.nombre||"",
         uds: x.real, venta_ud: x.ventaUd, coste_ud: x.costeUd, margen_ud: x.margenUd, beneficio: x.beneficio })),
       min_apoyo: minApoyo, min_apoyo_teorico: minApoyoTeo,
@@ -3189,6 +3239,51 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
           </div>
         );
       })()}
+      {porPersona.length>0 && (
+        <BloqueF titulo="👥 Quién ha ido a qué ritmo"
+          sub="Minutos por unidad de cada persona en cada proceso, comparado con el estándar de la ficha.">
+          {Object.entries(mediaProceso).map(([pid,m])=>{
+            const gente2 = porPersona.filter(x=>x.proceso_id===pid).sort((a,b)=>a.minUd-b.minUd);
+            if (gente2.length===0) return null;
+            return (
+              <div key={pid} style={{marginBottom:14}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8,
+                  paddingBottom:5,borderBottom:`1.5px solid ${C.border}`,marginBottom:6}}>
+                  <b style={{fontSize:14.5,color:C.text,minWidth:0}}>{m.nombre}</b>
+                  <span style={{flexShrink:0,fontSize:12.5,color:C.mutedD}}>
+                    media <b style={{color: m.estandar>0 && m.minUd>m.estandar ? C.amber : C.text}}>{m.minUd.toFixed(2)}</b>
+                    {m.estandar>0 && ` · ficha ${m.estandar}`} min/ud
+                  </span>
+                </div>
+                {gente2.map((x,i)=>{
+                  const vsMedia = m.minUd>0 ? (x.minUd/m.minUd - 1)*100 : 0;
+                  const mejor = i===0 && gente2.length>1;
+                  return (
+                    <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",
+                      gap:10,padding:"6px 0",fontSize:14}}>
+                      <span style={{minWidth:0,color:C.text}}>
+                        {mejor && "🥇 "}{x.persona}
+                        <span style={{fontSize:12,color:C.mutedD}}> · {num(x.cant)} uds en {(x.min/60).toFixed(1)} h</span>
+                      </span>
+                      <span style={{flexShrink:0,textAlign:"right"}}>
+                        <b style={{color: x.estandar>0 ? (x.minUd<=x.estandar?C.green:C.red) : C.text}}>
+                          {x.minUd.toFixed(2)} min/ud
+                        </b>
+                        {gente2.length>1 && Math.abs(vsMedia)>2 && (
+                          <div style={{fontSize:11.5,color: vsMedia<0?C.green:C.amber,fontWeight:700}}>
+                            {vsMedia<0?"−":"+"}{Math.abs(Math.round(vsMedia))}% vs media
+                          </div>
+                        )}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </BloqueF>
+      )}
+
       {apoyosTurno.length>0 && (
         <BloqueF titulo="🤝 Trabajo de apoyo" borde={desvioApoyo>0?C.amber:C.green}
           sub="Se ha repartido solo: a este turno lo que pedían sus órdenes. Lo demás queda para lo que venga después.">
