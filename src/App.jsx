@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.12.0";
+const APP_VERSION = "v4.13.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -86,7 +86,15 @@ const toNum = (v) => {
 };
 
 // ── PLANIFICACIÓN: constantes y utilidades de calendario ───────────────────────
-const HORAS_JORNADA = 7.5;   // 8 h menos 0,5 de descanso
+const HORAS_JORNADA = 7.5;          // 8 h menos 0,5 de descanso
+const MIN_JORNADA = HORAS_JORNADA*60;   // 450 min
+// El tiempo se anota en minutos; los partes viejos venían en horas
+const minDeTarea = (t) => {
+  const m = parseFloat(String(t?.minutos ?? "").replace(",", "."));
+  if (!isNaN(m) && m > 0) return m;
+  const h = parseFloat(String(t?.horas ?? "").replace(",", "."));
+  return (!isNaN(h) && h > 0) ? h*60 : 0;
+};
 const TARIFA_MO = 15.25;            // €/h coste real (27.444 €/año ÷ 1.800 h)
 const LINEAS_FISICAS = 2;
 const TURNOS_ABIERTOS = 2;
@@ -2729,7 +2737,7 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
     const moUdObj = ritmo>0 ? (pers*8*TARIFA_MO)/ritmo : 0;
     // real
     const matReal = (parte?.consumos||[]).reduce((a,c)=>a+toNum(c.metros_consumidos)*precioMP(c.materia_id), 0);
-    const horasReales = toNum(parte?.horas_totales)
+    const horasReales = (toNum(parte?.minutos_totales)/60) || toNum(parte?.horas_totales)
       || ((parseInt(parte?.n_personas)||pers) * (toNum(parte?.horas_equipo)||8));
     const moReal  = horasReales * TARIFA_MO;
     const pv = toNum(p?.precio_venta);
@@ -2841,8 +2849,8 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
     const acum = {};
     filas.forEach(f => {
       (f.parte?.procesos_realizados||[]).forEach(pr => {
-        const cant = toNum(pr.cantidad), horas = toNum(pr.horas);
-        if (!cant || !horas || !pr.persona_id) return;
+        const cant = toNum(pr.cantidad), min = minDeTarea(pr);
+        if (!cant || !min || !pr.persona_id) return;
         const cat = procesos.find(z=>z.id===pr.proceso_id);
         const asig = (f.p?.procesos_asignados||[]).find(z=>z.proceso_id===pr.proceso_id);
         const estandar = toNum(asig?.min_real) || toNum(asig?.min_obj) || toNum(cat?.tiempo_proceso);
@@ -2851,7 +2859,7 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
           persona_id: pr.persona_id, persona: usuarios.find(u=>u.id===pr.persona_id)?.nombre || "—",
           cant: 0, min: 0, estandar };
         acum[k].cant += cant;
-        acum[k].min  += horas * 60;
+        acum[k].min  += min;
       });
     });
     return Object.values(acum).map(x => ({ ...x, minUd: x.cant>0 ? x.min/x.cant : 0 }));
@@ -2863,11 +2871,11 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
     const acum = {};
     historico.filter(p => p.fecha >= desde && p.fecha < hoy).forEach(p => {
       (p.procesos_realizados||[]).forEach(pr => {
-        const cant = toNum(pr.cantidad), horas = toNum(pr.horas);
-        if (!cant || !horas || !pr.persona_id) return;
+        const cant = toNum(pr.cantidad), min = minDeTarea(pr);
+        if (!cant || !min || !pr.persona_id) return;
         const k = `${pr.proceso_id}|${pr.persona_id}`;
         if (!acum[k]) acum[k] = { cant:0, min:0, dias:new Set() };
-        acum[k].cant += cant; acum[k].min += horas*60; acum[k].dias.add(p.fecha);
+        acum[k].cant += cant; acum[k].min += min; acum[k].dias.add(p.fecha);
       });
     });
     const r = {};
@@ -2982,18 +2990,18 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
 
       ${porPersona.length ? `<h3 style="font-size:13px;text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid #111;padding-bottom:4px">Quién ha ido a qué ritmo</h3>
       <table style="width:100%;border-collapse:collapse;margin-bottom:18px">
-        <tr><th ${th}>Proceso · persona</th><th ${th}>Uds</th><th ${th}>Horas</th><th ${th}>min/ud</th><th ${th}>Suyo (60 d)</th><th ${th}>Ficha</th></tr>
+        <tr><th ${th}>Proceso · persona</th><th ${th}>Uds</th><th ${th}>Minutos</th><th ${th}>min/ud</th><th ${th}>Suyo (60 d)</th><th ${th}>Ficha</th></tr>
         ${Object.entries(mediaProceso).map(([pid,m])=>{
           const g = porPersona.filter(x=>x.proceso_id===pid).sort((a,b)=>a.minUd-b.minUd);
           return g.map((x,i)=>`<tr>
             <td ${est}>${i===0?`<b>${esc(m.nombre)}</b><br/>`:""}${i===0&&g.length>1?"🥇 ":""}${esc(x.persona)}</td>
-            <td ${n}>${num(x.cant)}</td><td ${n}>${(x.min/60).toFixed(1)} h</td>
+            <td ${n}>${num(x.cant)}</td><td ${n}>${Math.round(x.min)} min</td>
             <td ${n}><b style="color:${x.estandar>0&&x.minUd>x.estandar?"#b91c1c":"#166534"}">${x.minUd.toFixed(2)}</b></td>
             <td ${n}>${hist[`${x.proceso_id}|${x.persona_id}`] ? hist[`${x.proceso_id}|${x.persona_id}`].minUd.toFixed(2) : "—"}</td>
             <td ${n}>${x.estandar||"—"}</td></tr>`).join("")
             + `<tr><td ${est} style="background:#f7f7f7"><i>media de ${esc(m.nombre)}</i></td>
                <td ${n} style="background:#f7f7f7">${num(m.cant)}</td>
-               <td ${n} style="background:#f7f7f7">${(m.min/60).toFixed(1)} h</td>
+               <td ${n} style="background:#f7f7f7">${Math.round(m.min)} min</td>
                <td ${n} style="background:#f7f7f7"><b>${m.minUd.toFixed(2)}</b></td>
                <td ${n} style="background:#f7f7f7">—</td>
                <td ${n} style="background:#f7f7f7">${m.estandar||"—"}</td></tr>`;
@@ -3288,7 +3296,7 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
                       <span style={{minWidth:0,color:C.text}}>
                         {mejor && "🥇 "}{x.persona}
                         <div style={{fontSize:12,color:C.mutedD}}>
-                          {num(x.cant)} uds en {(x.min/60).toFixed(1)} h
+                          {num(x.cant)} uds en {Math.round(x.min)} min
                           {h && ` · suele hacer ${h.minUd.toFixed(2)} (${h.dias} días)`}
                         </div>
                       </span>
@@ -3503,8 +3511,8 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
   // Las tareas de apoyo (desalado y similares) no van aquí: tienen su propia entrada
   const enLineaSolo = (lista) => lista.filter(x => !procesos.find(z=>z.id===x.proceso_id)?.apoyo);
   const [tareas, setTareas] = useState(enLineaSolo(parte?.procesos_realizados || (p?.procesos_asignados||[]).map(x=>({
-    id: uid(), proceso_id: x.proceso_id, cantidad: 0, persona_id: "", horas: 0 })))
-    .map(x=>({ id:x.id||uid(), ...x, horas: toNum(x.horas) })));
+    id: uid(), proceso_id: x.proceso_id, cantidad: 0, persona_id: "", minutos: 0 })))
+    .map(x=>({ id:x.id||uid(), ...x, minutos: minDeTarea(x) })));
   const [paros, setParos] = useState(parte?.paros || []);
   const [nota, setNota] = useState(parte?.observacion || "");
   const [modal, setModal] = useState(null);
@@ -3580,15 +3588,17 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
       n_personas: [...new Set(tareas.map(t=>t.persona_id).filter(Boolean))].length || 3,
       // Horas de verdad: si alguien entra 3 h, cuentan 3, no 8
       horas_totales: (() => {
-        const suma = tareas.filter(t=>t.persona_id).reduce((a,t)=>a+(toNum(t.horas)||0), 0);
-        return suma || ((parseInt(p?.personas_linea)||3) * HORAS_JORNADA);
+        const min = tareas.filter(t=>t.persona_id).reduce((a,t)=>a+minDeTarea(t), 0);
+        return min>0 ? min/60 : ((parseInt(p?.personas_linea)||3) * HORAS_JORNADA);
       })(),
+      minutos_totales: tareas.filter(t=>t.persona_id).reduce((a,t)=>a+minDeTarea(t), 0),
       horas_equipo: HORAS_JORNADA,
       consumos: consumos.filter(c=>c.lote || toNum(c.metros_consumidos)).map(c=>({
         materia_id: c.materia_id, lote: c.lote||"", metros_consumidos: toNum(c.metros_consumidos),
         capas: toNum(c.capas)||1 })),
       procesos_realizados: tareas.filter(t=>toNum(t.cantidad)>0).map(t=>({
-        proceso_id: t.proceso_id, cantidad: toNum(t.cantidad), persona_id: t.persona_id||"", horas: toNum(t.horas)||8 })),
+        proceso_id: t.proceso_id, cantidad: toNum(t.cantidad), persona_id: t.persona_id||"",
+        minutos: minDeTarea(t), horas: minDeTarea(t)/60 })),
       paros, observacion: nota.trim(), origen: "terminal",
       cerrado_por: quien, cerrado_at: new Date().toISOString(), reabierta: false,
     });
@@ -3803,13 +3813,13 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
                       borderRadius:12,fontFamily:F.h,fontWeight:800,fontSize:15,cursor:"pointer",whiteSpace:"nowrap"}}>
                     👤 {t.persona_id?nombrePers(t.persona_id):"quién"}
                   </button>
-                  <button onClick={()=>setModal({tipo:"num",titulo:`Horas en ${nombreProc(t.proceso_id)}`,
-                    valor:String(toNum(t.horas)||""), onOk:v=>setTarea(t.id,"horas",toNum(v))})}
-                    style={{height:64,padding:"0 12px",background:toNum(t.horas)?"#fff":C.amberBg,
-                      border:`2px solid ${toNum(t.horas)?C.border:C.amber}`,
-                      color:toNum(t.horas)?C.text:C.amber,
+                  <button onClick={()=>setModal({tipo:"num",titulo:`Minutos en ${nombreProc(t.proceso_id)}`,
+                    valor:String(minDeTarea(t)||""), onOk:v=>setTarea(t.id,"minutos",toNum(v))})}
+                    style={{height:64,padding:"0 12px",background:minDeTarea(t)?"#fff":C.amberBg,
+                      border:`2px solid ${minDeTarea(t)?C.border:C.amber}`,
+                      color:minDeTarea(t)?C.text:C.amber,
                       borderRadius:12,fontFamily:F.h,fontWeight:800,fontSize:15,cursor:"pointer",whiteSpace:"nowrap"}}>
-                    ⏱ {toNum(t.horas) ? `${toNum(t.horas)} h` : "horas"}
+                    ⏱ {minDeTarea(t) ? `${Math.round(minDeTarea(t))} min` : "minutos"}
                   </button>
                   <button onClick={()=>setTareas(ts=>ts.filter(z=>z.id!==t.id))}
                     style={{width:52,height:64,borderRadius:12,border:`2px solid ${C.border}`,background:"#fff",
@@ -3832,46 +3842,47 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
             // Las horas de una persona se suman: puede hacer varias tareas
             const porPersona = {};
             tareas.filter(t=>t.persona_id).forEach(t => {
-              if (!porPersona[t.persona_id]) porPersona[t.persona_id] = { horas:0, tareas:0 };
-              porPersona[t.persona_id].horas += toNum(t.horas);
+              if (!porPersona[t.persona_id]) porPersona[t.persona_id] = { min:0, tareas:0 };
+              porPersona[t.persona_id].min += minDeTarea(t);
               porPersona[t.persona_id].tareas++;
             });
             const gente2 = Object.entries(porPersona);
             if (!gente2.length) return null;
-            const horas = gente2.reduce((a,[,x])=>a+x.horas, 0);
+            const minTot = gente2.reduce((a,[,x])=>a+x.min, 0);
+            const horas = minTot/60;
             const previsto = (parseInt(p?.personas_linea)||3) * HORAS_JORNADA;
-            const sinHoras = tareas.filter(t=>t.persona_id && !toNum(t.horas)).length;
+            const sinHoras = tareas.filter(t=>t.persona_id && !minDeTarea(t)).length;
             return (
               <div style={{background:C.card2,borderRadius:12,padding:"12px 14px",marginTop:12,fontSize:13.5,lineHeight:1.7}}>
                 <div style={{fontFamily:F.h,fontWeight:800,fontSize:12.5,color:C.mutedD,marginBottom:5}}>MANO DE OBRA DE LA LÍNEA</div>
                 {gente2.map(([id,x])=>{
-                  const pasa = x.horas > HORAS_JORNADA + 0.01;
+                  const pasa = x.min > MIN_JORNADA + 1;
                   return (
                     <div key={id} style={{display:"flex",justifyContent:"space-between"}}>
                       <span style={{color:C.mutedD}}>
                         {nombrePers(id)}{x.tareas>1 && <span style={{fontSize:11.5}}> · {x.tareas} tareas</span>}
                       </span>
-                      <b style={{color: pasa?C.red : x.horas===HORAS_JORNADA?C.text:C.amber}}>
-                        {x.horas} h{pasa && " ⚠️"}
+                      <b style={{color: pasa?C.red : Math.abs(x.min-MIN_JORNADA)<1?C.text:C.amber}}>
+                        {Math.round(x.min)} min{pasa && " ⚠️"}
                       </b>
                     </div>
                   );
                 })}
                 <div style={{display:"flex",justifyContent:"space-between",borderTop:`1px solid ${C.border}`,marginTop:5,paddingTop:5}}>
-                  <span style={{color:C.text,fontWeight:700}}>{gente2.length} personas · {horas} h</span>
-                  <b style={{color: horas>previsto?C.red:C.green}}>{eur(horas*TARIFA_MO)}</b>
+                  <span style={{color:C.text,fontWeight:700}}>{gente2.length} personas · {Math.round(minTot)} min</span>
+                  <b style={{color: minTot>previsto*60?C.red:C.green}}>{eur(horas*TARIFA_MO)}</b>
                 </div>
                 <div style={{fontSize:12,color:C.mutedD,marginTop:2}}>
-                  previsto {previsto} h ({eur(previsto*TARIFA_MO)}) · jornada de {HORAS_JORNADA} h
+                  previsto {Math.round(previsto*60)} min ({eur(previsto*TARIFA_MO)}) · jornada de {MIN_JORNADA} min
                 </div>
-                {gente2.some(([,x])=>x.horas > HORAS_JORNADA + 0.01) && (
+                {gente2.some(([,x])=>x.min > MIN_JORNADA + 1) && (
                   <div style={{color:C.red,fontWeight:700,fontSize:12.5,marginTop:5,lineHeight:1.5}}>
-                    ⚠️ Alguien pasa de las {HORAS_JORNADA} h de jornada. Revisa las horas de cada tarea.
+                    ⚠️ Alguien pasa de los {MIN_JORNADA} min de jornada. Revisa los minutos de cada tarea.
                   </div>
                 )}
                 {sinHoras>0 && (
                   <div style={{color:C.amber,fontWeight:700,fontSize:12.5,marginTop:5,lineHeight:1.5}}>
-                    ⚠️ {sinHoras} tarea{sinHoras!==1?"s":""} sin horas: no cuentan en el coste.
+                    ⚠️ {sinHoras} tarea{sinHoras!==1?"s":""} sin minutos: no cuentan en el coste.
                   </div>
                 )}
               </div>
