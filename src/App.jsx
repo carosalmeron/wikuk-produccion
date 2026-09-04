@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.20.0";
+const APP_VERSION = "v4.20.1";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -7315,10 +7315,20 @@ function InformeSemanalScreen({ onBack, centros, productos, mps, procesos, usuar
   const [cierres] = useCol("cierres_turno", "fecha");
   const hoy = new Date().toISOString().slice(0,10);
   const [semana, setSemana] = useState(isoWeek(hoy));
-  const [centroId, setCentroId] = useState(centros[0]?.id || "");
-  useEffect(()=>{ if(!centroId && centros[0]) setCentroId(centros[0].id); },[centros]);
-
+  const [centroId, setCentroId] = useState("");
   const dias = diasDeSemana(semana);
+
+  // Arranca en el centro que tenga partes esta semana, no en el primero de la lista
+  useEffect(() => {
+    if (centroId || !centros.length || !prods.length) return;
+    const cuenta = {};
+    prods.filter(p => p.fecha>=dias[0] && p.fecha<=dias[4]).forEach(p => {
+      const c = productos.find(z=>z.id===p.producto_id)?.centro;
+      if (c) cuenta[c] = (cuenta[c]||0)+1;
+    });
+    const mejor = Object.entries(cuenta).sort((a,b)=>b[1]-a[1])[0]?.[0];
+    setCentroId(mejor || centros[0].id);
+  }, [centros, prods, semana]);
   const desde = dias[0], hasta = dias[4];
   const enCentro = (p) => {
     if (!centroId) return true;
@@ -7502,7 +7512,21 @@ function InformeSemanalScreen({ onBack, centros, productos, mps, procesos, usuar
       )}
 
       <div style={{padding:14}}>
-        {partes.length===0 ? <Empty icon="📊" text="No hay partes cerrados en esta semana"/> : (
+        {partes.length===0 ? (
+          <div style={{textAlign:"center",padding:"40px 20px"}}>
+            <div style={{fontSize:44,marginBottom:10}}>📊</div>
+            <div style={{fontFamily:F.h,fontWeight:800,fontSize:17,color:C.text,marginBottom:6}}>
+              Sin partes esta semana en {centros.find(c=>c.id===centroId)?.nombre||"este centro"}
+            </div>
+            {centros.length>1 && (() => {
+              const otros = centros.filter(c=>c.id!==centroId).filter(c =>
+                prods.some(p => p.fecha>=desde && p.fecha<=hasta && productos.find(z=>z.id===p.producto_id)?.centro===c.id));
+              return otros.length ? (
+                <div style={{fontSize:14,color:C.mutedD}}>Sí los hay en <b style={{color:C.blue}}>{otros.map(c=>c.nombre).join(", ")}</b>: tócalo arriba.</div>
+              ) : <div style={{fontSize:14,color:C.mutedD}}>Tampoco en los otros centros. Prueba otra semana.</div>;
+            })()}
+          </div>
+        ) : (
           <>
             {/* RESUMEN */}
             <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:12}}>
