@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.17.0";
+const APP_VERSION = "v4.20.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -2807,12 +2807,27 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
     const moUdObj = ritmo>0 ? (pers*8*TARIFA_MO)/ritmo : 0;
     // real
     const matReal = (parte?.consumos||[]).reduce((a,c)=>a+toNum(c.metros_consumidos)*precioMP(c.materia_id), 0);
-    const horasReales = (toNum(parte?.minutos_totales)/60) || toNum(parte?.horas_totales)
-      || ((parseInt(parte?.n_personas)||pers) * (toNum(parte?.horas_equipo)||8));
-    const moReal  = horasReales * TARIFA_MO;
+    // Mano de obra real: lo que se paga a cada persona que estuvo. Con más de media
+    // jornada en tareas cuenta entera; con menos, media. No se paga por minutos.
+    const jornadas = (() => {
+      const porPersona = {};
+      (parte?.procesos_realizados||[]).forEach(t => {
+        if (!t.persona_id) return;
+        porPersona[t.persona_id] = (porPersona[t.persona_id]||0) + minDeTarea(t);
+      });
+      const ids = Object.keys(porPersona);
+      if (!ids.length) return null;
+      return ids.reduce((a,id) => a + (porPersona[id] > MIN_JORNADA/2 ? 1 : 0.5), 0);
+    })();
+    const jornadasReales = jornadas ?? (parseInt(parte?.n_personas)||pers);
+    const minAnotados = toNum(parte?.minutos_totales) || toNum(parte?.horas_totales)*60;
+    const moReal  = jornadasReales * 8 * TARIFA_MO;
+    const moAnotada = (minAnotados/60) * TARIFA_MO;   // lo que está en tareas; la diferencia es tiempo muerto
     const pv = toNum(p?.precio_venta);
     const apUd = apoyoUdDe(p);          // el apoyo que lleva dentro cada unidad
-    return { ot, parte, p, plan, real, pv, apUd,
+    const udsPorPersona = ritmo>0 && pers>0 ? ritmo/pers : 0;
+    const debianHacer = udsPorPersona * jornadasReales;
+    return { ot, parte, p, plan, real, pv, apUd, pers, jornadasReales, moAnotada, debianHacer,
       objMat: mpUdObj*plan, objMO: moUdObj*plan, objApoyo: apUd*plan,
       realMat: matReal, realMO: moReal, realApoyo: apUd*real,
       ventaObj: pv*plan, ventaReal: pv*real };
@@ -2823,7 +2838,9 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
     objMat:a.objMat+f.objMat, objMO:a.objMO+f.objMO, objApoyo:a.objApoyo+f.objApoyo,
     realMat:a.realMat+f.realMat, realMO:a.realMO+f.realMO, realApoyo:a.realApoyo+f.realApoyo,
     ventaObj:a.ventaObj+f.ventaObj, ventaReal:a.ventaReal+f.ventaReal,
-  }), {plan:0,real:0,objMat:0,objMO:0,objApoyo:0,realMat:0,realMO:0,realApoyo:0,ventaObj:0,ventaReal:0});
+    persPrev:a.persPrev+f.pers, jornadas:a.jornadas+f.jornadasReales, moAnotada:a.moAnotada+f.moAnotada,
+    debianHacer:a.debianHacer+f.debianHacer,
+  }), {plan:0,real:0,objMat:0,objMO:0,objApoyo:0,realMat:0,realMO:0,realApoyo:0,ventaObj:0,ventaReal:0,persPrev:0,jornadas:0,moAnotada:0,debianHacer:0});
 
   // ── El apoyo se reparte solo: a este turno lo que pedían sus órdenes; el resto queda de sobra
   const repartoApoyo = (() => {
@@ -2862,8 +2879,8 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
   const ggTurno = ggMes / 21 / turnosAb;
   // Lo que debería haber costado LO FABRICADO: es lo único comparable con el real
   const paraLoHecho = filas.reduce((a,f)=>({
-    mat: a.mat + (f.plan>0 ? f.objMat/f.plan : 0) * f.real,
-    mo:  a.mo  + (f.plan>0 ? f.objMO /f.plan : 0) * f.real,
+    mat: a.mat + (f.plan>0 ? f.objMat/f.plan : 0) * f.real,   // la materia sí va por unidad
+    mo:  a.mo  + (f.plan>0 ? f.objMO/f.plan : 0) * f.real,   // lo que valen las uds hechas al ritmo programado
     ap:  a.ap  + f.realApoyo,
   }), {mat:0,mo:0,ap:0});
 
@@ -2890,8 +2907,11 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
     const parteGG = T.real>0 ? ggTurno * (f.real/T.real) : 0;
     const coste = f.realMat + f.realMO + f.realApoyo + parteGG;
     const venta = f.ventaReal;
-    return { ...f, coste, venta, costeUd: coste/f.real, ventaUd: venta/f.real,
-      margenUd: (venta-coste)/f.real, beneficio: venta-coste };
+    // Lo que debería costar según la ficha, para ponerlo al lado
+    const ggUdObj = T.plan>0 ? ggTurno / T.plan : 0;
+    const costeObjUd = f.plan>0 ? (f.objMat + f.objMO + f.objApoyo)/f.plan + ggUdObj : 0;
+    return { ...f, coste, venta, costeUd: coste/f.real, ventaUd: venta/f.real, costeObjUd,
+      margenUd: (venta-coste)/f.real, margenObjUd: f.pv - costeObjUd, beneficio: venta-coste };
   }).sort((a,b) => a.margenUd - b.margenUd);
 
   // ── Rendimientos por lote
@@ -3112,7 +3132,9 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
       <table style="width:100%;border-collapse:collapse;margin-bottom:18px">
         <tr><th ${th}>Concepto</th><th ${th}>Objetivo</th><th ${th}>Real</th><th ${th}>Desvío</th></tr>
         <tr><td ${est}>Materia prima</td><td ${n}>${eur(T.objMat)}</td><td ${n}>${eur(T.realMat)}</td><td ${n}>${T.realMat-T.objMat>=0?"+":""}${eur(T.realMat-T.objMat)}</td></tr>
-        <tr><td ${est}>Mano de obra</td><td ${n}>${eur(paraLoHecho.mo)}</td><td ${n}>${eur(T.realMO)}</td>
+        <tr><td ${est}>Mano de obra
+            <div style="font-size:11px;color:#777;font-weight:400">${num(T.jornadas)} personas${T.debianHacer>0?` · al ritmo debían hacer ${num(Math.round(T.debianHacer))} uds · hicieron ${num(T.real)} (<b>${Math.round(T.real/T.debianHacer*100)}%</b>)`:""}${T.persPrev!==T.jornadas?`<br/>Previstas ${T.persPrev}, estuvieron ${num(T.jornadas)}.`:""}${T.moAnotada>0&&T.realMO-T.moAnotada>5?`<br/>${eur(T.realMO-T.moAnotada)} pagados sin tarea anotada`:""}</div></td>
+          <td ${n}>${eur(paraLoHecho.mo)}</td><td ${n}>${eur(T.realMO)}</td>
           <td ${n}>${T.realMO-paraLoHecho.mo>=0?"+":""}${eur(T.realMO-paraLoHecho.mo)}</td></tr>
         ${paraLoHecho.ap>0?`<tr><td ${est}>Apoyo del escandallo</td><td ${n}>${eur(paraLoHecho.ap)}</td><td ${n}>${eur(T.realApoyo)}</td>
           <td ${n}>—</td></tr>`:""}
@@ -3142,10 +3164,11 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
                 ${desvioVolumen>=0?"+":"−"} ${eur(Math.abs(desvioVolumen))}</td></tr>
             ${porProducto.map(x=>`
             <tr><td style="padding:6px 0;border-top:1px solid #eee"><b>${esc(x.p?.nombre||"?")}</b>
-              <div style="font-size:11px;color:#777">${num(x.real)} uds · vende ${x.ventaUd.toFixed(2)} € · cuesta ${x.costeUd.toFixed(2)} €</div></td>
+              <div style="font-size:11px;color:#777">${num(x.real)} uds · vende ${x.ventaUd.toFixed(2)} € ·
+                debería costar ${x.costeObjUd.toFixed(2)} € · ha costado <b style="color:${x.costeUd>x.costeObjUd*1.05?"#b91c1c":"#111"}">${x.costeUd.toFixed(2)} €</b></div></td>
               <td style="padding:6px 0;border-top:1px solid #eee;text-align:right">
                 <b style="color:${x.beneficio>=0?"#16a34a":"#ef4444"}">${x.beneficio>=0?"+":"−"} ${eur(Math.abs(x.beneficio))}</b>
-                <div style="font-size:11px;color:#777">${x.margenUd.toFixed(2)} €/ud</div></td></tr>`).join("")}
+                <div style="font-size:11px;color:#777">${x.margenUd.toFixed(2)} €/ud · debería ${x.margenObjUd.toFixed(2)}</div></td></tr>`).join("")}
             <tr><td style="padding:6px 0;border-top:2px solid #ccc"><b>Beneficio del turno</b></td>
               <td style="padding:6px 0;border-top:2px solid #ccc;text-align:right">
                 <b style="color:${benefReal>=0?"#16a34a":"#ef4444"};font-size:15px">${eur(benefReal)}</b></td></tr>
@@ -3203,6 +3226,8 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
       centro: centro?.id||"", centro_nombre: centro?.nombre||"",
       uds_plan: T.plan, uds_real: T.real,
       coste_objetivo: costeObj, coste_para_lo_hecho: costeHecho, coste_real: costeReal,
+      personas_previstas: T.persPrev, jornadas_reales: T.jornadas, mo_real: T.realMO, mo_anotada: T.moAnotada,
+      uds_debian_hacer: T.debianHacer, pct_ritmo: T.debianHacer>0 ? T.real/T.debianHacer : null,
       beneficio_objetivo: benefObj, beneficio_real: benefReal, desvio,
       desvio_volumen: desvioVolumen, desvio_coste: desvioCoste,
       coste_ud_objetivo: costeObjUd, coste_ud_real: costeUdReal,
@@ -3211,7 +3236,7 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
       por_persona: porPersona.map(x=>({ proceso: x.proceso, persona: x.persona,
         uds: x.cant, minutos: Math.round(x.min), min_ud: x.minUd, estandar: x.estandar })),
       por_producto: porProducto.map(x=>({ producto_id: x.ot.producto_id, nombre: x.p?.nombre||"",
-        uds: x.real, venta_ud: x.ventaUd, coste_ud: x.costeUd, margen_ud: x.margenUd, beneficio: x.beneficio })),
+        uds: x.real, venta_ud: x.ventaUd, coste_ud: x.costeUd, coste_obj_ud: x.costeObjUd, margen_ud: x.margenUd, beneficio: x.beneficio })),
       min_apoyo: minApoyo, min_apoyo_teorico: minApoyoTeo,
       coste_apoyo: costeApoyo, coste_apoyo_teorico: costeApoyoTeo, desvio_apoyo: desvioApoyo,
       cerrado_por: perfil?.nombre||"", cerrado_at: new Date().toISOString(),
@@ -3487,6 +3512,18 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
           (T.realMat-paraLoHecho.mat>=0?"+":"")+eur(T.realMat-paraLoHecho.mat))}
         {fila("Mano de obra", eur(paraLoHecho.mo)+" →", eur(T.realMO),
           (T.realMO-paraLoHecho.mo>=0?"+":"")+eur(T.realMO-paraLoHecho.mo))}
+        <div style={{fontSize:12.5,color:C.mutedD,lineHeight:1.6,padding:"2px 0 8px"}}>
+          <b style={{color:C.text}}>{num(T.jornadas)} personas</b>
+          {T.debianHacer>0 && <> · al ritmo debían hacer <b style={{color:C.text}}>{num(Math.round(T.debianHacer))} uds</b> ·
+            hicieron <b style={{color: T.real/T.debianHacer>=0.95?C.green : T.real/T.debianHacer>=0.8?C.amber:C.red}}>
+              {num(T.real)} ({Math.round(T.real/T.debianHacer*100)}%)</b></>}
+          {T.persPrev !== T.jornadas && <div>Previstas {T.persPrev}, estuvieron {num(T.jornadas)}.</div>}
+          {T.moAnotada>0 && T.realMO-T.moAnotada>5 && (
+            <div style={{color:C.amber,fontWeight:700}}>
+              {eur(T.realMO-T.moAnotada)} pagados sin tarea anotada.
+            </div>
+          )}
+        </div>
         {paraLoHecho.ap>0 && fila("Apoyo del escandallo", eur(paraLoHecho.ap)+" →", eur(T.realApoyo), null)}
         {fila("Gastos generales", "", eur(ggTurno))}
         {fila("Coste total", eur(costeHecho)+" →", eur(costeReal),
@@ -3546,12 +3583,24 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
                         <span style={{color:C.mutedD}}>Se vende a</span><b>{x.ventaUd.toFixed(2)} €</b>
                       </div>
                       <div style={{display:"flex",justifyContent:"space-between",fontSize:13.5,padding:"2px 0"}}>
-                        <span style={{color:C.mutedD}}>Cuesta</span>
-                        <b style={{color:x.costeUd>x.ventaUd?C.red:C.text}}>{x.costeUd.toFixed(2)} €</b>
+                        <span style={{color:C.mutedD}}>Debería costar</span>
+                        <span style={{color:C.mutedD}}>{x.costeObjUd.toFixed(2)} €</span>
+                      </div>
+                      <div style={{display:"flex",justifyContent:"space-between",fontSize:13.5,padding:"2px 0"}}>
+                        <span style={{color:C.mutedD}}>Ha costado</span>
+                        <b style={{color:x.costeUd>x.ventaUd?C.red : x.costeUd>x.costeObjUd*1.05?C.amber:C.text}}>
+                          {x.costeUd.toFixed(2)} €
+                          {Math.abs(x.costeUd-x.costeObjUd)>0.005 && (
+                            <span style={{fontSize:11.5,fontWeight:700,marginLeft:5,color:x.costeUd>x.costeObjUd?C.red:C.green}}>
+                              {x.costeUd>x.costeObjUd?"+":"−"}{Math.abs(x.costeUd-x.costeObjUd).toFixed(2)}
+                            </span>
+                          )}
+                        </b>
                       </div>
                       <div style={{display:"flex",justifyContent:"space-between",fontSize:14,padding:"5px 0 0",
                         borderTop:`1px solid ${C.card2}`,marginTop:4}}>
-                        <span style={{color:C.text,fontWeight:700}}>Deja {x.margenUd.toFixed(2)} € cada una</span>
+                        <span style={{color:C.text,fontWeight:700}}>Deja {x.margenUd.toFixed(2)} € cada una
+                          <span style={{fontSize:11.5,color:C.mutedD,fontWeight:600}}> · debería {x.margenObjUd.toFixed(2)}</span></span>
                         <b style={{color:x.beneficio>=0?C.green:C.red}}>
                           {x.beneficio>=0?"+":"−"} {eur(Math.abs(x.beneficio))}
                         </b>
