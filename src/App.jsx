@@ -12,12 +12,12 @@ import {
 } from "firebase/auth";
 import {
   getFirestore, initializeFirestore, persistentLocalCache, persistentSingleTabManager,
-  collection, doc, setDoc, updateDoc, deleteDoc,
+  collection, doc, setDoc, updateDoc, deleteDoc, deleteField,
   onSnapshot, query, orderBy, getDocs,
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.14.0";
+const APP_VERSION = "v4.15.1";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -591,7 +591,7 @@ function UsuarioForm({ onBack, ep, turnos, centros, onDone }) {
   const [usuarioLogin, setUsuarioLogin] = useState(ep?.usuario||"");
   const [recibeInf, setRecibeInf] = useState(!!ep?.recibe_informe);
   const [esApoyo, setEsApoyo] = useState(!!ep?.es_apoyo);
-  const [clave, setClave] = useState(ep?.clave||"");
+  const [clave, setClave] = useState("");   // solo para crear la cuenta; no se persiste
   const [horasDia, setHorasDia]   = useState(ep?.horas_dia?.toString()||"8");
   const [activo, setActivo] = useState(ep?.activo!==false);
   const [err, setErr] = useState("");
@@ -604,7 +604,7 @@ function UsuarioForm({ onBack, ep, turnos, centros, onDone }) {
     if (rol==="operario" && !centro) { setErr("Asigna un centro al operario"); return; }
     if (rol==="operario") {
       if (!usuarioLogin.trim()) { setErr("Ponle un usuario para entrar (sin correo)"); return; }
-      if ((clave||"").length < 6) { setErr("La clave debe tener 6 caracteres o más"); return; }
+      if (!ep && (clave||"").length < 6) { setErr("La clave debe tener 6 caracteres o más"); return; }
       if (!turno) { setErr("Asigna un turno al operario"); return; }
     }
     setBusy(true); setErr("");
@@ -617,7 +617,6 @@ function UsuarioForm({ onBack, ep, turnos, centros, onDone }) {
       recibe_informe: recibeInf,
       es_apoyo: rol==="operario" ? esApoyo : false,
       usuario: rol==="operario" ? usuarioLogin.trim().toLowerCase() : "",
-      clave:   rol==="operario" ? clave : "",
     };
     try {
       if (ep) {
@@ -672,7 +671,12 @@ function UsuarioForm({ onBack, ep, turnos, centros, onDone }) {
                 Sin correo: un usuario corto y una clave, que se crean al guardar.
               </div>
               <Field label="Usuario" value={usuarioLogin} onChange={v=>setUsuarioLogin(v.toLowerCase().replace(/[^a-z0-9._-]/g,""))} placeholder="ali"/>
-              <Field label="Clave" value={clave} onChange={setClave} placeholder="mín. 6 caracteres"/>
+              {!ep && <Field label="Clave" value={clave} onChange={setClave} type="password" placeholder="mín. 6 caracteres"/>}
+              {ep && (
+                <div style={{background:C.card2,borderRadius:9,padding:"9px 11px",marginBottom:14,fontSize:12.5,color:C.mutedD,lineHeight:1.5}}>
+                  🔑 Para cambiar la clave, usa <b>Restablecer clave</b>.
+                </div>
+              )}
               {usuarioLogin && (clave||"").length>=6 && !ep && (
                 <div style={{background:"#fff",borderRadius:9,padding:"9px 11px",fontSize:12.5,color:C.mutedD,lineHeight:1.5}}>
                   Entrará poniendo <b style={{color:C.text}}>{usuarioLogin}</b> y su clave, y le saldrá directamente el menú de fábrica.
@@ -681,8 +685,7 @@ function UsuarioForm({ onBack, ep, turnos, centros, onDone }) {
               {ep && (
                 <div style={{background:C.amberBg,border:`1.5px solid ${C.amber}`,borderRadius:9,padding:"9px 11px",
                   fontSize:12.5,color:C.amber,fontWeight:700,lineHeight:1.5}}>
-                  ⚠️ Cambiar aquí el usuario o la clave no cambia la cuenta con la que ya entra.
-                  Para eso hay que borrarla en Firebase y volver a crearla.
+                  ⚠️ Cambiar aquí el usuario no cambia la cuenta con la que ya entra.
                 </div>
               )}
             </div>
@@ -752,6 +755,28 @@ function SeedScreen({ onBack }) {
   const [running, setRunning] = useState(false);
   const [done, setDone] = useState(false);
   const add = (m) => setLog(l=>[...l, m]);
+
+  // ── Migración de un solo uso: borrar las claves guardadas en texto plano
+  const [migrando, setMigrando] = useState(false);
+  const [migrado, setMigrado] = useState(null);
+  const limpiarClaves = async () => {
+    if (!window.confirm("Se borrará el campo 'clave' de todas las fichas de usuario.\n\nLas cuentas siguen funcionando: la clave real está en Firebase Auth, no aquí.\n\n¿Continuar?")) return;
+    setMigrando(true);
+    try {
+      const snap = await getDocs(collection(db, "usuarios"));
+      let n = 0;
+      for (const d of snap.docs) {
+        if (d.data().clave !== undefined) {
+          await updateDoc(doc(db, "usuarios", d.id), { clave: deleteField() });
+          n++;
+        }
+      }
+      setMigrado(`Hecho: ${n} ficha${n!==1?"s":""} limpiada${n!==1?"s":""} de ${snap.size}.`);
+    } catch (e) {
+      setMigrado("Error: " + (e?.message || e));
+    }
+    setMigrando(false);
+  };
 
   const run = async () => {
     if (running) return;
@@ -836,6 +861,17 @@ function SeedScreen({ onBack }) {
           </div>
           {!done && <Btn onClick={run} disabled={running}>{running?"⏳ Cargando…":"🚀 Cargar catálogo completo"}</Btn>}
         </Card>
+        <Card style={{marginBottom:14}} color={C.red+"66"}>
+          <div style={{fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text,marginBottom:4}}>🔐 Quitar claves guardadas en las fichas</div>
+          <div style={{fontSize:13,color:C.mutedD,lineHeight:1.6,marginBottom:12}}>
+            Hasta la v4.14 la clave de los operarios se guardaba en su ficha, legible por cualquiera con acceso.
+            Esto la borra de todas. Las cuentas siguen entrando igual. Ejecútalo una sola vez.
+          </div>
+          {migrado
+            ? <div style={{fontSize:14,fontWeight:700,color:migrado.startsWith("Error")?C.red:C.green}}>{migrado}</div>
+            : <Btn v="secondary" onClick={limpiarClaves} disabled={migrando}>{migrando?"⏳ Limpiando…":"🔐 Borrar claves de las fichas"}</Btn>}
+        </Card>
+
         {log.length>0 && (
           <Card>
             {log.map((m,i)=><div key={i} style={{padding:"6px 0",fontSize:14,color:C.text,borderBottom:`1px solid ${C.border}`}}>{m}</div>)}
@@ -2919,6 +2955,12 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
     return r;
   })();
 
+  // Si todos fueran al tiempo de la ficha, ¿cuántos minutos serían?
+  const minSegunFicha = porPersona.reduce((a,x)=>a + (x.estandar>0 ? x.estandar * x.cant : 0), 0);
+  const minReales     = porPersona.reduce((a,x)=>a + x.min, 0);
+  const moSegunFicha  = (minSegunFicha/60) * TARIFA_MO;
+  const moReales      = (minReales/60) * TARIFA_MO;
+
   // Media de cada proceso, para saber quién va por encima y quién por debajo
   const mediaProceso = {};
   porPersona.forEach(x => {
@@ -3040,19 +3082,30 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
                <td ${n} style="background:#f7f7f7">—</td>
                <td ${n} style="background:#f7f7f7">${m.estandar||"—"}</td></tr>`;
         }).join("")}
-      </table>` : ""}
+      </table>
+      ${minSegunFicha>0 ? `<div style="font-size:12.5px;margin:-10px 0 18px;padding:10px 12px;border-radius:8px;
+        background:${minReales>minSegunFicha*1.3?"#fffbeb":"#f7f7f7"};border:${minReales>minSegunFicha*1.3?"1px solid #f59e0b":"none"}">
+        Minutos reales en los procesos: <b>${Math.round(minReales)} min (${eur(moReales)})</b> ·
+        al tiempo de la ficha serían <b>${Math.round(minSegunFicha)} min (${eur(moSegunFicha)})</b>.
+        ${minReales>minSegunFicha*1.3?`<br/><b style="color:#b45309">⚠️ Se tarda ${(minReales/minSegunFicha).toFixed(1)}× lo que dice la ficha.</b> O la ficha está mal, o hay un problema en línea.`:""}
+      </div>` : ""}` : ""}
 
       ${apoyos.length ? `<h3 style="font-size:13px;text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid #111;padding-bottom:4px">Trabajo de apoyo</h3>
-      <div style="font-size:12px;color:#777;margin-bottom:8px">Cuenta aparte: lo desalado hoy puede ser para mañana.</div>
-      <table style="width:100%;border-collapse:collapse;margin-bottom:18px">
+      <div style="font-size:12px;color:#777;margin-bottom:8px">A este turno se le carga lo que pedían sus productos. El resto queda para lo que venga.</div>
+      ${apoyosTurno.length ? `<table style="width:100%;border-collapse:collapse;margin-bottom:10px">
         <tr><th ${th}>Tarea</th><th ${th}>Cantidad</th><th ${th}>Quién</th><th ${th}>Teórico</th><th ${th}>Real</th></tr>
-        ${apoyos.map(a=>{ const teo=toNum(a.minutos_teoricos)||toNum(a.minutos), real=toNum(a.minutos);
-          return `<tr><td ${est}>${esc(a.proceso)}</td><td ${n}>${num(a.cantidad)} ${a.base==="m"?"m":"uds"}</td>
+        ${apoyosTurno.map(a=>{ const teo=toNum(a.minutos_teoricos)||toNum(a.minutos), real=toNum(a.minutos);
+          return `<tr><td ${est}>${esc(a.proceso)}</td><td ${n}>${num(a.cantidad_usada ?? a.cantidad)} ${a.base==="m"?"m":"uds"}</td>
             <td ${est}>${esc(a.persona||"—")}</td><td ${n}>${Math.round(teo)} min</td>
             <td ${n}><b style="color:${real>teo+1?"#b45309":"#111"}">${Math.round(real)} min</b></td></tr>`;}).join("")}
-        <tr><td ${est} colspan="3"><b>COSTE DEL APOYO</b></td><td ${n}><b>${eur(costeApoyoTeo)}</b></td>
+        <tr><td ${est} colspan="3"><b>COSTE DEL APOYO DE ESTE TURNO</b></td><td ${n}><b>${eur(costeApoyoTeo)}</b></td>
           <td ${n}><b style="color:${desvioApoyo>0?"#ef4444":"#16a34a"}">${eur(costeApoyo)}</b></td></tr>
-      </table>` : ""}
+      </table>` : `<div style="font-size:12.5px;color:#b45309;font-weight:700;margin-bottom:10px">
+        ⚠️ Ninguna anotación encaja con lo que pedían los productos de hoy.</div>`}
+      ${sobraApoyo.length ? `<div style="font-size:12px;color:#555;margin-bottom:18px">
+        Queda hecho para después: ${sobraApoyo.map(a=>`${esc(a.proceso)} ${num(a.cantidad_usada||a.cantidad)} ${a.base==="m"?"m":"uds"}`).join(" · ")}
+        (${Math.round(minSobra)} min, ${eur(minSobra/60*TARIFA_MO)}). Lo que hoy piden los productos es:
+        ${Object.keys(apoyoPedidoHoy).map(pid=>esc(procesos.find(z=>z.id===pid)?.nombre||pid)).join(", ")||"nada"}.</div>` : ""}` : ""}
 
       <h3 style="font-size:13px;text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid #111;padding-bottom:4px">Lo que ha costado el turno</h3>
       <div style="font-size:12px;color:#777;margin-bottom:8px">Comparado con lo que debería haber costado <b>lo que sí se ha fabricado</b> (${num(T.real)} uds), no el plan entero (${num(T.plan)} uds, ${eur(costeObj)}).</div>
@@ -3355,6 +3408,24 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
               </div>
             );
           })}
+          {minSegunFicha>0 && minReales>0 && (
+            <div style={{background: minReales > minSegunFicha*1.3 ? C.amberBg : C.card2,
+              border: minReales > minSegunFicha*1.3 ? `2px solid ${C.amber}` : "none",
+              borderRadius:12,padding:"12px 14px",marginTop:6,fontSize:13.5,lineHeight:1.7}}>
+              <div style={{display:"flex",justifyContent:"space-between"}}>
+                <span style={{color:C.mutedD}}>Minutos reales en los procesos</span><b>{Math.round(minReales)} min · {eur(moReales)}</b>
+              </div>
+              <div style={{display:"flex",justifyContent:"space-between"}}>
+                <span style={{color:C.mutedD}}>Si se fuera al tiempo de la ficha</span><b>{Math.round(minSegunFicha)} min · {eur(moSegunFicha)}</b>
+              </div>
+              {minReales > minSegunFicha*1.3 && (
+                <div style={{color:C.amber,fontWeight:700,marginTop:5,fontSize:13}}>
+                  ⚠️ Se tarda {(minReales/minSegunFicha).toFixed(1)}× lo que dice la ficha.
+                  O los tiempos de la ficha están mal, o hay un problema en línea. Los dos merecen mirarse.
+                </div>
+              )}
+            </div>
+          )}
         </BloqueF>
       )}
 
