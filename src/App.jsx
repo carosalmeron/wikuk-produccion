@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.16.0";
+const APP_VERSION = "v4.17.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -7257,6 +7257,336 @@ function LineaEditor({ it, productos, otros, onGuardar, onQuitar, onCerrar }) {
 }
 
 // ── CIERRES DE TURNO: consultar y reenviar informes ────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+// INFORME SEMANAL — materias, procesos, empleados, paradas, productos
+// Todo sale de los partes cerrados y los cierres de turno de la semana
+// ═══════════════════════════════════════════════════════════════
+function InformeSemanalScreen({ onBack, centros, productos, mps, procesos, usuarios, motivos=[] }) {
+  const [prods]   = useCol("producciones", "fecha");
+  const [cierres] = useCol("cierres_turno", "fecha");
+  const hoy = new Date().toISOString().slice(0,10);
+  const [semana, setSemana] = useState(isoWeek(hoy));
+  const [centroId, setCentroId] = useState(centros[0]?.id || "");
+  useEffect(()=>{ if(!centroId && centros[0]) setCentroId(centros[0].id); },[centros]);
+
+  const dias = diasDeSemana(semana);
+  const desde = dias[0], hasta = dias[4];
+  const enCentro = (p) => {
+    if (!centroId) return true;
+    const pr = productos.find(z=>z.id===p.producto_id);
+    return !pr?.centro || pr.centro === centroId;
+  };
+  const partes = prods.filter(p => p.fecha>=desde && p.fecha<=hasta && !p.reabierta && toNum(p.cantidad)>=0 && enCentro(p));
+  const cierresSem = cierres.filter(c => c.fecha>=desde && c.fecha<=hasta && !c.reabierto && (!centroId || !c.centro || c.centro===centroId));
+  const prodDe = (id) => productos.find(z=>z.id===id);
+  const nombrePers = (id) => usuarios.find(u=>u.id===id)?.nombre || "—";
+  const nombreProc = (id) => procesos.find(z=>z.id===id)?.nombre || "?";
+  const nombreDia = (f) => ["L","M","X","J","V","S","D"][(new Date(f).getDay()+6)%7];
+
+  // ── Resumen
+  const udsReal = partes.reduce((a,p)=>a+toNum(p.cantidad),0);
+  const udsPlan = partes.reduce((a,p)=>a+(toNum(p.objetivo_ot)||toNum(p.cantidad)),0);
+  const benef = cierresSem.reduce((a,c)=>a+toNum(c.beneficio_real),0);
+  const ineficiencia = cierresSem.reduce((a,c)=>a+Math.max(0,toNum(c.desvio_coste)),0);
+
+  // ── Materias: por materia y por lote
+  const matAcum = {};
+  partes.forEach(p => {
+    const pr = prodDe(p.producto_id);
+    (p.consumos||[]).forEach(c => {
+      const capas = toNum(c.capas) || toNum((pr?.materias_asignadas||[]).find(m=>m.mp_id===c.materia_id)?.capas) || 1;
+      const teo = toNum(pr?.metros_finales) * capas * toNum(p.cantidad);
+      const gast = toNum(c.metros_consumidos);
+      if (!gast) return;
+      const mp = mps.find(m=>m.id===c.materia_id);
+      const obj = toNum((pr?.materias_asignadas||[]).find(m=>m.mp_id===c.materia_id)?.rendimiento) || toNum(mp?.rendimiento_objetivo) || 85;
+      if (!matAcum[c.materia_id]) matAcum[c.materia_id] = { mp, teo:0, gast:0, obj, lotes:{}, productos:new Set(), precio: toNum(mp?.precio_ud) };
+      const m = matAcum[c.materia_id];
+      m.teo += teo; m.gast += gast; m.productos.add(pr?.nombre||"?");
+      const l = c.lote || "sin lote";
+      if (!m.lotes[l]) m.lotes[l] = { teo:0, gast:0 };
+      m.lotes[l].teo += teo; m.lotes[l].gast += gast;
+    });
+  });
+  const materias = Object.values(matAcum).map(m => {
+    const r = m.gast>0 ? m.teo/m.gast*100 : 0;
+    const esperado = m.teo/(m.obj/100);
+    const deMas = Math.max(0, m.gast - esperado);
+    const lotes = Object.entries(m.lotes).map(([l,x])=>({ lote:l, r: x.gast>0 ? x.teo/x.gast*100 : 0, gast:x.gast }))
+      .sort((a,b)=>a.r-b.r);
+    // Regla: un lote 8 puntos por debajo del resto es el lote, no la línea
+    const otros = lotes.slice(1);
+    const mediaOtros = otros.length ? otros.reduce((a,x)=>a+x.r,0)/otros.length : null;
+    const loteMalo = (lotes.length>1 && mediaOtros!=null && mediaOtros - lotes[0].r >= 8) ? lotes[0] : null;
+    return { ...m, r, deMas, costeDeMas: deMas*m.precio, lotes, loteMalo };
+  }).sort((a,b)=>b.costeDeMas-a.costeDeMas);
+  const perdidaMateria = materias.reduce((a,m)=>a+m.costeDeMas,0);
+
+  // ── Procesos y empleados
+  const procAcum = {}, persAcum = {};
+  partes.forEach(p => {
+    const pr = prodDe(p.producto_id);
+    (p.procesos_realizados||[]).forEach(t => {
+      const cant = toNum(t.cantidad), min = minDeTarea(t);
+      if (!cant || !min) return;
+      const cat = procesos.find(z=>z.id===t.proceso_id);
+      if (cat?.apoyo) return;
+      const asig = (pr?.procesos_asignados||[]).find(z=>z.proceso_id===t.proceso_id);
+      const ficha = toNum(asig?.min_real) || toNum(asig?.min_obj) || toNum(cat?.tiempo_proceso);
+      if (!procAcum[t.proceso_id]) procAcum[t.proceso_id] = { nombre: nombreProc(t.proceso_id), cant:0, min:0, ficha, dias:{} };
+      const pa = procAcum[t.proceso_id];
+      pa.cant += cant; pa.min += min;
+      if (!pa.dias[p.fecha]) pa.dias[p.fecha] = { cant:0, min:0 };
+      pa.dias[p.fecha].cant += cant; pa.dias[p.fecha].min += min;
+      if (t.persona_id) {
+        if (!persAcum[t.persona_id]) persAcum[t.persona_id] = { id: t.persona_id, nombre: nombrePers(t.persona_id), min:0, procesos:{} };
+        const pe = persAcum[t.persona_id];
+        pe.min += min;
+        if (!pe.procesos[t.proceso_id]) pe.procesos[t.proceso_id] = { pid: t.proceso_id, nombre: nombreProc(t.proceso_id), cant:0, min:0 };
+        pe.procesos[t.proceso_id].cant += cant; pe.procesos[t.proceso_id].min += min;
+      }
+    });
+  });
+  const procs = Object.values(procAcum).map(x => ({ ...x, minUd: x.cant>0 ? x.min/x.cant : 0 }));
+  const minReales = procs.reduce((a,x)=>a+x.min,0);
+  const minFicha = procs.reduce((a,x)=>a+x.ficha*x.cant,0);
+  const perdidaMO = Math.max(0,(minReales-minFicha)/60*TARIFA_MO);
+
+  // Ritmo de cada persona contra la media de su proceso, ponderado por lo que ha hecho
+  const personas = Object.values(persAcum).map(pe => {
+    let pesoTotal = 0, desvioPond = 0;
+    const detalle = Object.entries(pe.procesos).map(([pid,x]) => {
+      const media = procAcum[pid]?.minUd || 0;
+      const minUd = x.cant>0 ? x.min/x.cant : 0;
+      const vs = media>0 ? (minUd/media-1)*100 : 0;
+      pesoTotal += x.min; desvioPond += vs*x.min;
+      return { ...x, minUd, vs };
+    });
+    return { ...pe, detalle, vsMedia: pesoTotal>0 ? desvioPond/pesoTotal : 0, nProc: detalle.length };
+  }).sort((a,b)=>a.vsMedia-b.vsMedia);
+
+  // Contra sí mismos: las 8 semanas anteriores
+  const desdeHist = new Date(new Date(desde).getTime()-56*864e5).toISOString().slice(0,10);
+  const histPers = {};
+  prods.filter(p=>p.fecha>=desdeHist && p.fecha<desde && !p.reabierta && enCentro(p)).forEach(p=>{
+    (p.procesos_realizados||[]).forEach(t=>{
+      const cant=toNum(t.cantidad), min=minDeTarea(t);
+      if (!cant||!min||!t.persona_id) return;
+      const k=`${t.persona_id}|${t.proceso_id}`;
+      if (!histPers[k]) histPers[k]={cant:0,min:0};
+      histPers[k].cant+=cant; histPers[k].min+=min;
+    });
+  });
+  personas.forEach(pe => {
+    let peso=0, d=0;
+    pe.detalle.forEach(x=>{
+      const h = histPers[`${pe.id}|${x.pid}`];
+      if (h && h.cant>0) { const suyo=h.min/h.cant; d += (x.minUd/suyo-1)*100*x.min; peso += x.min; }
+    });
+    pe.vsSuyo = peso>0 ? d/peso : null;
+  });
+
+  // ── Paradas
+  const parosAcum = {};
+  let minParados = 0, costeParadas = 0;
+  partes.forEach(p => (p.paros||[]).forEach(x => {
+    const min = toNum(x.minutos); if (!min) return;
+    const k = x.motivo || x.motivo_nombre || "sin motivo";
+    if (!parosAcum[k]) parosAcum[k] = { min:0, veces:0, lineas:new Set() };
+    parosAcum[k].min += min; parosAcum[k].veces++; parosAcum[k].lineas.add(p.linea_nombre);
+    minParados += min;
+    costeParadas += min/60 * (parseInt(p.n_personas)||3) * TARIFA_MO;
+  }));
+  const paros = Object.entries(parosAcum).map(([k,v])=>({ motivo:k, ...v })).sort((a,b)=>b.min-a.min);
+
+  // ── Productos, de los cierres
+  const prodAcum = {};
+  cierresSem.forEach(c => (c.por_producto||[]).forEach(x => {
+    if (!prodAcum[x.nombre]) prodAcum[x.nombre] = { nombre:x.nombre, uds:0, venta:0, coste:0 };
+    prodAcum[x.nombre].uds += toNum(x.uds);
+    prodAcum[x.nombre].venta += toNum(x.venta_ud)*toNum(x.uds);
+    prodAcum[x.nombre].coste += toNum(x.coste_ud)*toNum(x.uds);
+  }));
+  const productosSem = Object.values(prodAcum).map(x=>({ ...x, benef:x.venta-x.coste, margenUd: x.uds>0?(x.venta-x.coste)/x.uds:0 }))
+    .sort((a,b)=>a.benef-b.benef);
+
+  // ── Dónde se ha ido el dinero
+  const ranking = [
+    { t:"Mano de obra por encima de la ficha", eur: perdidaMO,
+      d: minFicha>0 ? `Se tarda ${(minReales/minFicha).toFixed(1)}× lo que dicen los tiempos de proceso.` : "Sin tiempos de ficha para comparar." },
+    { t:"Materia por debajo del rendimiento", eur: perdidaMateria,
+      d: materias[0] ? `${materias[0].mp?.nombre||"?"} al ${Math.round(materias[0].r)}% con objetivo ${materias[0].obj}%. ${num(materias[0].deMas)} m de más.` : "—" },
+    { t:"Paradas", eur: costeParadas,
+      d: paros[0] ? `${num(minParados)} min. "${paros[0].motivo}" es el ${Math.round(paros[0].min/minParados*100)}%.` : "Ninguna anotada." },
+  ].filter(x=>x.eur>0.5).sort((a,b)=>b.eur-a.eur);
+
+  const Fila = ({ nm, sb, v, sub, col }) => (
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:10,padding:"9px 0",borderBottom:`1px solid ${C.card2}`}}>
+      <span style={{minWidth:0}}><div style={{fontWeight:800,fontSize:15,color:C.text}}>{nm}</div>
+        {sb && <div style={{fontSize:12.5,color:C.mutedD,marginTop:2}}>{sb}</div>}</span>
+      <span style={{flexShrink:0,textAlign:"right",fontWeight:900,fontSize:18,color:col||C.text}}>{v}
+        {sub && <div style={{fontSize:11.5,color:C.mutedD,fontWeight:600}}>{sub}</div>}</span>
+    </div>
+  );
+  const Barra = ({ pct, col }) => (
+    <div style={{height:8,background:C.card2,borderRadius:4,overflow:"hidden",marginTop:6}}>
+      <div style={{width:Math.min(100,Math.max(0,pct))+"%",height:"100%",background:col,borderRadius:4}}/></div>
+  );
+  const Nota = ({ children }) => <div style={{fontSize:12.5,color:C.mutedD,lineHeight:1.55,marginTop:8}}>{children}</div>;
+  const colR = (r,obj) => r>=obj ? C.green : r>=obj-5 ? C.amber : C.red;
+
+  const semAnt = () => { const l=lunesDeSemana(semana); l.setDate(l.getDate()-7); setSemana(isoWeek(l.toISOString().slice(0,10))); };
+  const semSig = () => { const l=lunesDeSemana(semana); l.setDate(l.getDate()+7); setSemana(isoWeek(l.toISOString().slice(0,10))); };
+
+  return (
+    <div style={{background:C.bg,minHeight:"100vh",paddingBottom:40}}>
+      <Header title="INFORME SEMANAL" onBack={onBack} sub={`${fechaES(desde)} – ${fechaES(hasta)}`}/>
+      <div style={{padding:"12px 14px 0",display:"flex",gap:8,alignItems:"center"}}>
+        <button onClick={semAnt} style={{height:44,width:44,borderRadius:10,border:`1.5px solid ${C.border}`,background:"#fff",fontSize:18,cursor:"pointer"}}>‹</button>
+        <div style={{flex:1,textAlign:"center",fontFamily:F.h,fontWeight:800,fontSize:14,color:C.text}}>{rotuloSemana(semana)}</div>
+        <button onClick={semSig} style={{height:44,width:44,borderRadius:10,border:`1.5px solid ${C.border}`,background:"#fff",fontSize:18,cursor:"pointer"}}>›</button>
+      </div>
+      {centros.length>1 && (
+        <div style={{padding:"10px 14px 0",display:"flex",gap:8,flexWrap:"wrap"}}>
+          {centros.map(c=><Pill key={c.id} active={centroId===c.id} onClick={()=>setCentroId(c.id)}>{c.nombre}</Pill>)}
+        </div>
+      )}
+
+      <div style={{padding:14}}>
+        {partes.length===0 ? <Empty icon="📊" text="No hay partes cerrados en esta semana"/> : (
+          <>
+            {/* RESUMEN */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:12}}>
+              {[[num(udsReal), `de ${num(udsPlan)} · ${udsPlan>0?Math.round(udsReal/udsPlan*100):0}%`, udsPlan>0&&udsReal/udsPlan<0.85?C.red:C.text],
+                [eur(benef), "beneficio", benef>=0?C.green:C.red],
+                [eur(-ineficiencia), "ineficiencia", C.red]].map(([n,l,col],i)=>(
+                <div key={i} style={{background:"#fff",border:`2px solid ${C.border}`,borderRadius:14,padding:"12px 8px",textAlign:"center"}}>
+                  <div style={{fontFamily:F.h,fontWeight:900,fontSize:22,color:col,lineHeight:1.1}}>{n}</div>
+                  <div style={{fontSize:11.5,color:C.mutedD,marginTop:3,fontWeight:600}}>{l}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{fontSize:12,color:C.mutedD,marginBottom:12}}>{cierresSem.length} turno{cierresSem.length!==1?"s":""} cerrado{cierresSem.length!==1?"s":""} · {partes.length} partes</div>
+
+            {ranking.length>0 && (
+              <Card color={C.red+"88"} style={{marginBottom:14}}>
+                <div style={{fontSize:12,fontWeight:800,color:C.red,letterSpacing:0.5,marginBottom:4}}>DÓNDE SE HA IDO EL DINERO</div>
+                {ranking.map((x,i)=>(
+                  <div key={i} style={{display:"flex",gap:12,alignItems:"center",padding:"11px 0",borderBottom:i<ranking.length-1?`1px solid ${C.card2}`:"none"}}>
+                    <div style={{width:34,height:34,borderRadius:17,background:C.navy,color:"#fff",fontWeight:900,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{i+1}</div>
+                    <div style={{flex:1,minWidth:0}}><b style={{fontSize:15}}>{x.t}</b><div style={{fontSize:12.5,color:C.mutedD,marginTop:2,lineHeight:1.5}}>{x.d}</div></div>
+                    <div style={{fontSize:19,fontWeight:900,color:C.red,flexShrink:0}}>−{eur(x.eur)}</div>
+                  </div>
+                ))}
+              </Card>
+            )}
+
+            {/* MATERIAS */}
+            {materias.length>0 && <>
+              <div style={{fontSize:13,letterSpacing:0.6,textTransform:"uppercase",color:C.mutedD,fontWeight:800,margin:"6px 0 8px"}}>📦 Materias primas</div>
+              <Card style={{marginBottom:14}}>
+                {materias.map((m,i)=>(
+                  <div key={i} style={{marginBottom:i<materias.length-1?10:0}}>
+                    <Fila nm={m.mp?.nombre||"?"} sb={`${num(m.gast)} m · ${m.lotes.length} lote${m.lotes.length!==1?"s":""} · ${[...m.productos].join(", ")}`}
+                      v={`${Math.round(m.r)}%`} sub={`obj ${m.obj}%`} col={colR(m.r,m.obj)}/>
+                    <Barra pct={m.r} col={colR(m.r,m.obj)}/>
+                    {m.loteMalo && <Nota>Lote <b>{m.loteMalo.lote}</b> al {Math.round(m.loteMalo.r)}%; los demás van al {Math.round(m.lotes.slice(1).reduce((a,x)=>a+x.r,0)/(m.lotes.length-1))}%. <b>Es el lote, no la línea.</b></Nota>}
+                    {!m.loteMalo && m.r<m.obj-5 && <Nota>Todos los lotes rinden parecido: el problema no es la materia, está en línea o en el escandallo.</Nota>}
+                    {m.costeDeMas>1 && <Nota>{num(m.deMas)} m de más sobre el objetivo · <b style={{color:C.red}}>{eur(m.costeDeMas)}</b></Nota>}
+                  </div>
+                ))}
+              </Card>
+            </>}
+
+            {/* PROCESOS */}
+            {procs.length>0 && <>
+              <div style={{fontSize:13,letterSpacing:0.6,textTransform:"uppercase",color:C.mutedD,fontWeight:800,margin:"6px 0 8px"}}>⚙️ Procesos · real contra ficha</div>
+              <Card style={{marginBottom:14}}>
+                {procs.sort((a,b)=>(b.ficha>0?b.minUd/b.ficha:0)-(a.ficha>0?a.minUd/a.ficha:0)).map((x,i)=>{
+                  const ratio = x.ficha>0 ? x.minUd/x.ficha : null;
+                  const col = ratio==null?C.text : ratio<=1.1?C.green : ratio<=1.5?C.amber : C.red;
+                  const diasOrd = dias.filter(d=>x.dias[d]);
+                  return (
+                    <div key={i} style={{marginBottom:i<procs.length-1?14:0}}>
+                      <Fila nm={x.nombre} sb={`${num(x.cant)} uds · ${diasOrd.length} día${diasOrd.length!==1?"s":""}`}
+                        v={x.minUd.toFixed(2)} sub={x.ficha>0?`ficha ${x.ficha} · ${ratio.toFixed(1)}×`:"sin ficha"} col={col}/>
+                      <div style={{display:"grid",gridTemplateColumns:`repeat(${Math.max(diasOrd.length,1)},1fr)`,gap:4,marginTop:8}}>
+                        {diasOrd.map(d=>{ const v=x.dias[d].min/x.dias[d].cant; const r2=x.ficha>0?v/x.ficha:1;
+                          const c2=r2<=1.1?C.green:r2<=1.5?C.amber:C.red;
+                          return <div key={d} style={{textAlign:"center",fontSize:11,padding:"6px 2px",borderRadius:8,fontWeight:700,
+                            background:c2+"22",color:c2}}>{nombreDia(d)} {v.toFixed(2)}</div>;})}
+                      </div>
+                      {ratio>1.8 && diasOrd.length>=3 && Object.values(x.dias).every(d=>d.min/d.cant > x.ficha*1.5) &&
+                        <Nota>Ningún día baja de {Math.min(...Object.values(x.dias).map(d=>d.min/d.cant)).toFixed(2)}. <b>La ficha está mal</b>: pon {x.minUd.toFixed(2)} y el resto empezará a tener sentido.</Nota>}
+                    </div>
+                  );
+                })}
+                {minFicha>0 && (
+                  <div style={{background:C.card2,borderRadius:11,padding:"11px 13px",marginTop:12,fontSize:13.5,lineHeight:1.7}}>
+                    <div style={{display:"flex",justifyContent:"space-between"}}><span style={{color:C.mutedD}}>Minutos reales</span><b>{num(Math.round(minReales))} min · {eur(minReales/60*TARIFA_MO)}</b></div>
+                    <div style={{display:"flex",justifyContent:"space-between"}}><span style={{color:C.mutedD}}>Al tiempo de la ficha</span><b>{num(Math.round(minFicha))} min · {eur(minFicha/60*TARIFA_MO)}</b></div>
+                  </div>
+                )}
+              </Card>
+            </>}
+
+            {/* EMPLEADOS */}
+            {personas.length>0 && <>
+              <div style={{fontSize:13,letterSpacing:0.6,textTransform:"uppercase",color:C.mutedD,fontWeight:800,margin:"6px 0 8px"}}>👥 Empleados</div>
+              <Card style={{marginBottom:14}}>
+                {personas.map((pe,i)=>{
+                  const col = pe.vsMedia<=-3?C.green : pe.vsMedia<=3?C.text : pe.vsMedia<=15?C.amber : C.red;
+                  return (
+                    <Fila key={i}
+                      nm={<>{i===0&&personas.length>1&&"🥇 "}{pe.nombre}
+                        {pe.vsSuyo!=null && Math.abs(pe.vsSuyo)>10 && <span style={{fontSize:11,fontWeight:800,padding:"3px 8px",borderRadius:20,marginLeft:6,
+                          background:pe.vsSuyo>0?C.redBg:C.greenBg,color:pe.vsSuyo>0?C.red:C.green}}>{pe.vsSuyo>0?"↑":"↓"}{Math.abs(Math.round(pe.vsSuyo))}% vs lo suyo</span>}</>}
+                      sb={`${(pe.min/60).toFixed(1)} h · ${pe.detalle.map(d=>`${d.nombre.split(" ")[0]} ${d.minUd.toFixed(2)}`).join(" · ")}`}
+                      v={`${pe.vsMedia>0?"+":""}${Math.round(pe.vsMedia)}%`} sub="vs media" col={col}/>
+                  );
+                })}
+                {personas.some(p=>p.vsSuyo!=null && p.vsSuyo>10) && (
+                  <Nota>{personas.filter(p=>p.vsSuyo>10).map(p=>p.nombre.split(" ")[0]).join(" y ")} va{personas.filter(p=>p.vsSuyo>10).length>1?"n":""} peor <b>que ellos mismos</b> otras semanas. No es su ritmo normal: preguntar qué ha pasado.</Nota>
+                )}
+              </Card>
+            </>}
+
+            {/* PARADAS */}
+            {paros.length>0 && <>
+              <div style={{fontSize:13,letterSpacing:0.6,textTransform:"uppercase",color:C.mutedD,fontWeight:800,margin:"6px 0 8px"}}>⏸ Paradas · {num(minParados)} min</div>
+              <Card style={{marginBottom:14}}>
+                {paros.map((x,i)=>(
+                  <div key={i} style={{marginBottom:i<paros.length-1?6:0}}>
+                    <Fila nm={x.motivo} sb={`${[...x.lineas].join(", ")} · ${x.veces} ve${x.veces!==1?"ces":"z"}`} v={num(x.min)} sub="min" col={i===0?C.red:C.text}/>
+                    <Barra pct={x.min/minParados*100} col={i===0?C.red:C.mutedD}/>
+                  </div>
+                ))}
+                {paros[0] && paros[0].min/minParados>0.4 && (
+                  <Nota><b>{paros[0].motivo}</b> es el {Math.round(paros[0].min/minParados*100)}% de las paradas: {Math.round(paros[0].min/paros[0].veces)} min cada vez. Es el tiempo a reducir.</Nota>
+                )}
+              </Card>
+            </>}
+
+            {/* PRODUCTOS */}
+            {productosSem.length>0 && <>
+              <div style={{fontSize:13,letterSpacing:0.6,textTransform:"uppercase",color:C.mutedD,fontWeight:800,margin:"6px 0 8px"}}>💶 Qué deja cada producto</div>
+              <Card>
+                {productosSem.map((x,i)=>(
+                  <Fila key={i} nm={x.nombre} sb={`${num(x.uds)} uds · vende ${(x.venta/x.uds).toFixed(2)} · cuesta ${(x.coste/x.uds).toFixed(2)}`}
+                    v={`${x.benef>=0?"+":"−"}${eur(Math.abs(x.benef))}`} sub={`${x.margenUd.toFixed(2)} €/ud`} col={x.benef>=0?C.green:C.red}/>
+                ))}
+                {productosSem[0]?.benef<0 && (
+                  <Nota><b>{productosSem[0].nombre} pierde {Math.abs(productosSem[0].margenUd).toFixed(2)} € por unidad</b>: con {num(productosSem[0].uds)} fabricadas son {eur(Math.abs(productosSem[0].benef))}. O sube el precio, o baja el coste, o se deja de hacer.</Nota>
+                )}
+              </Card>
+            </>}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function CierresScreen({ onBack, centros, usuarios, perfil, centroFijo="" }) {
   const [cierres] = useCol("cierres_turno", "fecha");
   const [centroId, setCentroId] = useState(centroFijo);
@@ -9529,6 +9859,7 @@ function Home({ perfil, onGo, onLogout, counts, ordenes=[], producciones=[], pro
   const tiles = [
     { id:"planificacion", grupo:"proc", icon:"📅", bg:"#EEF2FF", label:"Planificación", sub:"Mes · semana · cuadre · cierre", roles:["gerencia","sup_fabrica"] },
     { id:"cierres",   grupo:"proc", icon:"🔒", bg:"#F0FDF4", label:"Cierres de turno",    sub:"Consulta y reenvío de informes",     roles:["gerencia","sup_fabrica","sup_oficina"] },
+    { id:"semanal",   grupo:"proc", icon:"📊", bg:"#EFF6FF", label:"Informe semanal",     sub:"Materias, procesos, empleados, paradas", roles:["gerencia","sup_fabrica","sup_oficina"] },
     { id:"terminal",  grupo:"proc", icon:"🖥️", bg:"#ECFDF5", label:"Terminal de Planta",   sub:"Pantalla táctil del obrador",        roles:["gerencia","sup_fabrica","sup_oficina","operario"] },
     { id:"ordenes",   grupo:"proc", icon:"📋", bg:"#ECFDF5", label:"Órdenes de Producción", sub:"Planificar y registrar",     roles:["gerencia","sup_fabrica","sup_oficina"] },
     { id:"diario",    grupo:"proc", icon:"📖", bg:"#EFF6FF", label:"Diario de Fabricación", sub:"El parte oficial del día",          roles:["gerencia","sup_fabrica","sup_oficina"] },
@@ -9725,6 +10056,8 @@ export default function App() {
       {view==="home"      && <Home perfil={perfil} onGo={setView} onLogout={()=>signOut(auth)} counts={counts} ordenes={ordenesRoot} producciones={produccionesRoot} productos={productos}/>}
       {view==="moldes"    && <MoldesScreen onBack={back} productos={productos}/>}
       {view==="cierres"   && <CierresScreen onBack={back} centros={centros} usuarios={usuarios} perfil={perfil}/>}
+      {view==="semanal"   && <InformeSemanalScreen onBack={back} centros={centros} productos={productos}
+        mps={mps} procesos={procesos} usuarios={usuarios} motivos={motivos}/>}
       {view==="terminal"  && <TerminalPlanta onBack={back} perfil={perfil} productos={productos} lineas={lineas}
         turnos={turnos} centros={centros} mps={mps} motivos={motivos} moldes={moldes}
         usuarios={usuarios} procesos={procesos}/>}
