@@ -11,12 +11,13 @@ import {
   createUserWithEmailAndPassword, onAuthStateChanged,
 } from "firebase/auth";
 import {
-  getFirestore, collection, doc, setDoc, updateDoc, deleteDoc,
+  getFirestore, initializeFirestore, persistentLocalCache, persistentSingleTabManager,
+  collection, doc, setDoc, updateDoc, deleteDoc,
   onSnapshot, query, orderBy, getDocs,
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.13.0";
+const APP_VERSION = "v4.14.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -31,7 +32,16 @@ let auth;
 try {
   auth = initializeAuth(app, { persistence: [indexedDBLocalPersistence, browserLocalPersistence, inMemoryPersistence] });
 } catch(e) { auth = getAuth(app); }
-const db = getFirestore(app);
+// Con caché local la tablet sigue trabajando sin cobertura y sincroniza al volver
+let db;
+try {
+  db = initializeFirestore(app, {
+    localCache: persistentLocalCache({ tabManager: persistentSingleTabManager({}) }),
+  });
+} catch (e) {
+  // Si el navegador no lo admite, se sigue como siempre
+  db = getFirestore(app);
+}
 
 // ── TOKENS DE DISEÑO ───────────────────────────────────────────────────────────
 const C = {
@@ -356,6 +366,30 @@ const Pill = ({ children, color = C.muted, bg = "#fff" }) => (
 const IconBtn = ({ onClick, danger, children }) => (
   <button onClick={onClick} style={{background:"#fff",border:`1.5px solid ${danger?C.red:C.border}`,color:danger?C.red:C.muted,borderRadius:8,padding:"7px 10px",cursor:"pointer",fontSize:15}}>{children}</button>
 );
+// Barra de sin conexión: si no se ve, nadie sabe que está trabajando a ciegas
+function BarraSinRed() {
+  const [red, setRed] = useState(typeof navigator === "undefined" ? true : navigator.onLine);
+  const [desde, setDesde] = useState(null);
+  useEffect(() => {
+    const on  = () => { setRed(true); setDesde(null); };
+    const off = () => { setRed(false); setDesde(new Date()); };
+    window.addEventListener("online", on);
+    window.addEventListener("offline", off);
+    return () => { window.removeEventListener("online", on); window.removeEventListener("offline", off); };
+  }, []);
+  if (red) return null;
+  return (
+    <div style={{position:"sticky",top:0,zIndex:200,background:C.amber,color:"#fff",
+      padding:"12px 16px",textAlign:"center",fontFamily:F.h,fontWeight:800,fontSize:15,lineHeight:1.4}}>
+      📴 SIN CONEXIÓN — se sigue trabajando igual
+      <div style={{fontSize:12.5,fontWeight:600,opacity:0.9,marginTop:2}}>
+        Todo se guarda en la tablet y sube solo al volver la cobertura.
+        {desde && ` Sin red desde las ${desde.toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"})}.`}
+      </div>
+    </div>
+  );
+}
+
 const Empty = ({ icon, text }) => (
   <div style={{textAlign:"center",padding:"40px 20px",color:C.muted}}>
     <div style={{fontSize:46,marginBottom:10}}>{icon}</div>
@@ -9570,6 +9604,7 @@ export default function App() {
   return (
     <div style={{fontFamily:F.b}}>
       <style>{STYLES}</style>
+      <BarraSinRed/>
       {view==="home"      && <Home perfil={perfil} onGo={setView} onLogout={()=>signOut(auth)} counts={counts} ordenes={ordenesRoot} producciones={produccionesRoot} productos={productos}/>}
       {view==="moldes"    && <MoldesScreen onBack={back} productos={productos}/>}
       {view==="cierres"   && <CierresScreen onBack={back} centros={centros} usuarios={usuarios} perfil={perfil}/>}
