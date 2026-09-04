@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.15.1";
+const APP_VERSION = "v4.16.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -1660,7 +1660,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
         conParte[k].partes++; conParte[k].uds += toNum(p.cantidad);
       });
     return Object.values(conParte)
-      .filter(v => !cierres.some(c => c.fecha === v.fecha
+      .filter(v => !cierres.some(c => c.fecha === v.fecha && !c.reabierto
         && (c.turno_id === v.turno?.id || !c.turno_id)
         && (!centroId || !c.centro || c.centro === centroId)))
       .sort((a,b) => a.fecha.localeCompare(b.fecha));
@@ -1745,7 +1745,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
     const hace7 = new Date(Date.now()-7*864e5).toISOString().slice(0,10);
     const cierresRecientes = cierres.filter(c => (c.fecha||"") >= hace7 && (!centroId || c.centro === centroId));
     // Por dónde va el cierre de la jornada, para el botón
-    const turnoYaCerrado = cierres.some(c => c.fecha===hoy && c.turno_id===turnoId && (!centroId || c.centro===centroId));
+    const turnoYaCerrado = cierres.some(c => c.fecha===hoy && c.turno_id===turnoId && !c.reabierto && (!centroId || c.centro===centroId));
     const hayApoyoHoy = otsHoy.some(ot => (prodDe(ot.producto_id)?.procesos_asignados||[])
       .some(pa => procesos.find(z=>z.id===pa.proceso_id)?.apoyo));
     const apoyoOk = !hayApoyoHoy || (apoyosHoy.length>0 && apoyosHoy.every(a=>a.validado_por||a.cierre_id));
@@ -1910,7 +1910,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
               return ya < total - 0.5;
             }).length;
           })();
-          const turnoCerrado = cierres.some(c => c.fecha===hoy && c.turno_id===turnoId && (!centroId || c.centro===centroId));
+          const turnoCerrado = cierres.some(c => c.fecha===hoy && c.turno_id===turnoId && !c.reabierto && (!centroId || c.centro===centroId));
           const pasos = [
             { n:1, t:"Cerrar las líneas", sub: abiertas.length ? `faltan ${abiertas.length}` : "todas cerradas",
               ok: otsHoy.length>0 && abiertas.length===0, ir:()=>setVista("ordenes") },
@@ -3220,6 +3220,7 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
       asunto, resumen: textoCorto(), informe_html: html,
       email_estado: destinatarios.length ? "enviando" : "sin_destinatarios",
       desactualizado: false, desactualizado_motivo: "",
+      reabierto: false, reabierto_por: "", reabierto_motivo: "",
     });
 
     // Enviar el informe, igual que hace el CRM
@@ -7267,6 +7268,7 @@ function CierresScreen({ onBack, centros, usuarios, perfil, centroFijo="" }) {
   const [abierto, setAbierto] = useState(null);
   const [enviando, setEnviando] = useState(null);
   const [destinos, setDestinos] = useState(null);   // cierre al que elegir destinatarios
+  const [reabrir, setReabrir] = useState(null);     // cierre a reabrir
 
   const lista = cierres
     .filter(c => {
@@ -7314,6 +7316,7 @@ function CierresScreen({ onBack, centros, usuarios, perfil, centroFijo="" }) {
   };
 
   const ESTADOS = {
+    reabierto: ["↺ Reabierto", C.amber, C.amberBg],
     desactualizado: ["⚠️ Desactualizado", C.red, C.redBg],
     enviado: ["✔ Enviado", C.green, C.greenBg],
     parcial: ["⚠️ Enviado a medias", C.amber, C.amberBg],
@@ -7348,7 +7351,7 @@ function CierresScreen({ onBack, centros, usuarios, perfil, centroFijo="" }) {
         )}
 
         {lista.map(c=>{
-          const est = c.desactualizado ? ESTADOS.desactualizado : (ESTADOS[c.email_estado] || ESTADOS.sin_destinatarios);
+          const est = c.reabierto ? ESTADOS.reabierto : c.desactualizado ? ESTADOS.desactualizado : (ESTADOS[c.email_estado] || ESTADOS.sin_destinatarios);
           const pct = toNum(c.uds_plan)>0 ? toNum(c.uds_real)/toNum(c.uds_plan) : 0;
           const ineficiencia = toNum(c.desvio_coste);
           const abiertoAqui = abierto === c.id;
@@ -7442,6 +7445,22 @@ function CierresScreen({ onBack, centros, usuarios, perfil, centroFijo="" }) {
                     </Btn>
                     <Btn v="ghost" onClick={()=>verInforme(c)}>🖨️ Ver informe</Btn>
                   </div>
+                  {!soloLectura && !c.reabierto && (
+                    <button onClick={()=>setReabrir(c)}
+                      style={{width:"100%",marginTop:10,background:C.amberBg,border:`1.5px solid ${C.amber}`,color:C.amber,
+                        borderRadius:11,padding:"12px",fontFamily:F.h,fontWeight:800,fontSize:13.5,cursor:"pointer"}}>
+                      ↺ Reabrir el turno para corregirlo
+                    </button>
+                  )}
+                  {c.reabierto && (
+                    <div style={{background:C.amberBg,border:`2px solid ${C.amber}`,borderRadius:11,padding:"11px 13px",marginTop:10,
+                      fontSize:13,color:C.amber,fontWeight:700,lineHeight:1.6}}>
+                      ↺ Reabierto por {c.reabierto_por}{c.reabierto_motivo?` — ${c.reabierto_motivo}`:""}.
+                      <div style={{fontWeight:600,marginTop:3}}>
+                        Aparecerá como pendiente en la pantalla de fábrica. Corrige las órdenes que haga falta y vuelve a cerrarlo.
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </Card>
@@ -7449,6 +7468,33 @@ function CierresScreen({ onBack, centros, usuarios, perfil, centroFijo="" }) {
         })}
       </div>
 
+      {reabrir && (
+        <div onClick={()=>setReabrir(null)} style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.55)",zIndex:50,display:"flex",alignItems:"flex-end"}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:"#fff",width:"100%",borderRadius:"20px 20px 0 0",padding:18}}>
+            <div style={{width:40,height:4,background:C.border,borderRadius:2,margin:"0 auto 14px"}}/>
+            <div style={{fontFamily:F.h,fontWeight:800,fontSize:17,color:C.text,marginBottom:3}}>¿Reabrir el turno?</div>
+            <div style={{fontSize:12.5,color:C.mutedD,lineHeight:1.55,marginBottom:14}}>
+              {fechaES(reabrir.fecha)} · {reabrir.turno_nombre||""}. El informe ya se envió a {(reabrir.email_enviados_a||[]).length} personas.
+              Al volver a cerrarlo saldrá otro con los datos corregidos.
+            </div>
+            <div style={{fontFamily:F.h,fontWeight:800,fontSize:13,color:C.text,marginBottom:8}}>¿Por qué?</div>
+            <div style={{display:"grid",gap:8,marginBottom:14}}>
+              {["Una orden tiene datos mal","Falta el apoyo","Faltan paradas","Se ha cerrado antes de tiempo","Otra cosa"].map(m=>(
+                <button key={m} onClick={async ()=>{
+                    await save("cierres_turno", reabrir.id, {
+                      reabierto: true, reabierto_por: perfil?.nombre||"", reabierto_motivo: m,
+                      reabierto_at: new Date().toISOString(), desactualizado: true, desactualizado_motivo: m,
+                    });
+                    setReabrir(null);
+                    window.alert("Turno reabierto. En la pantalla de fábrica aparecerá como pendiente de cerrar.");
+                  }}
+                  style={{textAlign:"left",background:"#fff",border:`1.5px solid ${C.border}`,borderRadius:12,
+                    padding:"13px 14px",fontFamily:F.h,fontWeight:700,fontSize:14.5,color:C.text,cursor:"pointer"}}>{m}</button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
       {destinos && <HojaDestinatarios cierre={destinos} usuarios={usuarios}
         onCerrar={()=>setDestinos(null)} onEnviar={(correos)=>reenviar(destinos, correos)}/>}
     </div>
