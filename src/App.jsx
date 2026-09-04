@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.20.1";
+const APP_VERSION = "v4.22.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -7406,7 +7406,8 @@ function InformeSemanalScreen({ onBack, centros, productos, mps, procesos, usuar
       }
     });
   });
-  const procs = Object.values(procAcum).map(x => ({ ...x, minUd: x.cant>0 ? x.min/x.cant : 0 }));
+  Object.values(procAcum).forEach(x => { x.minUd = x.cant>0 ? x.min/x.cant : 0; });
+  const procs = Object.values(procAcum);
   const minReales = procs.reduce((a,x)=>a+x.min,0);
   const minFicha = procs.reduce((a,x)=>a+x.ficha*x.cant,0);
   const perdidaMO = Math.max(0,(minReales-minFicha)/60*TARIFA_MO);
@@ -7432,17 +7433,31 @@ function InformeSemanalScreen({ onBack, centros, productos, mps, procesos, usuar
       const cant=toNum(t.cantidad), min=minDeTarea(t);
       if (!cant||!min||!t.persona_id) return;
       const k=`${t.persona_id}|${t.proceso_id}`;
-      if (!histPers[k]) histPers[k]={cant:0,min:0};
-      histPers[k].cant+=cant; histPers[k].min+=min;
+      if (!histPers[k]) histPers[k]={cant:0,min:0,fechas:new Set()};
+      histPers[k].cant+=cant; histPers[k].min+=min; histPers[k].fechas.add(p.fecha);
+      histPers[k].dias = histPers[k].fechas.size;
     });
   });
   personas.forEach(pe => {
-    let peso=0, d=0;
+    let peso=0, d=0, minMedia=0, minSuyo=0, minFichaP=0, conHist=false, cantTot=0;
     pe.detalle.forEach(x=>{
       const h = histPers[`${pe.id}|${x.pid}`];
-      if (h && h.cant>0) { const suyo=h.min/h.cant; d += (x.minUd/suyo-1)*100*x.min; peso += x.min; }
+      const media = procAcum[x.pid]?.minUd || 0;
+      const ficha = procAcum[x.pid]?.ficha || 0;
+      x.suele = (h && h.cant>0) ? h.min/h.cant : null;
+      x.diasHist = h?.dias || 0;
+      cantTot += x.cant;
+      minMedia += media * x.cant;
+      minFichaP += ficha * x.cant;
+      if (x.suele!=null) { minSuyo += x.suele * x.cant; conHist = true; d += (x.minUd/x.suele-1)*100*x.min; peso += x.min; }
+      else minSuyo += x.minUd * x.cant;   // sin histórico, cuenta lo de hoy: no suma ni resta
     });
     pe.vsSuyo = peso>0 ? d/peso : null;
+    pe.cant = cantTot;
+    pe.hReal = pe.min/60;
+    pe.hMedia = minMedia/60;
+    pe.hSuyo = conHist ? minSuyo/60 : null;
+    pe.hFicha = minFichaP>0 ? minFichaP/60 : null;
   });
 
   // ── Paradas
@@ -7507,7 +7522,15 @@ function InformeSemanalScreen({ onBack, centros, productos, mps, procesos, usuar
       </div>
       {centros.length>1 && (
         <div style={{padding:"10px 14px 0",display:"flex",gap:8,flexWrap:"wrap"}}>
-          {centros.map(c=><Pill key={c.id} active={centroId===c.id} onClick={()=>setCentroId(c.id)}>{c.nombre}</Pill>)}
+          {centros.map(c=>(
+            <button key={c.id} onClick={()=>setCentroId(c.id)}
+              style={{minHeight:44,padding:"0 16px",borderRadius:22,cursor:"pointer",fontFamily:F.h,fontWeight:800,fontSize:14,
+                background: centroId===c.id ? C.navy : "#fff",
+                border:`2px solid ${centroId===c.id ? C.navy : C.border}`,
+                color: centroId===c.id ? "#fff" : C.text}}>
+              {c.nombre}
+            </button>
+          ))}
         </div>
       )}
 
@@ -7571,57 +7594,117 @@ function InformeSemanalScreen({ onBack, centros, productos, mps, procesos, usuar
               </Card>
             </>}
 
-            {/* PROCESOS */}
+            {/* EMPLEADOS */}
             {procs.length>0 && <>
-              <div style={{fontSize:13,letterSpacing:0.6,textTransform:"uppercase",color:C.mutedD,fontWeight:800,margin:"6px 0 8px"}}>⚙️ Procesos · real contra ficha</div>
-              <Card style={{marginBottom:14}}>
-                {procs.sort((a,b)=>(b.ficha>0?b.minUd/b.ficha:0)-(a.ficha>0?a.minUd/a.ficha:0)).map((x,i)=>{
-                  const ratio = x.ficha>0 ? x.minUd/x.ficha : null;
-                  const col = ratio==null?C.text : ratio<=1.1?C.green : ratio<=1.5?C.amber : C.red;
-                  const diasOrd = dias.filter(d=>x.dias[d]);
-                  return (
-                    <div key={i} style={{marginBottom:i<procs.length-1?14:0}}>
-                      <Fila nm={x.nombre} sb={`${num(x.cant)} uds · ${diasOrd.length} día${diasOrd.length!==1?"s":""}`}
-                        v={x.minUd.toFixed(2)} sub={x.ficha>0?`ficha ${x.ficha} · ${ratio.toFixed(1)}×`:"sin ficha"} col={col}/>
-                      <div style={{display:"grid",gridTemplateColumns:`repeat(${Math.max(diasOrd.length,1)},1fr)`,gap:4,marginTop:8}}>
-                        {diasOrd.map(d=>{ const v=x.dias[d].min/x.dias[d].cant; const r2=x.ficha>0?v/x.ficha:1;
-                          const c2=r2<=1.1?C.green:r2<=1.5?C.amber:C.red;
-                          return <div key={d} style={{textAlign:"center",fontSize:11,padding:"6px 2px",borderRadius:8,fontWeight:700,
-                            background:c2+"22",color:c2}}>{nombreDia(d)} {v.toFixed(2)}</div>;})}
-                      </div>
-                      {ratio>1.8 && diasOrd.length>=3 && Object.values(x.dias).every(d=>d.min/d.cant > x.ficha*1.5) &&
-                        <Nota>Ningún día baja de {Math.min(...Object.values(x.dias).map(d=>d.min/d.cant)).toFixed(2)}. <b>La ficha está mal</b>: pon {x.minUd.toFixed(2)} y el resto empezará a tener sentido.</Nota>}
+              <div style={{fontSize:13,letterSpacing:0.6,textTransform:"uppercase",color:C.mutedD,fontWeight:800,margin:"6px 0 8px"}}>La media de cada proceso esta semana</div>
+              {Object.entries(procAcum).map(([pid,x],i)=>{
+                const nPers = personas.filter(pe=>pe.detalle.some(d=>d.pid===pid)).length;
+                const ratio = x.ficha>0 ? x.minUd/x.ficha : null;
+                const colF = ratio==null?C.mutedD : ratio<=1.1?C.green : ratio<=1.5?C.amber : C.red;
+                const diasOrd = dias.filter(d=>x.dias[d]);
+                return (
+                  <div key={i} style={{background:"#fff",border:`2px solid ${C.border}`,borderRadius:14,padding:"12px 14px",marginBottom:8}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:12}}>
+                      <div style={{fontWeight:800,fontSize:14,lineHeight:1.3,minWidth:0}}>{x.nombre}
+                        <div style={{fontSize:12,color:C.mutedD,fontWeight:600,marginTop:2}}>{nPers} persona{nPers!==1?"s":""} · {num(x.cant)} uds · {num(Math.round(x.min))} min</div></div>
+                      <div style={{fontSize:26,fontWeight:900,flexShrink:0,textAlign:"right",lineHeight:1}}>{x.minUd.toFixed(2)}
+                        <div style={{fontSize:11,fontWeight:700,marginTop:3,color:colF}}>min/ud{x.ficha>0?` · ficha ${x.ficha} · ${ratio.toFixed(1)}×`:""}</div></div>
                     </div>
-                  );
-                })}
-                {minFicha>0 && (
-                  <div style={{background:C.card2,borderRadius:11,padding:"11px 13px",marginTop:12,fontSize:13.5,lineHeight:1.7}}>
-                    <div style={{display:"flex",justifyContent:"space-between"}}><span style={{color:C.mutedD}}>Minutos reales</span><b>{num(Math.round(minReales))} min · {eur(minReales/60*TARIFA_MO)}</b></div>
-                    <div style={{display:"flex",justifyContent:"space-between"}}><span style={{color:C.mutedD}}>Al tiempo de la ficha</span><b>{num(Math.round(minFicha))} min · {eur(minFicha/60*TARIFA_MO)}</b></div>
+                    {diasOrd.length>1 && (
+                      <div style={{display:"grid",gridTemplateColumns:`repeat(${diasOrd.length},1fr)`,gap:4,marginTop:8}}>
+                        {diasOrd.map(d=>{ const v=x.dias[d].min/x.dias[d].cant; const r2=x.ficha>0?v/x.ficha:1;
+                          const c2=x.ficha>0?(r2<=1.1?C.green:r2<=1.5?C.amber:C.red):C.mutedD;
+                          return <div key={d} style={{textAlign:"center",fontSize:11,padding:"5px 2px",borderRadius:8,fontWeight:700,background:c2+"22",color:c2}}>{nombreDia(d)} {v.toFixed(2)}</div>;})}
+                      </div>
+                    )}
+                    {ratio>1.8 && diasOrd.length>=3 && Object.values(x.dias).every(d=>d.min/d.cant > x.ficha*1.5) &&
+                      <Nota>Ningún día baja de {Math.min(...Object.values(x.dias).map(d=>d.min/d.cant)).toFixed(2)}. <b>La ficha está mal</b>: pon {x.minUd.toFixed(2)}.</Nota>}
                   </div>
-                )}
-              </Card>
+                );
+              })}
             </>}
 
-            {/* EMPLEADOS */}
             {personas.length>0 && <>
-              <div style={{fontSize:13,letterSpacing:0.6,textTransform:"uppercase",color:C.mutedD,fontWeight:800,margin:"6px 0 8px"}}>👥 Empleados</div>
-              <Card style={{marginBottom:14}}>
-                {personas.map((pe,i)=>{
-                  const col = pe.vsMedia<=-3?C.green : pe.vsMedia<=3?C.text : pe.vsMedia<=15?C.amber : C.red;
-                  return (
-                    <Fila key={i}
-                      nm={<>{i===0&&personas.length>1&&"🥇 "}{pe.nombre}
-                        {pe.vsSuyo!=null && Math.abs(pe.vsSuyo)>10 && <span style={{fontSize:11,fontWeight:800,padding:"3px 8px",borderRadius:20,marginLeft:6,
-                          background:pe.vsSuyo>0?C.redBg:C.greenBg,color:pe.vsSuyo>0?C.red:C.green}}>{pe.vsSuyo>0?"↑":"↓"}{Math.abs(Math.round(pe.vsSuyo))}% vs lo suyo</span>}</>}
-                      sb={`${(pe.min/60).toFixed(1)} h · ${pe.detalle.map(d=>`${d.nombre.split(" ")[0]} ${d.minUd.toFixed(2)}`).join(" · ")}`}
-                      v={`${pe.vsMedia>0?"+":""}${Math.round(pe.vsMedia)}%`} sub="vs media" col={col}/>
-                  );
-                })}
-                {personas.some(p=>p.vsSuyo!=null && p.vsSuyo>10) && (
-                  <Nota>{personas.filter(p=>p.vsSuyo>10).map(p=>p.nombre.split(" ")[0]).join(" y ")} va{personas.filter(p=>p.vsSuyo>10).length>1?"n":""} peor <b>que ellos mismos</b> otras semanas. No es su ritmo normal: preguntar qué ha pasado.</Nota>
-                )}
-              </Card>
+              <div style={{fontSize:13,letterSpacing:0.6,textTransform:"uppercase",color:C.mutedD,fontWeight:800,margin:"18px 0 10px"}}>👥 Cada persona, contra esa media</div>
+              {personas.map((pe,i)=>{
+                const mejor = i===0 && personas.length>1 && pe.vsMedia<0;
+                const peor = i===personas.length-1 && personas.length>1 && pe.vsMedia>15;
+                const colTot = pe.vsMedia<=-3?C.green : pe.vsMedia<=3?C.mutedD : pe.vsMedia<=15?C.amber : C.red;
+                const bgTot = pe.vsMedia<=-3?C.greenBg : pe.vsMedia<=3?C.card2 : pe.vsMedia<=15?C.amberBg : C.redBg;
+                const Casilla = ({ v, l, de, deCol, azul, apagada }) => (
+                  <div style={{background: azul?C.blueBg:C.card2, border: azul?`2px solid ${C.blue}`:"none",
+                    borderRadius:12,padding:"10px 4px",textAlign:"center",opacity: apagada?0.55:1}}>
+                    <div style={{fontSize:21,fontWeight:900,lineHeight:1,color: azul?C.blue:(l==="TRABAJADAS"?C.text:C.mutedD)}}>{v}</div>
+                    <div style={{fontSize:10,color:C.mutedD,fontWeight:700,marginTop:4,letterSpacing:0.3}}>{l}</div>
+                    {de && <div style={{fontSize:11,fontWeight:800,marginTop:2,color:deCol}}>{de}</div>}
+                  </div>
+                );
+                const dif = (h) => h==null ? null : pe.hReal - h;
+                const txtDif = (h) => { const d=dif(h); if (d==null) return "sin datos"; if (Math.abs(d)<0.15) return "igual";
+                  return `${d>0?"+":"−"}${Math.abs(d).toFixed(1)} h${d>0.15?` · ${eur(d*TARIFA_MO)}`:""}`; };
+                const colDif = (h) => { const d=dif(h); return d==null?C.mutedD : d<=0.15?C.green : d<=2?C.amber : C.red; };
+                return (
+                  <div key={i} style={{background:"#fff",border:`3px solid ${mejor?C.green:peor?C.red:C.border}`,borderRadius:20,padding:16,marginBottom:14}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,marginBottom:12}}>
+                      <div style={{minWidth:0}}>
+                        <div style={{fontSize:20,fontWeight:900,lineHeight:1.15}}>{mejor&&"🥇 "}{pe.nombre}</div>
+                        <div style={{fontSize:14,color:C.mutedD,fontWeight:600,marginTop:3}}>{pe.nProc} proceso{pe.nProc!==1?"s":""} · {num(pe.cant)} uds</div>
+                        {pe.vsSuyo!=null && Math.abs(pe.vsSuyo)>10 && (
+                          <span style={{display:"inline-block",fontSize:12,fontWeight:800,padding:"4px 10px",borderRadius:20,marginTop:6,
+                            background:pe.vsSuyo>0?C.redBg:C.greenBg,color:pe.vsSuyo>0?C.red:C.green}}>
+                            {pe.vsSuyo>0?"↑":"↓"} {Math.abs(Math.round(pe.vsSuyo))}% {pe.vsSuyo>0?"peor":"mejor"} que {pe.nombre.split(" ")[0]} mism{/a$/i.test(pe.nombre.split(" ")[0])?"a":"o"}</span>
+                        )}
+                      </div>
+                      <div style={{flexShrink:0,textAlign:"center",minWidth:88,borderRadius:14,padding:"10px 8px",background:bgTot}}>
+                        <div style={{fontSize:30,fontWeight:900,lineHeight:1,color:colTot}}>{pe.vsMedia>0?"+":""}{Math.round(pe.vsMedia)}%</div>
+                        <div style={{fontSize:10.5,fontWeight:800,letterSpacing:0.4,marginTop:3,color:colTot,opacity:0.85}}>VS MEDIA</div>
+                      </div>
+                    </div>
+
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6,marginBottom:4}}>
+                      <Casilla v={pe.hReal.toFixed(1)} l="TRABAJADAS"/>
+                      <Casilla v={pe.hMedia.toFixed(1)} l="A LA MEDIA" de={txtDif(pe.hMedia)} deCol={colDif(pe.hMedia)}/>
+                      <Casilla v={pe.hSuyo!=null?pe.hSuyo.toFixed(1):"—"} l="A LO SUYO" azul
+                        de={pe.hSuyo!=null?txtDif(pe.hSuyo):"sin histórico"} deCol={colDif(pe.hSuyo)} apagada={pe.hSuyo==null}/>
+                      <Casilla v={pe.hFicha!=null?pe.hFicha.toFixed(1):"—"} l="SEGÚN FICHA" de={pe.hFicha!=null?txtDif(pe.hFicha):"sin ficha"} deCol={colDif(pe.hFicha)}/>
+                    </div>
+
+                    {pe.detalle.sort((a,b)=>b.min-a.min).map((d,k)=>{
+                      const col = d.vs<=-3?C.green : d.vs<=3?C.mutedD : d.vs<=15?C.amber : C.red;
+                      const bg  = d.vs<=-3?C.greenBg : d.vs<=3?C.card2 : d.vs<=15?C.amberBg : C.redBg;
+                      const media = procAcum[d.pid]?.minUd || 0;
+                      const pct = media>0 ? Math.min(100, Math.max(0, 50 * d.minUd/media)) : 50;
+                      return (
+                        <div key={k} style={{borderTop:`1px solid ${C.card2}`,padding:"11px 0"}}>
+                          <div style={{fontSize:14.5,fontWeight:800,marginBottom:6}}>{d.nombre}</div>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10}}>
+                            <div style={{fontSize:13.5,color:C.mutedD,lineHeight:1.5}}>
+                              <b style={{color:C.text,fontSize:15}}>{d.minUd.toFixed(2)}</b> min/ud · {num(d.cant)} uds · {num(Math.round(d.min))} min
+                              {d.suele!=null && <div style={{color:C.blue}}>suele {d.suele.toFixed(2)} · {d.diasHist} día{d.diasHist!==1?"s":""}</div>}
+                            </div>
+                            <div style={{flexShrink:0,fontSize:18,fontWeight:900,padding:"6px 12px",borderRadius:10,minWidth:74,textAlign:"center",background:bg,color:col}}>
+                              {d.vs>0?"+":""}{Math.round(d.vs)}%</div>
+                          </div>
+                          <div style={{height:10,background:C.card2,borderRadius:5,overflow:"hidden",marginTop:8,position:"relative"}}>
+                            <div style={{width:pct+"%",height:"100%",background:col===C.mutedD?C.muted:col,borderRadius:5}}/>
+                            <div style={{position:"absolute",top:-3,bottom:-3,left:"50%",width:3,background:C.navy,borderRadius:2}}/>
+                          </div>
+                          <div style={{fontSize:11.5,color:C.mutedD,marginTop:4,display:"flex",justifyContent:"space-between"}}>
+                            <span>más rápido</span><span>media {media.toFixed(2)}</span><span>más lento</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {pe.hMedia>0 && pe.hReal > pe.hMedia*1.8 && (
+                      <Nota>{pe.hReal.toFixed(1)} h anotadas para lo que a la media son {pe.hMedia.toFixed(1)}. Tanta diferencia rara vez es ritmo: <b>comprobar que los minutos están bien anotados</b> antes de nada.</Nota>
+                    )}
+                    {pe.vsSuyo!=null && pe.vsSuyo>10 && (
+                      <Nota>Otras semanas {pe.nombre.split(" ")[0]} va a {pe.detalle.filter(d=>d.suele!=null).map(d=>d.suele.toFixed(2)).join(" y ")}. Esta semana no es su ritmo: <b>preguntar qué ha pasado</b>.</Nota>
+                    )}
+                  </div>
+                );
+              })}
+              <Nota><b>Trabajadas</b>: las horas anotadas en sus tareas. <b>A la media</b>: las que habría tardado al ritmo medio de esta semana. <b>A lo suyo</b>: al ritmo que lleva esa persona las últimas 8 semanas; cada uno contra sí mismo. <b>Según ficha</b>: al tiempo de la ficha; esa diferencia es de todos.</Nota>
             </>}
 
             {/* PARADAS */}
