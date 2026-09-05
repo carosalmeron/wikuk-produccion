@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.24.0";
+const APP_VERSION = "v4.25.1";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -1549,6 +1549,211 @@ const TIPOS_INC = [
 ];
 const GRAVEDAD = [["madeja","🟡","Alguna madeja"],["media","🟠","Media parte"],["todo","🔴","Todo el lote"]];
 
+// ═══════════════════════════════════════════════════════════════
+// MI JORNADA — el operario anota lo que ha hecho, al final del turno
+// Una pregunta por pantalla. Lo anotado va a "tareas_operario" y el jefe
+// lo encuentra ya puesto cuando abre la orden.
+// ═══════════════════════════════════════════════════════════════
+function MiJornada({ otsHoy, gente, productos, procesos, prods, tareasOp, hoy, claveTurno, turno, centroId, onSalir }) {
+  const [quien, setQuien] = useState(null);      // persona
+  const [ot, setOt] = useState(null);            // línea
+  const [proc, setProc] = useState(null);        // tarea
+  const [uds, setUds] = useState("");
+  const [min, setMin] = useState("");
+  const [paso, setPaso] = useState("quien");     // quien · linea · tarea · cuanto · repaso · listo
+  const [modal, setModal] = useState(null);
+  const [guardando, setGuardando] = useState(false);
+
+  const prodDe = (id) => productos.find(z=>z.id===id);
+  const mias = tareasOp.filter(t => t.fecha===hoy && t.turno_clave===claveTurno && t.persona_id===quien?.id);
+  const minTot = mias.reduce((a,t)=>a+toNum(t.minutos),0);
+  const nombreProc = (id) => procesos.find(z=>z.id===id)?.nombre || "?";
+
+  // Media de hoy en ese proceso, para decirle cómo va
+  const mediaHoy = (procId) => {
+    const l = tareasOp.filter(t => t.fecha===hoy && t.proceso_id===procId && toNum(t.cantidad)>0 && toNum(t.minutos)>0);
+    const c = l.reduce((a,t)=>a+toNum(t.cantidad),0), m = l.reduce((a,t)=>a+toNum(t.minutos),0);
+    return c>0 ? m/c : null;
+  };
+
+  const guardar = async () => {
+    if (!(toNum(uds)>0) || !(toNum(min)>0)) { window.alert("Pon las unidades y los minutos"); return; }
+    setGuardando(true);
+    try {
+      const id = `${hoy}__${claveTurno}__${String(ot.linea).replace(/[^a-zA-Z0-9_-]/g,"_")}__${quien.id}__${proc.proceso_id}`;
+      await save("tareas_operario", id, {
+        fecha: hoy, turno_clave: claveTurno, turno_id: turno?.id||"", centro: centroId,
+        linea: ot.linea, producto_id: ot.producto_id,
+        persona_id: quien.id, persona: quien.nombre,
+        proceso_id: proc.proceso_id, proceso: nombreProc(proc.proceso_id),
+        cantidad: toNum(uds), minutos: toNum(min),
+        creado_at: new Date().toISOString(),
+      });
+      setUds(""); setMin(""); setProc(null); setPaso("tarea");
+    } catch (e) { window.alert("No se ha podido guardar: " + (e?.message||e)); }
+    setGuardando(false);
+  };
+
+  const Preg = ({ t, s }) => (<>
+    <div style={{fontFamily:F.h,fontWeight:900,fontSize:24,color:C.text,marginBottom:4}}>{t}</div>
+    {s && <div style={{fontSize:15,color:C.mutedD,marginBottom:18,lineHeight:1.5}}>{s}</div>}
+  </>);
+  const Grande = ({ t, d, ok, onClick, fl="›" }) => (
+    <button onClick={onClick}
+      style={{width:"100%",minHeight:96,borderRadius:20,border:`3px solid ${ok?C.green:C.border}`,background:ok?C.greenBg:"#fff",
+        cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,padding:"0 20px",marginBottom:12,textAlign:"left"}}>
+      <span style={{minWidth:0}}><div style={{fontFamily:F.h,fontWeight:800,fontSize:19,color:C.text}}>{t}</div>
+        {d && <div style={{fontSize:14,color:C.mutedD,marginTop:3}}>{d}</div>}</span>
+      <span style={{fontSize:28,color:ok?C.green:C.muted,flexShrink:0}}>{ok?"✔":fl}</span>
+    </button>
+  );
+
+  const atras = () => {
+    if (paso==="cuanto") setPaso("tarea");
+    else if (paso==="tarea") setPaso("linea");
+    else if (paso==="linea") setPaso("quien");
+    else if (paso==="repaso") setPaso("linea");
+    else onSalir();
+  };
+
+  return (
+    <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
+      <CabF titulo={quien ? `Hola, ${quien.nombre.split(" ")[0]}` : "✍️ Mi jornada"}
+        sub={`${fechaESLarga(hoy)} · ${turno?.nombre||""}`} atras={atras} onSalir={paso==="quien"?onSalir:null}/>
+      <div style={{padding:22}}>
+
+        {paso==="quien" && <>
+          <Preg t="¿Quién eres?" s="Toca tu nombre."/>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:12}}>
+            {[...gente].filter(u=>!u.es_apoyo).sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(u=>{
+              const ya = tareasOp.some(t=>t.fecha===hoy && t.turno_clave===claveTurno && t.persona_id===u.id);
+              return (
+                <button key={u.id} onClick={()=>{ setQuien(u); setPaso("linea"); }}
+                  style={{minHeight:100,borderRadius:18,border:`3px solid ${ya?C.green:C.border}`,background:ya?C.greenBg:"#fff",
+                    cursor:"pointer",fontFamily:F.h,fontWeight:800,fontSize:17,color:C.text,padding:12,lineHeight:1.3}}>
+                  {ya && <div style={{fontSize:12,color:C.green,marginBottom:4}}>✔ ya ha anotado</div>}
+                  {u.nombre}
+                </button>
+              );
+            })}
+          </div>
+        </>}
+
+        {paso==="linea" && <>
+          <Preg t="¿En qué línea has estado?" s="Toca una. Si has estado en dos, luego añades la otra."/>
+          {otsHoy.map((o,i)=>{
+            const p = prodDe(o.producto_id);
+            const ya = mias.some(t=>t.linea===o.linea);
+            return <Grande key={i} t={`${o.linea} · ${p?.nombre||"?"}`} d={`${num(o.cantidad)} uds previstas`} ok={ya} fl="›"
+              onClick={()=>{ setOt(o); setPaso("tarea"); }}/>;
+          })}
+          {mias.length>0 && (
+            <div style={{marginTop:8}}>
+              <BotonF alto={80} borde={C.blue} color={C.blue} onClick={()=>setPaso("repaso")}>Ver mi jornada · {Math.round(minTot)} min</BotonF>
+            </div>
+          )}
+        </>}
+
+        {paso==="tarea" && ot && (() => {
+          const p = prodDe(ot.producto_id);
+          const tareas = (p?.procesos_asignados||[]).filter(pa => !procesos.find(z=>z.id===pa.proceso_id)?.apoyo);
+          return <>
+            <Preg t={`¿Qué has hecho en ${ot.linea}?`} s="Las tareas de este producto. Toca una."/>
+            {tareas.map((pa,i)=>{
+              const hecha = mias.find(t=>t.linea===ot.linea && t.proceso_id===pa.proceso_id);
+              const est = toNum(pa.min_real)||toNum(pa.min_obj);
+              return <Grande key={i} t={nombreProc(pa.proceso_id)}
+                d={hecha ? `✔ ya anotado · ${num(hecha.cantidad)} uds · ${num(hecha.minutos)} min` : (est?`${est} min/ud según ficha`:"")}
+                ok={!!hecha}
+                onClick={()=>{ setProc(pa); setUds(hecha?String(hecha.cantidad):""); setMin(hecha?String(hecha.minutos):""); setPaso("cuanto"); }}/>;
+            })}
+            {tareas.length===0 && <Empty icon="🛠️" text="Este producto no tiene tareas en la ficha. Díselo a tu responsable."/>}
+            <div style={{marginTop:8}}>
+              <BotonF alto={80} borde={C.border} onClick={()=>setPaso("repaso")}>He terminado en esta línea</BotonF>
+            </div>
+          </>;
+        })()}
+
+        {paso==="cuanto" && proc && (() => {
+          const media = mediaHoy(proc.proceso_id);
+          const mio = toNum(uds)>0 && toNum(min)>0 ? toNum(min)/toNum(uds) : null;
+          return <>
+            <Preg t={nombreProc(proc.proceso_id)} s="Cuántas has hecho y cuánto has tardado."/>
+            {[["Unidades",uds,setUds,"uds"],["Minutos",min,setMin,"min"]].map(([l,v,set,u])=>(
+              <div key={l} style={{display:"flex",alignItems:"center",gap:14,marginBottom:20}}>
+                <span style={{fontFamily:F.h,fontWeight:800,fontSize:18,width:110}}>{l}</span>
+                <button onClick={()=>setModal({tipo:"num",titulo:l,valor:v,onOk:x=>set(x)})}
+                  style={{flex:1,height:84,borderRadius:18,border:`3px solid ${v?C.blue:C.amber}`,background:"#fff",cursor:"pointer",
+                    fontFamily:F.h,fontWeight:900,fontSize:v?38:18,color:v?C.text:C.muted}}>{v||"toca para poner"}</button>
+                <span style={{fontSize:16,color:C.mutedD,width:44}}>{u}</span>
+              </div>
+            ))}
+            {mio!=null && (
+              <div style={{background:C.card2,borderRadius:12,padding:"12px 14px",fontSize:14.5,color:C.mutedD,lineHeight:1.6,marginBottom:18}}>
+                Son <b style={{color:C.text}}>{mio.toFixed(2)} min/ud</b>.
+                {media!=null && media>0 && (mio<=media*0.95 ? <> Los demás hoy van a {media.toFixed(2)}. <b style={{color:C.green}}>Bien.</b></>
+                  : mio>=media*1.3 ? <> Los demás hoy van a {media.toFixed(2)}. <b style={{color:C.amber}}>¿Están bien los minutos?</b></>
+                  : <> Como los demás hoy.</>)}
+              </div>
+            )}
+            <BotonF alto={96} bg={C.green} color="#fff" borde={C.green} disabled={guardando} onClick={guardar}>{guardando?"Guardando…":"✔ GUARDAR"}</BotonF>
+          </>;
+        })()}
+
+        {paso==="repaso" && (() => {
+          const pasa = minTot > MIN_JORNADA + 30;
+          const col = pasa ? C.amber : minTot >= MIN_JORNADA*0.9 ? C.green : C.amber;
+          return <>
+            <Preg t="Tu jornada de hoy" s="Comprueba que está todo. Si falta algo, añádelo."/>
+            <div style={{background:"#fff",border:`3px solid ${C.border}`,borderRadius:20,padding:16,marginBottom:16}}>
+              {mias.map((t,i)=>(
+                <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,padding:"10px 0",
+                  borderBottom:i<mias.length-1?`1px solid ${C.card2}`:"none",fontSize:16}}>
+                  <span style={{minWidth:0}}>{t.linea} · {t.proceso}</span>
+                  <span style={{flexShrink:0,display:"flex",alignItems:"center",gap:8}}>
+                    <b>{num(t.cantidad)} uds · {num(t.minutos)} min</b>
+                    <button onClick={async()=>{ if(window.confirm("¿Quitar esta tarea?")) await del("tareas_operario", t.id); }}
+                      style={{background:"none",border:"none",color:C.red,fontSize:20,cursor:"pointer",padding:"0 6px"}}>✕</button>
+                  </span>
+                </div>
+              ))}
+              {mias.length===0 && <div style={{color:C.muted,fontSize:15}}>Todavía no has anotado nada.</div>}
+              <div style={{display:"flex",alignItems:"baseline",gap:10,marginTop:12}}>
+                <span style={{fontFamily:F.h,fontWeight:900,fontSize:40,lineHeight:1,color:col}}>{Math.round(minTot)} min</span>
+                <span style={{fontSize:15,color:C.mutedD}}>de {MIN_JORNADA}{pasa && ` · ¿seguro? son ${(minTot/60).toFixed(1)} h`}</span>
+              </div>
+              <div style={{height:12,background:C.card2,borderRadius:6,overflow:"hidden",margin:"8px 0 4px"}}>
+                <div style={{width:Math.min(100,minTot/MIN_JORNADA*100)+"%",height:"100%",background:col,borderRadius:6}}/>
+              </div>
+              {pasa && <div style={{fontSize:13,color:C.amber,fontWeight:700}}>Has anotado más minutos que la jornada. Revisa alguno.</div>}
+              {!pasa && minTot>0 && minTot<MIN_JORNADA*0.9 && <div style={{fontSize:13,color:C.amber,fontWeight:700}}>Faltan {Math.round(MIN_JORNADA-minTot)} min por anotar. ¿Has hecho algo más?</div>}
+            </div>
+            <div style={{display:"grid",gap:12}}>
+              <BotonF alto={80} borde={C.border} onClick={()=>setPaso("linea")}>＋ Añadir otra línea o tarea</BotonF>
+              <BotonF alto={96} bg={C.green} color="#fff" borde={C.green} disabled={mias.length===0} onClick={()=>setPaso("listo")}>✔ TERMINAR MI JORNADA</BotonF>
+            </div>
+          </>;
+        })()}
+
+        {paso==="listo" && (
+          <div style={{textAlign:"center",padding:"40px 20px"}}>
+            <div style={{fontSize:80}}>👋</div>
+            <div style={{fontFamily:F.h,fontWeight:900,fontSize:28,margin:"10px 0 6px"}}>Hasta mañana, {quien?.nombre.split(" ")[0]}</div>
+            <div style={{fontSize:15,color:C.mutedD,lineHeight:1.6,marginBottom:24}}>
+              {Math.round(minTot)} min anotados en {mias.length} tarea{mias.length!==1?"s":""}.
+              Tu jefe de turno pondrá la materia y cerrará la línea.
+            </div>
+            <BotonF alto={96} bg={C.blue} color="#fff" borde={C.blue} onClick={()=>{ setQuien(null); setOt(null); setProc(null); setPaso("quien"); }}>SIGUIENTE PERSONA</BotonF>
+          </div>
+        )}
+      </div>
+
+      {modal?.tipo==="num" && <HojaNumero titulo={modal.titulo} valor={modal.valor}
+        onOk={v=>{ modal.onOk(v); setModal(null); }} onCerrar={()=>setModal(null)}/>}
+    </div>
+  );
+}
+
 function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mps, motivos, moldes=[], usuarios=[], procesos=[] }) {
   const hoyReal = new Date().toISOString().slice(0,10);
   const [vistaRaw, setVistaRaw] = useState("inicio");  // inicio·ordenes·ot·cerradas·incidencias·paradas
@@ -1575,6 +1780,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
   const [incid]     = useCol("incidencias");
   const [apoyos]    = useCol("apoyos");
   const [apoyosCerrados] = useCol("apoyos_cerrados");
+  const [tareasOp] = useCol("tareas_operario");
   const [cierres]   = useCol("cierres_turno", "fecha");
   const [borradores] = useCol("borradores");
   const [costesCfg] = useCol("config_costes");
@@ -1935,7 +2141,11 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
           )}
           <div style={{padding:"24px 22px",display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:20,
             }}>
-          {[["📋","1 · Órdenes de trabajo","Lo que se fabrica hoy",
+          {[["✍️","Mi jornada","Cada operario anota lo que ha hecho",
+             (()=>{ const n=new Set(tareasOp.filter(t=>t.fecha===hoy && t.turno_clave===claveTurno && (!centroId||!t.centro||t.centro===centroId)).map(t=>t.persona_id)).size;
+               return n ? `${n} persona${n!==1?"s":""} ya` : "nadie todavía"; })(),
+             C.blue, ()=>setVista("jornada")],
+            ["📋","1 · Órdenes de trabajo","Lo que se fabrica hoy",
              abiertas.length ? `${abiertas.length} sin cerrar` : "todo cerrado",
              abiertas.length?C.amber:C.green, ()=>setVista("ordenes")],
             ["⚠️","Incidencias","Problemas con la materia",
@@ -2425,6 +2635,14 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
       centroFijo={esOperario ? centroId : ""}/>;
   }
 
+  // ═══ MI JORNADA (operario) ═══
+  if (vista === "jornada" && pendiente) { setVista("inicio"); return null; }
+  if (vista === "jornada") {
+    return <MiJornada otsHoy={otsHoy.filter(o => !o.turno || o.turno === claveTurno)} gente={gente} productos={productos} procesos={procesos} prods={prods}
+      tareasOp={tareasOp.filter(t=>!centroId || !t.centro || t.centro===centroId)}
+      hoy={hoy} claveTurno={claveTurno} turno={turno} centroId={centroId} onSalir={()=>setVista("inicio")}/>;
+  }
+
   // ═══ TRABAJO DE APOYO ═══
   if (vista === "apoyo") {
     const hoyApoyos = apoyos.filter(a=>a.fecha===hoy && (!centroId || !a.centro || a.centro===centroId));
@@ -2608,6 +2826,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
   return <OrdenTrabajo ot={otSel} perfil={perfil} productos={productos} mps={mps} motivos={motivos}
     moldes={moldes} gente={gente} procesos={procesos} claveTurno={claveTurno} turno={turno} hoy={hoy}
     apoyosHoy={apoyos.filter(a=>a.fecha===hoy && (!centroId || !a.centro || a.centro===centroId))}
+    tareasOp={tareasOp.filter(t=>t.fecha===(otSel?.fecha||hoy) && t.turno_clave===(otSel?.turno||claveTurno) && t.linea===otSel?.linea)}
     onApoyo={diaVer ? null : ()=>setVista("apoyo")}
     onSalir={diaVer ? null : onBack}
     onVolver={()=>{ if (diaVer) { setDiaVer(""); setVista("inicio"); } else setVista("ordenes"); }}/>;
@@ -3642,7 +3861,7 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
 }
 
 // ── LA ORDEN DE TRABAJO: todo el turno en una pantalla ─────────────────────────
-function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, procesos, claveTurno, turno, hoy, apoyosHoy=[], onApoyo, onSalir, onVolver }) {
+function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, procesos, claveTurno, turno, hoy, apoyosHoy=[], tareasOp=[], onApoyo, onSalir, onVolver }) {
   const p = productos.find(x => x.id === ot?.producto_id);
   const parte = ot?.parte;
   const objetivo = toNum(ot?.cantidad);
@@ -3681,6 +3900,21 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
   const idBorrador = [fechaOT, claveOT, limpiaId(ot?.linea), limpiaId(ot?.producto_id)].join("__");
   const [borradores] = useCol("borradores");
   const borrador = borradores.find(b => b.id === idBorrador);
+
+  // Lo que anotaron los operarios entra en las tareas (sin duplicar lo que ya esté)
+  const [opCargado, setOpCargado] = useState(false);
+  useEffect(() => {
+    if (opCargado || parte || !tareasOp.length) return;
+    setOpCargado(true);
+    setTareas(ts => {
+      const nuevas = tareasOp
+        .filter(t => !ts.some(z => z.persona_id===t.persona_id && z.proceso_id===t.proceso_id && toNum(z.cantidad)>0))
+        .map(t => ({ id: uid(), proceso_id: t.proceso_id, cantidad: toNum(t.cantidad), persona_id: t.persona_id, minutos: toNum(t.minutos), de_operario: true }));
+      // Las vacías de la ficha se quitan si ya hay una de operario del mismo proceso
+      const limpias = ts.filter(z => toNum(z.cantidad)>0 || !nuevas.some(n => n.proceso_id===z.proceso_id));
+      return [...limpias, ...nuevas];
+    });
+  }, [tareasOp, parte, opCargado]);
 
   // Al abrir: si hay algo a medias y el parte no está cerrado, se recupera
   useEffect(() => {
@@ -3943,7 +4177,14 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
 
         {/* TAREAS */}
         <BloqueF titulo="🛠️ Tareas y cantidades"
-          sub="Lo que ha hecho cada uno y cuántas horas ha estado. El desalado se anota aparte, en 🤝 Apoyo.">
+          sub="Lo que ha hecho cada uno y cuántos minutos ha estado. El desalado se anota aparte, en 🤝 Apoyo.">
+          {tareasOp.length>0 && !parte && (
+            <div style={{background:C.blueBg,border:`2px solid ${C.blue}`,borderRadius:12,padding:"11px 14px",marginBottom:12,
+              fontSize:14,color:C.blue,fontWeight:700,lineHeight:1.5}}>
+              ✍️ {new Set(tareasOp.map(t=>t.persona_id)).size} operario{new Set(tareasOp.map(t=>t.persona_id)).size!==1?"s":""} ya
+              {new Set(tareasOp.map(t=>t.persona_id)).size!==1?" han":" ha"} anotado lo suyo. Revísalo y corrige lo que haga falta.
+            </div>
+          )}
           {tareas.map((t,idx)=>{
             // Si el proceso está repartido entre varios, cuenta la suma
             const mismos = tareas.filter(z=>z.proceso_id===t.proceso_id);
