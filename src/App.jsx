@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.27.0";
+const APP_VERSION = "v4.27.1";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -1874,17 +1874,19 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
         return lineas.some(l => l.nombre === p.linea_nombre && l.centro === centroId);
       })
       .forEach(p => {
-        // El turno, por su id si lo trae; si no, por la clave
+        // La clave del turno del parte: por id, o la que trae. Nunca se supone.
         const t = turnos.find(z => z.id === p.turno_id)
-          || turnos.find(z => claveDeTurno(turnos, z.id) === p.turno_clave)
-          || turnos[0];
-        const k = `${p.fecha}__${t?.id||""}`;
-        if (!conParte[k]) conParte[k] = { fecha:p.fecha, turno:t, partes:0, uds:0 };
+          || turnos.find(z => claveDeTurno(turnos, z.id) === p.turno_clave) || null;
+        const clave = t ? claveDeTurno(turnos, t.id) : (p.turno_clave || "?");
+        const k = `${p.fecha}__${clave}`;
+        if (!conParte[k]) conParte[k] = { fecha:p.fecha, turno:t, clave, partes:0, uds:0 };
         conParte[k].partes++; conParte[k].uds += toNum(p.cantidad);
       });
+    // Un cierre cuenta solo si es del mismo día Y del mismo turno
+    const claveDeCierre = (c) => c.turno_id ? claveDeTurno(turnos, c.turno_id) : (c.turno_clave || "?");
     return Object.values(conParte)
       .filter(v => !cierres.some(c => c.fecha === v.fecha && !c.reabierto
-        && (c.turno_id === v.turno?.id || !c.turno_id)
+        && claveDeCierre(c) === v.clave
         && (!centroId || !c.centro || c.centro === centroId)))
       .sort((a,b) => a.fecha.localeCompare(b.fecha));
   })();
@@ -3474,7 +3476,7 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
     const asunto = `Producción ${turno?.nombre||""} · ${fechaESLarga(hoy)} · ${centro?.nombre||""}`;
     const html = htmlCorreo();
     await save("cierres_turno", idCierre, {
-      fecha: hoy, turno_id: turno?.id||"", turno_nombre: turno?.nombre||"",
+      fecha: hoy, turno_id: turno?.id||"", turno_nombre: turno?.nombre||"", turno_clave: claveTurno||"",
       centro: centro?.id||"", centro_nombre: centro?.nombre||"",
       uds_plan: T.plan, uds_real: T.real,
       coste_objetivo: costeObj, coste_para_lo_hecho: costeHecho, coste_real: costeReal,
