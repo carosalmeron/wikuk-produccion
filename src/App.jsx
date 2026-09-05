@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.30.0";
+const APP_VERSION = "v4.30.1";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -3389,7 +3389,7 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
         <tr><th ${th}>Concepto</th><th ${th}>Objetivo</th><th ${th}>Real</th><th ${th}>Desvío</th></tr>
         <tr><td ${est}>Materia prima</td><td ${n}>${eur(T.objMat)}</td><td ${n}>${eur(T.realMat)}</td><td ${n}>${T.realMat-T.objMat>=0?"+":""}${eur(T.realMat-T.objMat)}</td></tr>
         <tr><td ${est}>Mano de obra
-            <div style="font-size:11px;color:#777;font-weight:400">${personasTurno} personas · ${num(Math.round(jornadasTurno*10)/10)} jornadas${T.debianHacer>0?` · al ritmo debían hacer ${num(Math.round(T.debianHacer))} uds · hicieron ${num(T.real)} (<b>${Math.round(T.real/T.debianHacer*100)}%</b>)`:""}${T.persPrev!==jornadasTurno?`<br/>Previstas ${T.persPrev} jornadas, hubo ${num(Math.round(jornadasTurno*10)/10)}.`:""}${T.moAnotada>0&&T.realMO-T.moAnotada>5?`<br/>${eur(T.realMO-T.moAnotada)} pagados sin tarea anotada`:""}</div></td>
+            <div style="font-size:11px;color:#777;font-weight:400">${personasTurno} personas · ${num(Math.round(jornadasTurno*10)/10)} jornadas${T.debianHacer>0?` · al ritmo debían hacer ${num(Math.round(T.debianHacer))} uds · hicieron ${num(T.real)} (<b>${Math.round(T.real/T.debianHacer*100)}%</b>)`:""}${T.persPrev!==jornadasTurno?`<br/>Previstas ${T.persPrev} jornadas, hubo ${num(Math.round(jornadasTurno*10)/10)}.`:""}<br/>${Object.keys(minPorPersona).map(pid=>{const u=usuarios.find(z=>z.id===pid); return esc((u?.nombre||"?").split(" ")[0])+(u?.jornada==="media"?" ½":"");}).join(" · ")}${T.moAnotada>0&&T.realMO-T.moAnotada>5?`<br/>${eur(T.realMO-T.moAnotada)} pagados sin tarea anotada`:""}</div></td>
           <td ${n}>${eur(paraLoHecho.mo)}</td><td ${n}>${eur(T.realMO)}</td>
           <td ${n}>${T.realMO-paraLoHecho.mo>=0?"+":""}${eur(T.realMO-paraLoHecho.mo)}</td></tr>
         ${paraLoHecho.ap>0?`<tr><td ${est}>Apoyo del escandallo</td><td ${n}>${eur(paraLoHecho.ap)}</td><td ${n}>${eur(T.realApoyo)}</td>
@@ -3774,6 +3774,13 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
             hicieron <b style={{color: T.real/T.debianHacer>=0.95?C.green : T.real/T.debianHacer>=0.8?C.amber:C.red}}>
               {num(T.real)} ({Math.round(T.real/T.debianHacer*100)}%)</b></>}
           {T.persPrev !== jornadasTurno && <div>Previstas {T.persPrev} jornadas, hubo {num(Math.round(jornadasTurno*10)/10)}.</div>}
+          <div style={{marginTop:3}}>
+            {Object.keys(minPorPersona).map(pid => {
+              const u = usuarios.find(z=>z.id===pid);
+              return `${(u?.nombre||"?").split(" ")[0]}${u?.jornada==="media" ? " ½" : ""}`;
+            }).join(" · ")}
+            <span style={{fontSize:11.5}}> · ½ = media jornada, según su ficha</span>
+          </div>
           {Object.keys(minPorPersona).filter(pid => minPorPersona[pid].total > minPermitidos(pid) + 15).map(pid => (
             <div key={pid} style={{color:C.red,fontWeight:700}}>
               ⚠️ {usuarios.find(u=>u.id===pid)?.nombre||"?"}: {Math.round(minPorPersona[pid].total)} min anotados con jornada de {minPermitidos(pid)}. Sobran minutos.
