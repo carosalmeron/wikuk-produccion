@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.28.0";
+const APP_VERSION = "v4.29.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -1874,10 +1874,10 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
         return lineas.some(l => l.nombre === p.linea_nombre && l.centro === centroId);
       })
       .forEach(p => {
-        // La clave del turno del parte: por id, o la que trae. Nunca se supone.
-        const t = turnos.find(z => z.id === p.turno_id)
-          || turnos.find(z => claveDeTurno(turnos, z.id) === p.turno_clave) || null;
-        const clave = t ? claveDeTurno(turnos, t.id) : (p.turno_clave || "?");
+        // La clave del turno viene de la orden y es la buena. El id era el de la tablet
+        // en ese momento, que puede estar en otro turno: solo se usa si no hay clave.
+        const clave = p.turno_clave || (p.turno_id ? claveDeTurno(turnos, p.turno_id) : "?");
+        const t = turnosOrdenados(turnos)[parseInt(String(clave).replace("T",""))-1] || null;
         const k = `${p.fecha}__${clave}`;
         if (!conParte[k]) conParte[k] = { fecha:p.fecha, turno:t, clave, partes:0, uds:0 };
         conParte[k].partes++; conParte[k].uds += toNum(p.cantidad);
@@ -2182,7 +2182,6 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
              otsHoy.length===0 ? "nada que cerrar"
                : pasoActual ? `antes: ${pasoActual.t}` : "listo para cerrar",
              pasoActual ? C.mutedD : C.green, ()=>setVista("cierre"), !!pasoActual],
-            ...(esOperario ? [] : [["🔍","Revisión de días","Qué ve la app de cada turno","últimos 14 días",C.mutedD,()=>setVista("revision")]]),
             ["🔒","Turnos cerrados","Informes y reenvío",
              (cierresRecientes||[]).length ? `${cierresRecientes.length} esta semana` : "ninguno aún",
              (cierresRecientes||[]).length?C.green:C.mutedD, ()=>setVista("cierresTurno")]
@@ -2655,52 +2654,6 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
       centroFijo={esOperario ? centroId : ""}/>;
   }
 
-  // ═══ REVISIÓN: qué ve la app de cada día ═══
-  if (vista === "revision") {
-    const desde = new Date(Date.now() - 14*864e5).toISOString().slice(0,10);
-    const diasRev = [];
-    for (let i=14;i>=1;i--) { const d=new Date(Date.now()-i*864e5); if (d.getDay()!==0) diasRev.push(d.toISOString().slice(0,10)); }
-    const claveDeCierre = (c) => c.turno_id ? claveDeTurno(turnos, c.turno_id) : (c.turno_clave || "?");
-    const filasRev = [];
-    diasRev.forEach(f => turnosOrdenados(turnos).forEach((t,ti) => {
-      const clave = `T${ti+1}`;
-      const plan = planesSem.filter(w=>!centroId||w.centro===centroId).flatMap(w=>(w.calendario||[]).filter(x=>x.fecha===f && x.turno===clave));
-      const partesDT = prods.filter(p => p.fecha===f && !p.reabierta && (p.turno_clave===clave || (!p.turno_clave && p.turno_id===t.id))
-        && (()=>{ if(!centroId) return true; const pr=productos.find(z=>z.id===p.producto_id); return pr?.centro ? pr.centro===centroId : lineas.some(l=>l.nombre===p.linea_nombre && l.centro===centroId); })());
-      const cierre = cierres.find(c => c.fecha===f && claveDeCierre(c)===clave && (!centroId||!c.centro||c.centro===centroId));
-      if (!plan.length && !partesDT.length && !cierre) return;
-      const abiertas = plan.filter(x => !partesDT.some(p=>p.linea_nombre===x.linea && p.producto_id===x.producto_id));
-      filasRev.push({ f, t, clave, plan:plan.length, partes:partesDT.length, abiertas:abiertas.length, cierre,
-        estado: abiertas.length ? "líneas sin cerrar" : cierre && !cierre.reabierto ? "cerrado" : partesDT.length ? "SIN CERRAR EL TURNO" : "sin partes" });
-    }));
-    return (
-      <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
-        <CabF titulo="🔍 Revisión de días" sub="Qué ve la app de cada turno, últimos 14 días" atras={()=>setVista("inicio")} onSalir={onBack}/>
-        <div style={{padding:22}}>
-          {filasRev.length===0 && <Empty icon="🔍" text="Nada en 14 días"/>}
-          {filasRev.map((r,i)=>{
-            const mal = r.estado!=="cerrado";
-            return (
-              <div key={i} style={{background:"#fff",border:`2px solid ${mal?C.red:C.border}`,borderRadius:14,padding:"12px 14px",marginBottom:10}}>
-                <div style={{display:"flex",justifyContent:"space-between",gap:10,fontWeight:800,fontSize:15}}>
-                  <span>{fechaES(r.f)} · {r.t.nombre}</span>
-                  <span style={{color:mal?C.red:C.green,flexShrink:0}}>{r.estado}</span>
-                </div>
-                <div style={{fontSize:13,color:C.mutedD,marginTop:4,lineHeight:1.6}}>
-                  plan {r.plan} línea{r.plan!==1?"s":""} · partes {r.partes} · sin cerrar {r.abiertas} ·
-                  cierre {r.cierre ? (r.cierre.reabierto ? "reabierto" : "sí") : "no"}
-                </div>
-              </div>
-            );
-          })}
-          <div style={{fontSize:13,color:C.mutedD,lineHeight:1.6,marginTop:8}}>
-            Un turno debería estar <b>cerrado</b>. Si pone <b>líneas sin cerrar</b> o <b>sin cerrar el turno</b>, tiene que salir en la cola de la entrada. Si no sale, dímelo con la fecha.
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   // ═══ MI JORNADA (operario) ═══
   if (vista === "jornada" && pendiente) { setVista("inicio"); return null; }
   if (vista === "jornada") {
@@ -2890,7 +2843,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
 
   // ═══ LA ORDEN ═══
   return <OrdenTrabajo ot={otSel} perfil={perfil} productos={productos} mps={mps} motivos={motivos}
-    moldes={moldes} gente={gente} procesos={procesos} claveTurno={claveTurno} turno={turno} hoy={hoy}
+    moldes={moldes} gente={gente} procesos={procesos} claveTurno={claveTurno} turno={turno} turnos={turnos} hoy={hoy}
     apoyosHoy={apoyos.filter(a=>a.fecha===hoy && (!centroId || !a.centro || a.centro===centroId))}
     tareasOp={tareasOp.filter(t=>t.fecha===(otSel?.fecha||hoy) && t.turno_clave===(otSel?.turno||claveTurno) && t.linea===otSel?.linea)}
     onApoyo={diaVer ? null : ()=>setVista("apoyo")}
@@ -3948,7 +3901,7 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
 }
 
 // ── LA ORDEN DE TRABAJO: todo el turno en una pantalla ─────────────────────────
-function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, procesos, claveTurno, turno, hoy, apoyosHoy=[], tareasOp=[], onApoyo, onSalir, onVolver }) {
+function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, procesos, claveTurno, turno, turnos=[], hoy, apoyosHoy=[], tareasOp=[], onApoyo, onSalir, onVolver }) {
   const p = productos.find(x => x.id === ot?.producto_id);
   const parte = ot?.parte;
   const objetivo = toNum(ot?.cantidad);
@@ -4059,7 +4012,9 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
     const id = parte?.id || uid();
     await save("producciones", id, {
       orden_id: ot.orden_id || parte?.orden_id || "",
-      producto_id: ot.producto_id, fecha: fechaOT, turno_id: parte?.turno_id || turno?.id || "", turno_clave: claveOT,
+      producto_id: ot.producto_id, fecha: fechaOT,
+      turno_id: turnosOrdenados(turnos||[])[parseInt(String(claveOT).replace("T",""))-1]?.id || parte?.turno_id || turno?.id || "",
+      turno_clave: claveOT,
       linea_nombre: ot.linea, cantidad: hecho, objetivo_ot: objetivo,
       n_personas: [...new Set(tareas.map(t=>t.persona_id).filter(Boolean))].length || 3,
       // Horas de verdad: si alguien entra 3 h, cuentan 3, no 8
