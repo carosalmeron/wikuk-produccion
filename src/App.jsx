@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.29.0";
+const APP_VERSION = "v4.30.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -3052,7 +3052,9 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
   const minPermitidos = (pid) => jornadaDe(pid) * MIN_JORNADA;
   const jornadasEnLinea = (linea) => Object.keys(minPorPersona).reduce((a,pid) => {
     const x = minPorPersona[pid];
-    const parte = x.total>0 ? (x.porLinea[linea]||0)/x.total : 0;
+    // Sin minutos no se puede repartir: se le carga entera a cada línea donde aparece
+    const lineasDe = Object.keys(x.porLinea);
+    const parte = x.total>0 ? (x.porLinea[linea]||0)/x.total : (lineasDe.includes(linea) ? 1/lineasDe.length : 0);
     return a + jornadaDe(pid) * parte;
   }, 0);
   const personasTurno = Object.keys(minPorPersona).length;
@@ -4770,6 +4772,14 @@ function HojaCerrar({ ot, p, hecho, objetivo, tareas, consumos, paros, nota, gen
   const pct = objetivo>0 ? hecho/objetivo : 0;
   const rends = consumos.map(c=>({ c, r: rendDe(c) })).filter(x=>x.r!=null);
   const sinPersona = tareas.filter(t=>toNum(t.cantidad)>0 && !t.persona_id).length;
+  // No se cierra sin saber quién ha trabajado y cuánto: sin eso el coste sale a cero
+  const conDatos = tareas.filter(t=>toNum(t.cantidad)>0);
+  const sinMinutos = conDatos.filter(t=>!minDeTarea(t)).length;
+  const faltan = [];
+  if (hecho>0 && conDatos.length===0) faltan.push("ninguna tarea con unidades");
+  if (sinPersona>0) faltan.push(`${sinPersona} tarea${sinPersona!==1?"s":""} sin persona`);
+  if (sinMinutos>0) faltan.push(`${sinMinutos} tarea${sinMinutos!==1?"s":""} sin minutos`);
+  const bloqueado = hecho>0 && faltan.length>0;
 
   return (
     <CapaF titulo={`¿Cerramos la ${ot.linea}?`} sub={`${p.nombre} · ${num(hecho)} de ${num(objetivo)} uds`} onCerrar={onCerrar}>
@@ -4858,9 +4868,20 @@ function HojaCerrar({ ot, p, hecho, objetivo, tareas, consumos, paros, nota, gen
         ))}
       </div>
 
-      <BotonF alto={110} bg={C.green} color="#fff" borde={C.green} disabled={!quien || guardando}
+      {bloqueado && (
+        <div style={{background:C.redBg,border:`3px solid ${C.red}`,borderRadius:14,padding:"14px 16px",marginBottom:12,
+          fontSize:15,color:C.red,fontWeight:700,lineHeight:1.6}}>
+          ⛔ No se puede cerrar: {faltan.join(" · ")}.
+          <div style={{fontSize:13.5,fontWeight:600,color:C.mutedD,marginTop:4}}>
+            Sin las personas y sus minutos, el coste de la línea sale a cero y el informe miente.
+            Vuelve arriba y completa las tareas.
+          </div>
+        </div>
+      )}
+      <BotonF alto={110} bg={bloqueado?C.card2:C.green} color={bloqueado?C.muted:"#fff"} borde={bloqueado?C.border:C.green}
+        disabled={!quien || guardando || bloqueado}
         onClick={()=>onConfirmar(quien)}>{guardando ? "Guardando…" : "✔ SÍ, CERRAR LA LÍNEA"}</BotonF>
-      {!quien && <div style={{fontSize:14,color:C.mutedD,textAlign:"center",marginTop:10}}>Toca tu nombre para poder cerrar.</div>}
+      {!quien && !bloqueado && <div style={{fontSize:14,color:C.mutedD,textAlign:"center",marginTop:10}}>Toca tu nombre para poder cerrar.</div>}
     </CapaF>
   );
 }
