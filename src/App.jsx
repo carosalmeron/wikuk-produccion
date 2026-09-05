@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.25.1";
+const APP_VERSION = "v4.27.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -591,6 +591,7 @@ function UsuarioForm({ onBack, ep, turnos, centros, onDone }) {
   const [usuarioLogin, setUsuarioLogin] = useState(ep?.usuario||"");
   const [recibeInf, setRecibeInf] = useState(!!ep?.recibe_informe);
   const [esApoyo, setEsApoyo] = useState(!!ep?.es_apoyo);
+  const [jornada, setJornada] = useState(ep?.jornada || "completa");
   const [clave, setClave] = useState("");   // solo para crear la cuenta; no se persiste
   const [horasDia, setHorasDia]   = useState(ep?.horas_dia?.toString()||"8");
   const [activo, setActivo] = useState(ep?.activo!==false);
@@ -616,6 +617,7 @@ function UsuarioForm({ onBack, ep, turnos, centros, onDone }) {
       horas_dia: parseFloat(horasDia)||8, activo,
       recibe_informe: recibeInf,
       es_apoyo: rol==="operario" ? esApoyo : false,
+      jornada: rol==="operario" ? jornada : "completa",
       usuario: rol==="operario" ? usuarioLogin.trim().toLowerCase() : "",
     };
     try {
@@ -688,6 +690,20 @@ function UsuarioForm({ onBack, ep, turnos, centros, onDone }) {
                   ⚠️ Cambiar aquí el usuario no cambia la cuenta con la que ya entra.
                 </div>
               )}
+            </div>
+
+            <div style={{marginBottom:14}}>
+              <div style={{fontFamily:F.h,fontWeight:700,fontSize:12,color:C.mutedD,marginBottom:6,letterSpacing:0.3}}>JORNADA</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                {[["completa","Completa","8 h · 450 min productivos"],["media","Media","4 h · 225 min productivos"]].map(([k,t,d])=>(
+                  <button key={k} onClick={()=>setJornada(k)}
+                    style={{minHeight:64,borderRadius:12,border:`2px solid ${jornada===k?C.navy:C.border}`,
+                      background:jornada===k?C.navy:"#fff",color:jornada===k?"#fff":C.text,cursor:"pointer",
+                      fontFamily:F.h,fontWeight:800,fontSize:14,padding:"8px 10px",textAlign:"left"}}>
+                    {t}<div style={{fontSize:11,fontWeight:600,opacity:0.75,marginTop:2}}>{d}</div>
+                  </button>
+                ))}
+              </div>
             </div>
 
             <button onClick={()=>setEsApoyo(v=>!v)}
@@ -1701,8 +1717,9 @@ function MiJornada({ otsHoy, gente, productos, procesos, prods, tareasOp, hoy, c
         })()}
 
         {paso==="repaso" && (() => {
-          const pasa = minTot > MIN_JORNADA + 30;
-          const col = pasa ? C.amber : minTot >= MIN_JORNADA*0.9 ? C.green : C.amber;
+          const tope = quien?.jornada === "media" ? MIN_JORNADA/2 : MIN_JORNADA;
+          const pasa = minTot > tope + 30;
+          const col = pasa ? C.amber : minTot >= tope*0.9 ? C.green : C.amber;
           return <>
             <Preg t="Tu jornada de hoy" s="Comprueba que está todo. Si falta algo, añádelo."/>
             <div style={{background:"#fff",border:`3px solid ${C.border}`,borderRadius:20,padding:16,marginBottom:16}}>
@@ -1720,13 +1737,13 @@ function MiJornada({ otsHoy, gente, productos, procesos, prods, tareasOp, hoy, c
               {mias.length===0 && <div style={{color:C.muted,fontSize:15}}>Todavía no has anotado nada.</div>}
               <div style={{display:"flex",alignItems:"baseline",gap:10,marginTop:12}}>
                 <span style={{fontFamily:F.h,fontWeight:900,fontSize:40,lineHeight:1,color:col}}>{Math.round(minTot)} min</span>
-                <span style={{fontSize:15,color:C.mutedD}}>de {MIN_JORNADA}{pasa && ` · ¿seguro? son ${(minTot/60).toFixed(1)} h`}</span>
+                <span style={{fontSize:15,color:C.mutedD}}>de {tope}{quien?.jornada==="media" && " (media jornada)"}{pasa && ` · ¿seguro? son ${(minTot/60).toFixed(1)} h`}</span>
               </div>
               <div style={{height:12,background:C.card2,borderRadius:6,overflow:"hidden",margin:"8px 0 4px"}}>
-                <div style={{width:Math.min(100,minTot/MIN_JORNADA*100)+"%",height:"100%",background:col,borderRadius:6}}/>
+                <div style={{width:Math.min(100,minTot/tope*100)+"%",height:"100%",background:col,borderRadius:6}}/>
               </div>
-              {pasa && <div style={{fontSize:13,color:C.amber,fontWeight:700}}>Has anotado más minutos que la jornada. Revisa alguno.</div>}
-              {!pasa && minTot>0 && minTot<MIN_JORNADA*0.9 && <div style={{fontSize:13,color:C.amber,fontWeight:700}}>Faltan {Math.round(MIN_JORNADA-minTot)} min por anotar. ¿Has hecho algo más?</div>}
+              {pasa && <div style={{fontSize:13,color:C.amber,fontWeight:700}}>Has anotado más minutos que tu jornada. Revisa alguno.</div>}
+              {!pasa && minTot>0 && minTot<tope*0.9 && <div style={{fontSize:13,color:C.amber,fontWeight:700}}>Faltan {Math.round(tope-minTot)} min por anotar. ¿Has hecho algo más?</div>}
             </div>
             <div style={{display:"grid",gap:12}}>
               <BotonF alto={80} borde={C.border} onClick={()=>setPaso("linea")}>＋ Añadir otra línea o tarea</BotonF>
@@ -3014,6 +3031,31 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
     return a + (min/60) * TARIFA_MO;
   }, 0);
 
+  // ── Cada persona cuenta una vez en el turno, aunque esté en dos líneas.
+  //     Su jornada (entera o media) se reparte entre las líneas según los minutos.
+  const minPorPersona = {};        // persona → { total, porLinea: {linea → min} }
+  ots.forEach(ot => {
+    const parte = partes.find(p => p.linea_nombre===ot.linea && p.producto_id===ot.producto_id
+      && (!ot.turno || !p.turno_clave || p.turno_clave === ot.turno));
+    (parte?.procesos_realizados||[]).forEach(t => {
+      if (!t.persona_id) return;
+      const m = minDeTarea(t);
+      if (!minPorPersona[t.persona_id]) minPorPersona[t.persona_id] = { total:0, porLinea:{} };
+      minPorPersona[t.persona_id].total += m;
+      minPorPersona[t.persona_id].porLinea[ot.linea] = (minPorPersona[t.persona_id].porLinea[ot.linea]||0) + m;
+    });
+  });
+  // La jornada sale de la ficha (completa o media), no de los minutos anotados
+  const jornadaDe = (pid) => (usuarios.find(u=>u.id===pid)?.jornada === "media") ? 0.5 : 1;
+  const minPermitidos = (pid) => jornadaDe(pid) * MIN_JORNADA;
+  const jornadasEnLinea = (linea) => Object.keys(minPorPersona).reduce((a,pid) => {
+    const x = minPorPersona[pid];
+    const parte = x.total>0 ? (x.porLinea[linea]||0)/x.total : 0;
+    return a + jornadaDe(pid) * parte;
+  }, 0);
+  const personasTurno = Object.keys(minPorPersona).length;
+  const jornadasTurno = Object.keys(minPorPersona).reduce((a,pid)=>a+jornadaDe(pid), 0);
+
   // ── Producción, línea a línea
   const filas = ots.map(ot => {
     const parte = partes.find(p => p.linea_nombre===ot.linea && p.producto_id===ot.producto_id
@@ -3028,17 +3070,8 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
     const matReal = (parte?.consumos||[]).reduce((a,c)=>a+toNum(c.metros_consumidos)*precioMP(c.materia_id), 0);
     // Mano de obra real: lo que se paga a cada persona que estuvo. Con más de media
     // jornada en tareas cuenta entera; con menos, media. No se paga por minutos.
-    const jornadas = (() => {
-      const porPersona = {};
-      (parte?.procesos_realizados||[]).forEach(t => {
-        if (!t.persona_id) return;
-        porPersona[t.persona_id] = (porPersona[t.persona_id]||0) + minDeTarea(t);
-      });
-      const ids = Object.keys(porPersona);
-      if (!ids.length) return null;
-      return ids.reduce((a,id) => a + (porPersona[id] > MIN_JORNADA/2 ? 1 : 0.5), 0);
-    })();
-    const jornadasReales = jornadas ?? (parseInt(parte?.n_personas)||pers);
+    const hayGente = (parte?.procesos_realizados||[]).some(t=>t.persona_id);
+    const jornadasReales = hayGente ? jornadasEnLinea(ot.linea) : (parseInt(parte?.n_personas)||pers);
     const minAnotados = toNum(parte?.minutos_totales) || toNum(parte?.horas_totales)*60;
     const moReal  = jornadasReales * 8 * TARIFA_MO;
     const moAnotada = (minAnotados/60) * TARIFA_MO;   // lo que está en tareas; la diferencia es tiempo muerto
@@ -3352,7 +3385,7 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
         <tr><th ${th}>Concepto</th><th ${th}>Objetivo</th><th ${th}>Real</th><th ${th}>Desvío</th></tr>
         <tr><td ${est}>Materia prima</td><td ${n}>${eur(T.objMat)}</td><td ${n}>${eur(T.realMat)}</td><td ${n}>${T.realMat-T.objMat>=0?"+":""}${eur(T.realMat-T.objMat)}</td></tr>
         <tr><td ${est}>Mano de obra
-            <div style="font-size:11px;color:#777;font-weight:400">${num(T.jornadas)} personas${T.debianHacer>0?` · al ritmo debían hacer ${num(Math.round(T.debianHacer))} uds · hicieron ${num(T.real)} (<b>${Math.round(T.real/T.debianHacer*100)}%</b>)`:""}${T.persPrev!==T.jornadas?`<br/>Previstas ${T.persPrev}, estuvieron ${num(T.jornadas)}.`:""}${T.moAnotada>0&&T.realMO-T.moAnotada>5?`<br/>${eur(T.realMO-T.moAnotada)} pagados sin tarea anotada`:""}</div></td>
+            <div style="font-size:11px;color:#777;font-weight:400">${personasTurno} personas · ${num(Math.round(jornadasTurno*10)/10)} jornadas${T.debianHacer>0?` · al ritmo debían hacer ${num(Math.round(T.debianHacer))} uds · hicieron ${num(T.real)} (<b>${Math.round(T.real/T.debianHacer*100)}%</b>)`:""}${T.persPrev!==jornadasTurno?`<br/>Previstas ${T.persPrev} jornadas, hubo ${num(Math.round(jornadasTurno*10)/10)}.`:""}${T.moAnotada>0&&T.realMO-T.moAnotada>5?`<br/>${eur(T.realMO-T.moAnotada)} pagados sin tarea anotada`:""}</div></td>
           <td ${n}>${eur(paraLoHecho.mo)}</td><td ${n}>${eur(T.realMO)}</td>
           <td ${n}>${T.realMO-paraLoHecho.mo>=0?"+":""}${eur(T.realMO-paraLoHecho.mo)}</td></tr>
         ${paraLoHecho.ap>0?`<tr><td ${est}>Apoyo del escandallo</td><td ${n}>${eur(paraLoHecho.ap)}</td><td ${n}>${eur(T.realApoyo)}</td>
@@ -3445,7 +3478,7 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
       centro: centro?.id||"", centro_nombre: centro?.nombre||"",
       uds_plan: T.plan, uds_real: T.real,
       coste_objetivo: costeObj, coste_para_lo_hecho: costeHecho, coste_real: costeReal,
-      personas_previstas: T.persPrev, jornadas_reales: T.jornadas, mo_real: T.realMO, mo_anotada: T.moAnotada,
+      personas_previstas: T.persPrev, personas_reales: personasTurno, jornadas_reales: jornadasTurno, mo_real: T.realMO, mo_anotada: T.moAnotada,
       uds_debian_hacer: T.debianHacer, pct_ritmo: T.debianHacer>0 ? T.real/T.debianHacer : null,
       beneficio_objetivo: benefObj, beneficio_real: benefReal, desvio,
       desvio_volumen: desvioVolumen, desvio_coste: desvioCoste,
@@ -3732,11 +3765,16 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
         {fila("Mano de obra", eur(paraLoHecho.mo)+" →", eur(T.realMO),
           (T.realMO-paraLoHecho.mo>=0?"+":"")+eur(T.realMO-paraLoHecho.mo))}
         <div style={{fontSize:12.5,color:C.mutedD,lineHeight:1.6,padding:"2px 0 8px"}}>
-          <b style={{color:C.text}}>{num(T.jornadas)} personas</b>
+          <b style={{color:C.text}}>{personasTurno} persona{personasTurno!==1?"s":""} · {num(Math.round(jornadasTurno*10)/10)} jornada{jornadasTurno!==1?"s":""}</b>
           {T.debianHacer>0 && <> · al ritmo debían hacer <b style={{color:C.text}}>{num(Math.round(T.debianHacer))} uds</b> ·
             hicieron <b style={{color: T.real/T.debianHacer>=0.95?C.green : T.real/T.debianHacer>=0.8?C.amber:C.red}}>
               {num(T.real)} ({Math.round(T.real/T.debianHacer*100)}%)</b></>}
-          {T.persPrev !== T.jornadas && <div>Previstas {T.persPrev}, estuvieron {num(T.jornadas)}.</div>}
+          {T.persPrev !== jornadasTurno && <div>Previstas {T.persPrev} jornadas, hubo {num(Math.round(jornadasTurno*10)/10)}.</div>}
+          {Object.keys(minPorPersona).filter(pid => minPorPersona[pid].total > minPermitidos(pid) + 15).map(pid => (
+            <div key={pid} style={{color:C.red,fontWeight:700}}>
+              ⚠️ {usuarios.find(u=>u.id===pid)?.nombre||"?"}: {Math.round(minPorPersona[pid].total)} min anotados con jornada de {minPermitidos(pid)}. Sobran minutos.
+            </div>
+          ))}
           {T.moAnotada>0 && T.realMO-T.moAnotada>5 && (
             <div style={{color:C.amber,fontWeight:700}}>
               {eur(T.realMO-T.moAnotada)} pagados sin tarea anotada.
