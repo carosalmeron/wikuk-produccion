@@ -12,12 +12,12 @@ import {
 } from "firebase/auth";
 import {
   getFirestore, initializeFirestore, persistentLocalCache, persistentSingleTabManager,
-  collection, doc, setDoc, updateDoc, deleteDoc, deleteField,
+  collection, doc, setDoc, updateDoc, deleteDoc, deleteField, where, limit,
   onSnapshot, query, orderBy, getDocs,
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.30.1";
+const APP_VERSION = "v4.31.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -272,23 +272,112 @@ const ROLES = {
 };
 
 // ── HOOK: colección Firestore en tiempo real ───────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+// ACCESO A DATOS — una sola lectura por colección, compartida por todas las pantallas
+//
+//  · Catálogos (no cambian mientras se trabaja): una lectura, en caché 10 min.
+//    Al guardar o borrar algo suyo, se vuelve a leer. Sin listener.
+//  · Datos vivos (partes, órdenes, cierres…): UN listener por colección,
+//    compartido, y solo los últimos 90 días.
+// ═══════════════════════════════════════════════════════════════
+const CATALOGOS = new Set(["centros","lineas","moldes","motivos_paro","turnos","procesos","materias_primas",
+  "proveedores","productos","config_costes","usuarios","planes_mes","planes_semana","registros_operario"]);
+const CON_FECHA = new Set(["producciones","ordenes","cierres_turno","tareas_operario","apoyos","borradores","incidencias"]);
+const DIAS_VIVOS = 90;
+const TTL_CATALOGO = 10 * 60 * 1000;
+
+const _store = {};   // key → { rows, loading, subs:Set<fn>, unsub, at, fetching }
+const _keyDe = (name, orderField) => `${name}|${orderField||""}`;
+
+const _refDe = (name, orderField) => {
+  const partes = [];
+  if (CON_FECHA.has(name)) {
+    const desde = new Date(Date.now() - DIAS_VIVOS*864e5).toISOString().slice(0,10);
+    partes.push(where("fecha", ">=", desde));
+    // con where sobre fecha, el orden tiene que ser también por fecha (si no, pide índice)
+    if (orderField && orderField !== "fecha") { /* se ordena en cliente */ }
+    else partes.push(orderBy("fecha"));
+  } else if (orderField) {
+    partes.push(orderBy(orderField));
+  }
+  return partes.length ? query(collection(db, name), ...partes) : collection(db, name);
+};
+
+const _emit = (key) => { const e = _store[key]; if (e) e.subs.forEach(fn => fn(e.rows, e.loading)); };
+
+const _ordenaCliente = (rows, orderField) =>
+  orderField ? [...rows].sort((a,b) => String(a[orderField]??"").localeCompare(String(b[orderField]??""), "es")) : rows;
+
+const _cargaCatalogo = async (name, orderField, key) => {
+  const e = _store[key];
+  if (e.fetching) return;
+  e.fetching = true;
+  try {
+    const snap = await getDocs(_refDe(name, orderField));
+    e.rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    e.at = Date.now();
+  } catch (err) { /* se queda con lo que tuviera */ }
+  e.loading = false; e.fetching = false;
+  _emit(key);
+};
+
+const _abre = (name, orderField) => {
+  const key = _keyDe(name, orderField);
+  if (_store[key]) return key;
+  _store[key] = { rows: [], loading: true, subs: new Set(), unsub: null, at: 0, fetching: false };
+  if (CATALOGOS.has(name)) {
+    _cargaCatalogo(name, orderField, key);
+  } else {
+    const e = _store[key];
+    e.unsub = onSnapshot(_refDe(name, orderField), snap => {
+      let rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      if (orderField && orderField !== "fecha" && CON_FECHA.has(name)) rows = _ordenaCliente(rows, orderField);
+      e.rows = rows; e.loading = false; e.at = Date.now();
+      _emit(key);
+    }, () => { e.loading = false; _emit(key); });
+  }
+  return key;
+};
+
+// Tras escribir en un catálogo, se vuelve a leer para que la pantalla lo vea al momento
+const _invalida = (name) => {
+  if (!CATALOGOS.has(name)) return;
+  Object.keys(_store).filter(k => k.startsWith(name+"|")).forEach(k => {
+    const [, orderField] = k.split("|");
+    _store[k].at = 0;
+    _cargaCatalogo(name, orderField || null, k);
+  });
+};
+
 function useCol(name, orderField = null) {
-  const [rows, setRows] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const key = _keyDe(name, orderField);
+  const [state, setState] = useState(() => {
+    const e = _store[key];
+    return e ? { rows: e.rows, loading: e.loading } : { rows: [], loading: true };
+  });
   useEffect(() => {
-    const ref = orderField
-      ? query(collection(db, name), orderBy(orderField))
-      : collection(db, name);
-    const unsub = onSnapshot(ref, snap => {
-      setRows(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-      setLoading(false);
-    }, () => setLoading(false));
-    return unsub;
+    const k = _abre(name, orderField);
+    const e = _store[k];
+    const fn = (rows, loading) => setState({ rows, loading });
+    e.subs.add(fn);
+    // catálogo pasado de fecha: se refresca
+    if (CATALOGOS.has(name) && !e.loading && Date.now() - e.at > TTL_CATALOGO) _cargaCatalogo(name, orderField, k);
+    else fn(e.rows, e.loading);
+    return () => { e.subs.delete(fn); };
   }, [name, orderField]);
-  return [rows, loading];
+  return [state.rows, state.loading];
 }
-const save = (col, id, data) => setDoc(doc(db, col, id), data, { merge: true });
-const del  = (col, id) => deleteDoc(doc(db, col, id));
+
+const save = async (col, id, data) => {
+  const r = await setDoc(doc(db, col, id), data, { merge: true });
+  _invalida(col);
+  return r;
+};
+const del = async (col, id) => {
+  const r = await deleteDoc(doc(db, col, id));
+  _invalida(col);
+  return r;
+};
 
 // ── UI BASE ────────────────────────────────────────────────────────────────────
 const Header = ({ title, onBack, sub, right }) => (
@@ -784,6 +873,7 @@ function SeedScreen({ onBack }) {
       for (const d of snap.docs) {
         if (d.data().clave !== undefined) {
           await updateDoc(doc(db, "usuarios", d.id), { clave: deleteField() });
+          _invalida("usuarios");
           n++;
         }
       }
@@ -10381,6 +10471,7 @@ export default function App() {
         const src = await getDocs(collection(db, "materias"));
         if (src.empty) return;
         for (const d of src.docs) await setDoc(doc(db, "materias_primas", d.id), d.data());
+        _invalida("materias_primas");
         console.log("Migradas", src.size, "materias");
       } catch(e) { console.warn("migración materias:", e.message); }
     })();
