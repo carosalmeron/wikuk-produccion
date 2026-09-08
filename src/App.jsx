@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.33.0";
+const APP_VERSION = "v4.33.1";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -2188,14 +2188,6 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                   </>
                 )}
 
-                {/* Siempre hay forma de entrar en las órdenes de ese día */}
-                <div style={{marginTop:12}}>
-                  <BotonF alto={88} borde={C.border}
-                    sub={`del ${fechaES(pendiente.fecha)} · ${pendiente.turno?.nombre||""}`}
-                    onClick={()=>{ setTurnoId(pendiente.turno?.id||turnoId); setDiaVer(pendiente.fecha); setVista("ordenes"); }}>
-                    📋 Ver y cerrar las órdenes de ese día
-                  </BotonF>
-                </div>
 
                 {diasPendientes.length>1 && (
                   <div style={{background:C.card2,borderRadius:14,padding:"13px 15px",marginTop:16,
