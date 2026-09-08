@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.31.0";
+const APP_VERSION = "v4.33.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -1931,16 +1931,27 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
       !otsPlan.some(p => p.linea === d.linea && p.producto_id === d.producto_id) &&
       !otsManual.some(m => m.linea === d.linea && m.producto_id === d.producto_id))];
 
+  // Un turno de hoy cuenta como pendiente si ya ha terminado (empezó el siguiente)
+  const ahoraHM = new Date().toTimeString().slice(0,5);
+  const turnoTerminado = (clave) => {
+    const ord = turnosOrdenados(turnos);
+    const i = parseInt(String(clave).replace("T","")) - 1;
+    const sig = ord[i+1];
+    if (!sig?.hora_inicio) return false;                 // el último turno del día, no
+    return ahoraHM >= String(sig.hora_inicio);
+  };
+
   // ── Lo que quedó abierto de días anteriores: hay que cerrarlo antes de seguir
   const atrasadas = (() => {
     const desde = new Date(Date.now() - 14*864e5).toISOString().slice(0,10);
     const delPlan = planesSem
       .filter(w => !centroId || w.centro === centroId)
       .flatMap(w => (w.calendario||[])
-        .filter(x => x.fecha >= desde && x.fecha < hoyReal)
+        .filter(x => x.fecha >= desde && (x.fecha < hoyReal || (x.fecha === hoyReal && turnoTerminado(x.turno))))
         .map(x => ({ ...x, origen_ot:"plan" })));
     const delManual = ordenes
-      .filter(o => !o.cerrada && o.fecha >= desde && o.fecha < hoyReal
+      .filter(o => !o.cerrada && o.fecha >= desde && (o.fecha < hoyReal
+        || (o.fecha === hoyReal && turnoTerminado(o.turno_id ? claveDeTurno(turnos, o.turno_id) : "T1")))
         && (!centroId || (o.centro || productos.find(p=>p.id===o.producto_id)?.centro) === centroId))
       .map(o => ({ linea: nombreLinea(o.linea_id) || "Sin línea",
         turno: o.turno_id ? claveDeTurno(turnos, o.turno_id) : "T1",
@@ -1955,7 +1966,8 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
   const turnosSinCerrar = (() => {
     const desde = new Date(Date.now() - 14*864e5).toISOString().slice(0,10);
     const conParte = {};
-    prods.filter(p => p.fecha >= desde && p.fecha < hoyReal && !p.reabierta && toNum(p.cantidad) > 0)
+    prods.filter(p => p.fecha >= desde && !p.reabierta && toNum(p.cantidad) > 0
+      && (p.fecha < hoyReal || (p.fecha === hoyReal && turnoTerminado(p.turno_clave || (p.turno_id ? claveDeTurno(turnos, p.turno_id) : "T1")))))
       .filter(p => {
         // Solo los de este centro: por el producto o por la línea
         if (!centroId) return true;
@@ -2119,8 +2131,13 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                     PONERSE AL DÍA · QUEDAN {diasPendientes.length}
                   </div>
                   <div style={{fontFamily:F.h,fontWeight:900,fontSize:24,color:"#fff",marginTop:4,textTransform:"capitalize"}}>
-                    {fechaESLarga(pendiente.fecha)}
+                    {pendiente.fecha===hoyReal ? "Hoy" : fechaESLarga(pendiente.fecha)}
                   </div>
+                  {pendiente.fecha===hoyReal && (
+                    <div style={{fontSize:13,color:"rgba(255,255,255,0.7)",marginTop:2}}>
+                      Este turno ya ha terminado. Ciérralo antes de seguir.
+                    </div>
+                  )}
                   <div style={{fontSize:15,color:"rgba(255,255,255,0.75)",marginTop:2}}>
                     {pendiente.turno?.nombre || "Turno"}
                   </div>
@@ -2170,6 +2187,15 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                     </BotonF>
                   </>
                 )}
+
+                {/* Siempre hay forma de entrar en las órdenes de ese día */}
+                <div style={{marginTop:12}}>
+                  <BotonF alto={88} borde={C.border}
+                    sub={`del ${fechaES(pendiente.fecha)} · ${pendiente.turno?.nombre||""}`}
+                    onClick={()=>{ setTurnoId(pendiente.turno?.id||turnoId); setDiaVer(pendiente.fecha); setVista("ordenes"); }}>
+                    📋 Ver y cerrar las órdenes de ese día
+                  </BotonF>
+                </div>
 
                 {diasPendientes.length>1 && (
                   <div style={{background:C.card2,borderRadius:14,padding:"13px 15px",marginTop:16,
