@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.33.1";
+const APP_VERSION = "v4.34.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -2100,7 +2100,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
             ⚠️ Tu ficha no tiene turno asignado. Se está mostrando {turno?.nombre||"el primero"}. Díselo a tu responsable.
           </div>
         )}
-        {turnos.length>1 && !esOperario && (
+        {turnos.length>1 && !esOperario && !pendiente && (
           <div style={{display:"flex",gap:10,padding:"16px 22px 0"}}>
             {turnosOrdenados(turnos).map(t=>(
               <button key={t.id} onClick={()=>setTurnoId(t.id)}
@@ -2126,9 +2126,19 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
               </div>
             ) : (
               <>
+                <div style={{background:C.redBg,border:`3px solid ${C.red}`,borderRadius:18,padding:"20px",marginBottom:14,textAlign:"center"}}>
+                  <div style={{fontSize:46,lineHeight:1,marginBottom:6}}>⛔</div>
+                  <div style={{fontFamily:F.h,fontWeight:900,fontSize:24,color:C.red,lineHeight:1.2}}>
+                    No se puede seguir
+                  </div>
+                  <div style={{fontSize:16,color:C.text,marginTop:6,lineHeight:1.55}}>
+                    Hay turnos anteriores sin cerrar. Ciérralos y volverá todo a la normalidad.
+                  </div>
+                </div>
+
                 <div style={{background:C.navy,borderRadius:18,padding:"18px 20px",marginBottom:16,textAlign:"center"}}>
                   <div style={{fontSize:13,color:"rgba(255,255,255,0.65)",fontWeight:700,letterSpacing:0.5}}>
-                    PONERSE AL DÍA · QUEDAN {diasPendientes.length}
+                    {diasPendientes.length>1 ? `QUEDAN ${diasPendientes.length} · EMPIEZA POR ESTE` : "SOLO QUEDA ESTE"}
                   </div>
                   <div style={{fontFamily:F.h,fontWeight:900,fontSize:24,color:"#fff",marginTop:4,textTransform:"capitalize"}}>
                     {pendiente.fecha===hoyReal ? "Hoy" : fechaESLarga(pendiente.fecha)}
