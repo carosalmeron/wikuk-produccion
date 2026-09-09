@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.34.0";
+const APP_VERSION = "v4.35.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -2665,7 +2665,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                 <div style={{minWidth:0}}>
                   <div style={{fontFamily:F.h,fontWeight:800,fontSize:17,color:C.text}}>{i.lote||"sin lote"} · {mp?.nombre||""}</div>
                   <div style={{fontSize:14,color:C.mutedD,marginTop:3}}>
-                    {t?t[2]:i.tipo} · {i.linea||""} · {i.fecha===hoy?"hoy":fechaES(i.fecha)} · anotó {i.registrado_por||"—"}
+                    {i.tipo==="otra" && i.tipo_texto ? i.tipo_texto : (t?t[2]:i.tipo)} · {i.linea||""} · {i.fecha===hoy?"hoy":fechaES(i.fecha)} · anotó {i.registrado_por||"—"}
                   </div>
                   {i.nota && <div style={{fontSize:13.5,color:C.mutedD,marginTop:4,fontStyle:"italic"}}>“{i.nota}”</div>}
                 </div>
@@ -4818,6 +4818,7 @@ function HojaIncidencia({ mps, perfil, linea, consumos=[], prods=[], onCerrar, o
   const [mpId, setMpId] = useState("");
   const [lote, setLote] = useState("");
   const [tipo, setTipo] = useState("");
+  const [otroTexto, setOtroTexto] = useState("");   // el motivo escrito a mano
   const [grav, setGrav] = useState("");
   const [nota, setNota] = useState("");
   const [modal, setModal] = useState(null);
@@ -4833,7 +4834,8 @@ function HojaIncidencia({ mps, perfil, linea, consumos=[], prods=[], onCerrar, o
     setGuardando(true);
     await save("incidencias", uid(), {
       fecha: new Date().toISOString().slice(0,10), materia_id: mpId, lote: lote.trim(),
-      tipo, gravedad: grav, nota: nota.trim(), linea,
+      tipo, tipo_texto: tipo==="otra" ? otroTexto.trim() : "",
+      gravedad: grav, nota: nota.trim(), linea,
       registrado_por: perfil?.nombre || "terminal", registrado_at: new Date().toISOString(),
     });
     setGuardando(false);
@@ -4860,9 +4862,19 @@ function HojaIncidencia({ mps, perfil, linea, consumos=[], prods=[], onCerrar, o
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(210px,1fr))",gap:14,marginBottom:22}}>
         {TIPOS_INC.map(([k,ic,t])=>(
           <BotonF key={k} alto={100} borde={tipo===k?C.amber:C.border} bg={tipo===k?C.amberBg:"#fff"}
-            onClick={()=>setTipo(k)}>{ic} {t}</BotonF>
+            sub={k==="otra" && tipo==="otra" && otroTexto ? otroTexto : null}
+            onClick={()=>{
+              setTipo(k);
+              if (k==="otra") setModal({tipo:"texto", titulo:"¿Qué ha pasado?", valor:otroTexto, onOk:v=>setOtroTexto(v)});
+            }}>{ic} {k==="otra" && otroTexto ? "Otra cosa ✏️" : t}</BotonF>
         ))}
       </div>
+      {tipo==="otra" && !otroTexto && (
+        <div style={{background:C.amberBg,border:`2px solid ${C.amber}`,borderRadius:12,padding:"11px 14px",
+          marginTop:-12,marginBottom:22,fontSize:14,color:C.amber,fontWeight:700,lineHeight:1.5}}>
+          Escribe qué ha pasado: toca otra vez «Otra cosa».
+        </div>
+      )}
 
       <div style={{fontFamily:F.h,fontWeight:800,fontSize:17,color:C.text,marginBottom:10}}>¿Cuánto afecta?</div>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:14,marginBottom:22}}>
