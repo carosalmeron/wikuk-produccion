@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.36.0";
+const APP_VERSION = "v4.37.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -4392,7 +4392,7 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
                     onTocar={()=>setModal({tipo:"num",titulo:nombreProc(t.proceso_id),valor:String(t.cantidad||""),
                       onOk:v=>setTarea(t.id,"cantidad",toNum(v))})}/>
                   <button onClick={()=>setModal({tipo:"persona",titulo:`¿Quién ha hecho ${nombreProc(t.proceso_id)}?`,
-                    onOk:v=>setTarea(t.id,"persona_id",v)})}
+                    actual:t.persona_id, onOk:v=>setTarea(t.id,"persona_id",v)})}
                     style={{height:64,padding:"0 14px",background:t.persona_id?C.blueBg:"#fff",
                       border:`2px solid ${t.persona_id?C.blue:C.border}`,color:t.persona_id?C.blue:C.muted,
                       borderRadius:12,fontFamily:F.h,fontWeight:800,fontSize:15,cursor:"pointer",whiteSpace:"nowrap"}}>
@@ -4565,7 +4565,7 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
       {modal?.tipo==="materia" && <HojaMaterias mps={mps} producto={p}
         puestas={consumos.map(c=>c.materia_id)}
         onOk={v=>{ modal.onOk(v); setModal(null); }} onCerrar={()=>setModal(null)}/>}
-      {modal?.tipo==="persona" && <HojaPersonas titulo={modal.titulo} gente={gente.filter(u=>!u.es_apoyo)}
+      {modal?.tipo==="persona" && <HojaPersonas titulo={modal.titulo} gente={gente.filter(u=>!u.es_apoyo)} actual={modal.actual}
         onOk={v=>{ modal.onOk(v); setModal(null); }} onCerrar={()=>setModal(null)}/>}
       {modal?.tipo==="proceso" && <HojaProcesos procesos={procesos.filter(z=>!z.apoyo)} puestos={tareas.map(t=>t.proceso_id)}
         onOk={pid=>{ setTareas(ts=>[...ts,{id:uid(),proceso_id:pid,cantidad:0,persona_id:""}]); setModal(null); }}
@@ -4749,12 +4749,23 @@ function HojaMaterias({ mps, producto, puestas=[], onOk, onCerrar }) {
   );
 }
 
-const HojaPersonas = ({ titulo, gente, onOk, onCerrar }) => (
+const HojaPersonas = ({ titulo, gente, actual, onOk, onCerrar }) => (
   <CapaF titulo={titulo} sub="Solo la gente de línea" onCerrar={onCerrar} color={C.blue}>
+    {actual && (
+      <div style={{marginBottom:16}}>
+        <BotonF alto={88} borde={C.red} color={C.red} onClick={()=>onOk("")}>
+          ✕ Quitar a esta persona
+        </BotonF>
+        <div style={{fontSize:13,color:C.mutedD,lineHeight:1.5,marginTop:6}}>
+          La tarea se queda, pero sin nadie asignado.
+        </div>
+      </div>
+    )}
     <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:14}}>
       {gente.map(u=>(
         <button key={u.id} onClick={()=>onOk(u.id)}
-          style={{minHeight:110,borderRadius:16,border:`3px solid ${C.border}`,background:"#fff",cursor:"pointer",
+          style={{minHeight:110,borderRadius:16,border:`3px solid ${actual===u.id?C.green:C.border}`,
+            background:actual===u.id?C.greenBg:"#fff",cursor:"pointer",
             display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:8,
             fontFamily:F.h,fontWeight:800,fontSize:18,color:C.text}}>
           <span style={{width:44,height:44,borderRadius:22,background:C.card2,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22}}>👤</span>
