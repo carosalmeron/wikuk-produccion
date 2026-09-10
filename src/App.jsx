@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.35.0";
+const APP_VERSION = "v4.36.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -1768,10 +1768,30 @@ function MiJornada({ otsHoy, gente, productos, procesos, prods, tareasOp, hoy, c
             {tareas.map((pa,i)=>{
               const hecha = mias.find(t=>t.linea===ot.linea && t.proceso_id===pa.proceso_id);
               const est = toNum(pa.min_real)||toNum(pa.min_obj);
-              return <Grande key={i} t={nombreProc(pa.proceso_id)}
-                d={hecha ? `✔ ya anotado · ${num(hecha.cantidad)} uds · ${num(hecha.minutos)} min` : (est?`${est} min/ud según ficha`:"")}
-                ok={!!hecha}
-                onClick={()=>{ setProc(pa); setUds(hecha?String(hecha.cantidad):""); setMin(hecha?String(hecha.minutos):""); setPaso("cuanto"); }}/>;
+              return (
+                <div key={i} style={{display:"flex",gap:10,marginBottom:12}}>
+                  <button onClick={()=>{ setProc(pa); setUds(hecha?String(hecha.cantidad):""); setMin(hecha?String(hecha.minutos):""); setPaso("cuanto"); }}
+                    style={{flex:1,minHeight:96,borderRadius:20,border:`3px solid ${hecha?C.green:C.border}`,background:hecha?C.greenBg:"#fff",
+                      cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,padding:"0 20px",textAlign:"left"}}>
+                    <span style={{minWidth:0}}>
+                      <div style={{fontFamily:F.h,fontWeight:800,fontSize:19,color:C.text}}>{nombreProc(pa.proceso_id)}</div>
+                      <div style={{fontSize:14,color:C.mutedD,marginTop:3}}>
+                        {hecha ? `✔ tuyo · ${num(hecha.cantidad)} uds · ${num(hecha.minutos)} min · toca para cambiar`
+                          : (est?`${est} min/ud según ficha`:"")}
+                      </div>
+                    </span>
+                    <span style={{fontSize:28,color:hecha?C.green:C.muted,flexShrink:0}}>{hecha?"✔":"›"}</span>
+                  </button>
+                  {hecha && (
+                    <button onClick={async ()=>{
+                        if (!window.confirm(`¿Quitarte de ${nombreProc(pa.proceso_id)}?\n\nLa tarea queda libre para otra persona.`)) return;
+                        await del("tareas_operario", hecha.id);
+                      }}
+                      style={{width:72,minHeight:96,borderRadius:20,border:`3px solid ${C.border}`,background:"#fff",
+                        color:C.red,fontSize:26,cursor:"pointer",flexShrink:0}}>✕</button>
+                  )}
+                </div>
+              );
             })}
             {tareas.length===0 && <Empty icon="🛠️" text="Este producto no tiene tareas en la ficha. Díselo a tu responsable."/>}
             <div style={{marginTop:8}}>
