@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.37.0";
+const APP_VERSION = "v4.38.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -3321,10 +3321,14 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
     });
     return Object.values(porMateria).map(x => {
       const teo = toNum(f.p?.metros_finales) * x.capas * f.real;
+      const obj = rendObj(x.materia_id);
       return { mp: mps.find(m=>m.id===x.materia_id),
         producto: f.p?.nombre || "?", linea: f.ot.linea, uds: f.real,
-        lote: x.lotes.join(" + ") || "sin lote", teo, gast: x.gast,
-        r: (teo>0 && x.gast>0) ? teo/x.gast*100 : null, obj: rendObj(x.materia_id) };
+        lote: x.lotes.join(" + ") || "sin lote",
+        salida: teo,                                   // metros de producto acabado
+        teo: obj>0 ? teo/(obj/100) : teo,              // lo que tocaba gastar al objetivo
+        gast: x.gast,
+        r: (teo>0 && x.gast>0) ? teo/x.gast*100 : null, obj };
     });
   }).filter(x=>x.r!=null);
 
@@ -3457,12 +3461,14 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
 
       ${rends.length ? `<h3 style="font-size:13px;text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid #111;padding-bottom:4px">Rendimientos</h3>
       <table style="width:100%;border-collapse:collapse;margin-bottom:18px">
-        <tr><th ${th}>Producto · línea</th><th ${th}>Materia · lote</th><th ${th}>Teórico</th><th ${th}>Gastado</th><th ${th}>Rend.</th><th ${th}>Obj.</th></tr>
+        <tr><th ${th}>Producto · línea</th><th ${th}>Materia · lote</th><th ${th}>Tocaba gastar</th><th ${th}>Gastado</th><th ${th}>Rend.</th><th ${th}>Obj.</th></tr>
         ${rends.map(x=>`<tr><td ${est}><b>${esc(x.producto)}</b>
             <div style="font-size:11px;color:#777">${esc(x.linea)} · ${num(x.uds)} uds</div></td>
           <td ${est}>${esc(x.mp?.nombre||"?")}
             <div style="font-size:11px;color:#777">${esc(x.lote||"sin lote")}</div></td>
-          <td ${n}>${num(x.teo)} m</td><td ${n}>${num(x.gast)} m</td>
+          <td ${n}>${num(Math.round(x.teo))} m</td>
+          <td ${n}><b style="color:${x.gast>x.teo?"#b91c1c":"#166534"}">${num(x.gast)} m</b>
+            <div style="font-size:11px;color:#777">${x.gast>x.teo?"+":"−"}${num(Math.abs(Math.round(x.gast-x.teo)))} m</div></td>
           <td ${n}><b style="color:${x.r>=x.obj?"#166534":"#b91c1c"}">${Math.round(x.r)}%</b></td>
           <td ${n}>${x.obj}%</td></tr>`).join("")}
       </table>` : ""}
@@ -3729,7 +3735,12 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
               <span style={{minWidth:0}}>
                 <div style={{color:C.text,fontWeight:700}}>{x.producto} · {x.linea}</div>
                 <div style={{fontSize:12.5,color:C.mutedD}}>
-                  {x.mp?.nombre} · {x.lote||"sin lote"} · {num(x.gast)} m para {num(x.uds)} uds
+                  {x.mp?.nombre} · {x.lote||"sin lote"}
+                  <div>Tocaba gastar <b style={{color:C.text}}>{num(Math.round(x.teo))} m</b> · gastados {num(x.gast)} m
+                    {Math.abs(x.gast-x.teo)>1 && (
+                      <b style={{color: x.gast>x.teo?C.red:C.green}}> · {num(Math.abs(Math.round(x.gast-x.teo)))} m de {x.gast>x.teo?"más":"menos"}</b>
+                    )}
+                  </div>
                 </div>
               </span>
               <b style={{color:x.r>=x.obj?C.green:C.red,flexShrink:0,textAlign:"right"}}>
