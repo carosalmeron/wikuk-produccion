@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.38.0";
+const APP_VERSION = "v4.39.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -3258,6 +3258,10 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
     }
     return { deHoy, sobra };
   })();
+  // Sin precio de venta el beneficio es mentira: no se cierra hasta ponerlo
+  const sinPrecio = filas.filter(f => f.real > 0 && !(toNum(f.p?.precio_venta) > 0))
+    .map(f => f.p?.nombre || "?");
+
   const apoyosTurno = repartoApoyo.deHoy;
   const sobraApoyo  = repartoApoyo.sobra;
   const minSobra    = sobraApoyo.reduce((a,x)=>a+toNum(x.minutos), 0);
@@ -3763,6 +3767,16 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
         </BloqueF>
       )}
 
+      {sinPrecio.length>0 && (
+        <div style={{background:C.redBg,border:`3px solid ${C.red}`,borderRadius:14,padding:"14px 16px",
+          marginBottom:16,fontSize:15,color:C.red,fontWeight:700,lineHeight:1.6}}>
+          ⛔ Sin precio de venta: <b>{sinPrecio.join(", ")}</b>.
+          <div style={{fontSize:13.5,fontWeight:600,color:C.mutedD,marginTop:4}}>
+            Sin él, el informe diría que ese producto pierde todo lo que cuesta.
+            Ponlo en Productos → ficha → Precio medio de venta, y vuelve a cerrar.
+          </div>
+        </div>
+      )}
       {mezcla>0 && (
         <div style={{background:C.blueBg,border:`2px solid ${C.blue}`,borderRadius:14,padding:"13px 15px",
           marginBottom:16,fontSize:14,color:C.blue,fontWeight:700,lineHeight:1.55}}>
@@ -4044,7 +4058,9 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
       </div>
 
       <div style={{display:"grid",gap:12}}>
-        <BotonF alto={110} bg={C.green} color="#fff" borde={C.green} disabled={guardando}
+        <BotonF alto={110} bg={sinPrecio.length?C.card2:C.green} color={sinPrecio.length?C.muted:"#fff"}
+          borde={sinPrecio.length?C.border:C.green} disabled={guardando || sinPrecio.length>0}
+          sub={sinPrecio.length ? "falta el precio de venta" : null}
           onClick={()=>cerrarYEnviar("")}>{guardando?"Cerrando…":"🔒 CERRAR EL TURNO"}</BotonF>
         <div style={{fontSize:12.5,color:C.mutedD,textAlign:"center",lineHeight:1.5}}>
           El correo sale solo al cerrar. Estos botones son por si además lo quieres a mano.
