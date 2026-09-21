@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.40.0";
+const APP_VERSION = "v4.42.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -1731,6 +1731,15 @@ function MiJornada({ otsHoy, gente, productos, procesos, prods, tareasOp, hoy, c
 
         {paso==="quien" && <>
           <Preg t="¿Quién eres?" s="Toca tu nombre."/>
+          {gente.filter(u=>!u.es_apoyo).length===0 && (
+            <div style={{background:C.amberBg,border:`2px solid ${C.amber}`,borderRadius:14,padding:"14px 16px",
+              fontSize:15,color:C.amber,fontWeight:700,lineHeight:1.6}}>
+              No hay operarios asignados a este centro.
+              <div style={{fontSize:13.5,fontWeight:600,color:C.mutedD,marginTop:4}}>
+                Se asignan en Usuarios → ficha del operario → Centro de trabajo.
+              </div>
+            </div>
+          )}
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:12}}>
             {[...gente].filter(u=>!u.es_apoyo).sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(u=>{
               const ya = tareasOp.some(t=>t.fecha===hoy && t.turno_clave===claveTurno && t.persona_id===u.id);
@@ -1918,6 +1927,11 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
   const ggMes = toNum(costesCfg.find(c=>c.id===centroId)?.fijos_mensuales);
 
   const semanaHoy = isoWeek(hoy);
+  // Cada centro tiene sus turnos abiertos: Valencia 1, Deshidratados 2…
+  const turnosCentro = turnosOrdenados(turnos).slice(0, Math.max(1, parseInt(centro?.turnos_abiertos) || turnos.length));
+  useEffect(() => {
+    if (turnosCentro.length && !turnosCentro.some(t=>t.id===turnoId)) setTurnoId(turnosCentro[0].id);
+  }, [centro?.id, turnosCentro.length]);
   const turno = turnos.find(t=>t.id===turnoId);
   const claveTurno = claveDeTurno(turnos, turnoId);
 
@@ -1957,7 +1971,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
   // Un turno de hoy cuenta como pendiente si ya ha terminado (empezó el siguiente)
   const ahoraHM = new Date().toTimeString().slice(0,5);
   const turnoTerminado = (clave) => {
-    const ord = turnosOrdenados(turnos);
+    const ord = turnosCentro;
     const i = parseInt(String(clave).replace("T","")) - 1;
     const sig = ord[i+1];
     if (!sig?.hora_inicio) return false;                 // el último turno del día, no
@@ -2034,9 +2048,9 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
 
   const prodDe = (pid) => productos.find(p => p.id === pid);
   const nombreMolde = (p) => p?.molde_id ? (moldes.find(m=>m.id===p.molde_id)?.nombre) : p?.molde;
-  const equipo = usuarios.filter(u => u.activo !== false && u.rol === "operario"
-    && (!centroId || !u.centro || u.centro === centroId));
-  const gente = equipo.length ? equipo : usuarios.filter(u => u.activo !== false);
+  // Solo los operarios de ESTE centro. Ni gerencia, ni supervisión, ni los de otro centro.
+  const gente = usuarios.filter(u => u.activo !== false && u.rol === "operario" && u.centro === centroId);
+  const sinCentro = usuarios.filter(u => u.activo !== false && u.rol === "operario" && !u.centro).length;
 
   // ═══ ELEGIR CENTRO ═══
   if (!esOperario && !centro) {
@@ -2123,9 +2137,9 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
             ⚠️ Tu ficha no tiene turno asignado. Se está mostrando {turno?.nombre||"el primero"}. Díselo a tu responsable.
           </div>
         )}
-        {turnos.length>1 && !esOperario && !pendiente && (
+        {turnosCentro.length>1 && !esOperario && !pendiente && (
           <div style={{display:"flex",gap:10,padding:"16px 22px 0"}}>
-            {turnosOrdenados(turnos).map(t=>(
+            {turnosCentro.map(t=>(
               <button key={t.id} onClick={()=>setTurnoId(t.id)}
                 style={{flex:1,minHeight:64,borderRadius:14,border:`3px solid ${turnoId===t.id?C.navy:C.border}`,
                   background:turnoId===t.id?C.navy:"#fff",color:turnoId===t.id?"#fff":C.text,
@@ -2364,7 +2378,7 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
             </div>
           </div>
         )}
-        {!esOperario && turnos.length>1 && (
+        {!esOperario && turnosCentro.length>1 && (
           <div style={{padding:"16px 22px 0"}}>
             <div style={{display:"flex",gap:10}}>
               <button onClick={()=>setVerDia(false)}
@@ -4805,7 +4819,7 @@ const HojaPersonas = ({ titulo, gente, actual, onOk, onCerrar }) => (
           {u.nombre}
         </button>
       ))}
-      {gente.length===0 && <Empty icon="👥" text="Ningún operario de línea. Revisa la marca “Trabaja en apoyo” en Usuarios."/>}
+      {gente.length===0 && <Empty icon="👥" text="Ningún operario en este centro. Asígnalos en Usuarios → Centro de trabajo."/>}
     </div>
   </CapaF>
 );
