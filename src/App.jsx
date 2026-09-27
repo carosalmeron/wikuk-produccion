@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.42.0";
+const APP_VERSION = "v4.44.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -7967,6 +7967,471 @@ function LineaEditor({ it, productos, otros, onGuardar, onQuitar, onCerrar }) {
 // INFORME SEMANAL — materias, procesos, empleados, paradas, productos
 // Todo sale de los partes cerrados y los cierres de turno de la semana
 // ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+// INFORME ENTRE FECHAS — producto a producto y resumen consolidado
+// Orden: producto y cantidad · parte económica · materia prima · procesados.
+// Al final, el consolidado de materias y de empleados.
+// ═══════════════════════════════════════════════════════════════
+function InformeRangoScreen({ onBack, centros, productos, mps, procesos, usuarios, turnos=[], perfil }) {
+  const [prods]   = useCol("producciones", "fecha");
+  const [cierres] = useCol("cierres_turno", "fecha");
+  const hoy = new Date().toISOString().slice(0,10);
+  const haceDias = (n) => new Date(Date.now()-n*864e5).toISOString().slice(0,10);
+  const [desde, setDesde] = useState(haceDias(30));
+  const [hasta, setHasta] = useState(hoy);
+  const [centroId, setCentroId] = useState("");
+  const [modal, setModal] = useState(null);
+
+  useEffect(() => {
+    if (centroId || !centros.length || !prods.length) return;
+    const cuenta = {};
+    prods.filter(p => p.fecha>=desde && p.fecha<=hasta).forEach(p => {
+      const c = productos.find(z=>z.id===p.producto_id)?.centro;
+      if (c) cuenta[c] = (cuenta[c]||0)+1;
+    });
+    setCentroId(Object.entries(cuenta).sort((a,b)=>b[1]-a[1])[0]?.[0] || centros[0].id);
+  }, [centros, prods]);
+
+  const prodDe   = (id) => productos.find(z=>z.id===id);
+  const nombreP  = (id) => prodDe(id)?.nombre || "?";
+  const nombrePers = (id) => usuarios.find(u=>u.id===id)?.nombre || "—";
+  const nombreProc = (id) => procesos.find(z=>z.id===id)?.nombre || "?";
+  const enCentro = (p) => { if (!centroId) return true;
+    const pr = prodDe(p.producto_id); return !pr?.centro || pr.centro === centroId; };
+
+  const cierresR = cierres.filter(c => c.fecha>=desde && c.fecha<=hasta && !c.reabierto
+    && (!centroId || !c.centro || c.centro===centroId));
+  // Solo entra lo de turnos cerrados: si el turno no tiene informe, sus partes no cuentan
+  const claveDeCierre = (c) => c.turno_clave || (c.turno_id ? claveDeTurno(turnos, c.turno_id) : "?");
+  const turnosCerrados = new Set(cierresR.map(c => `${c.fecha}|${claveDeCierre(c)}`));
+  const todos = prods.filter(p => p.fecha>=desde && p.fecha<=hasta && !p.reabierta && enCentro(p));
+  const partes = todos.filter(p => turnosCerrados.has(`${p.fecha}|${p.turno_clave || (p.turno_id ? claveDeTurno(turnos, p.turno_id) : "?")}`));
+  const fuera = todos.length - partes.length;
+  const nDias = new Set(partes.map(p=>p.fecha)).size;
+
+  // ── UN BLOQUE POR PRODUCTO ─────────────────────────────────
+  const acum = {};
+  const tocar = (pid) => {
+    if (!acum[pid]) acum[pid] = { pid, nombre: nombreP(pid), p: prodDe(pid),
+      uds:0, plan:0, materias:{}, procesos:{},
+      venta:0, coste:0, costeObj:0, udsEco:0 };
+    return acum[pid];
+  };
+
+  partes.forEach(p => {
+    const x = tocar(p.producto_id);
+    x.uds  += toNum(p.cantidad);
+    x.plan += toNum(p.objetivo_ot) || toNum(p.cantidad);
+    // materia, agrupada por materia y con sus lotes
+    (p.consumos||[]).forEach(c => {
+      const gast = toNum(c.metros_consumidos); if (!gast) return;
+      const capas = toNum(c.capas) || toNum((x.p?.materias_asignadas||[]).find(m=>m.mp_id===c.materia_id)?.capas) || 1;
+      const salida = toNum(x.p?.metros_finales) * capas * toNum(p.cantidad);
+      const mp = mps.find(m=>m.id===c.materia_id);
+      const obj = toNum((x.p?.materias_asignadas||[]).find(m=>m.mp_id===c.materia_id)?.rendimiento)
+        || toNum(mp?.rendimiento_objetivo) || 85;
+      if (!x.materias[c.materia_id]) x.materias[c.materia_id] =
+        { mp, nombre: mp?.nombre || "?", salida:0, gast:0, obj, precio: toNum(mp?.precio_ud), lotes:{} };
+      const m = x.materias[c.materia_id];
+      m.salida += salida; m.gast += gast;
+      const l = c.lote || "sin lote";
+      if (!m.lotes[l]) m.lotes[l] = { salida:0, gast:0 };
+      m.lotes[l].salida += salida; m.lotes[l].gast += gast;
+    });
+    // procesos y quién los ha hecho
+    (p.procesos_realizados||[]).forEach(t => {
+      const cant = toNum(t.cantidad), min = minDeTarea(t);
+      if (!cant || !min) return;
+      const cat = procesos.find(z=>z.id===t.proceso_id);
+      if (cat?.apoyo) return;
+      const asig = (x.p?.procesos_asignados||[]).find(z=>z.proceso_id===t.proceso_id);
+      const ficha = toNum(asig?.min_real) || toNum(asig?.min_obj) || toNum(cat?.tiempo_proceso);
+      if (!x.procesos[t.proceso_id]) x.procesos[t.proceso_id] =
+        { pid:t.proceso_id, nombre: nombreProc(t.proceso_id), cant:0, min:0, ficha, gente:{} };
+      const pr2 = x.procesos[t.proceso_id];
+      pr2.cant += cant; pr2.min += min;
+      if (t.persona_id) {
+        if (!pr2.gente[t.persona_id]) pr2.gente[t.persona_id] = { id:t.persona_id, nombre: nombrePers(t.persona_id), cant:0, min:0 };
+        pr2.gente[t.persona_id].cant += cant; pr2.gente[t.persona_id].min += min;
+      }
+    });
+  });
+
+  // Economía: de los cierres, que es donde está el coste completo del turno repartido
+  cierresR.forEach(c => (c.por_producto||[]).forEach(z => {
+    const pid = z.producto_id || Object.keys(acum).find(k => acum[k].nombre === z.nombre);
+    if (!pid) return;
+    const x = tocar(pid);
+    const u = toNum(z.uds);
+    x.udsEco   += u;
+    x.venta    += toNum(z.venta_ud) * u;
+    x.coste    += toNum(z.coste_ud) * u;
+    x.costeObj += (toNum(z.coste_obj_ud) || toNum(z.coste_ud)) * u;
+  }));
+
+  const bloques = Object.values(acum).map(x => {
+    const materias = Object.values(x.materias).map(m => {
+      const toca = m.obj>0 ? m.salida/(m.obj/100) : m.salida;
+      const lotes = Object.entries(m.lotes).map(([l,y])=>({ lote:l, gast:y.gast,
+        r: y.gast>0 ? y.salida/y.gast*100 : 0 })).sort((a,b)=>a.r-b.r);
+      return { ...m, toca, dif: m.gast-toca, coste: (m.gast-toca)*m.precio, lotes,
+        r: m.gast>0 ? m.salida/m.gast*100 : 0 };
+    }).sort((a,b)=>b.coste-a.coste);
+    const procs = Object.values(x.procesos).map(pr2 => ({ ...pr2,
+      minUd: pr2.cant>0 ? pr2.min/pr2.cant : 0,
+      gente: Object.values(pr2.gente).map(g=>({ ...g, minUd: g.cant>0 ? g.min/g.cant : 0 }))
+        .sort((a,b)=>a.minUd-b.minUd),
+    })).sort((a,b)=>b.min-a.min);
+    const benef = x.venta - x.coste;
+    return { ...x, materias, procs, benef,
+      ventaUd: x.udsEco>0 ? x.venta/x.udsEco : toNum(x.p?.precio_venta),
+      costeUd: x.udsEco>0 ? x.coste/x.udsEco : 0,
+      costeObjUd: x.udsEco>0 ? x.costeObj/x.udsEco : 0 };
+  }).sort((a,b)=>b.uds-a.uds);
+
+  // ── CONSOLIDADO ────────────────────────────────────────────
+  const matCons = {};
+  bloques.forEach(b => b.materias.forEach(m => {
+    const k = m.nombre;
+    if (!matCons[k]) matCons[k] = { nombre:k, salida:0, gast:0, toca:0, coste:0, obj:m.obj,
+      precio:m.precio, productos:new Set(), lotes:{} };
+    const c = matCons[k];
+    c.salida += m.salida; c.gast += m.gast; c.toca += m.toca; c.coste += m.coste;
+    c.productos.add(b.nombre);
+    m.lotes.forEach(l => { if(!c.lotes[l.lote]) c.lotes[l.lote]={gast:0,salida:0};
+      c.lotes[l.lote].gast += l.gast; c.lotes[l.lote].salida += l.gast*l.r/100; });
+  }));
+  const materiasCons = Object.values(matCons).map(c => ({ ...c,
+    r: c.gast>0 ? c.salida/c.gast*100 : 0,
+    lotes: Object.entries(c.lotes).map(([l,y])=>({ lote:l, gast:y.gast, r: y.gast>0 ? y.salida/y.gast*100 : 0 }))
+      .sort((a,b)=>a.r-b.r),
+  })).sort((a,b)=>b.coste-a.coste);
+
+  // media de cada proceso en todo el rango, para comparar a la gente
+  const mediaProc = {};
+  bloques.forEach(b => b.procs.forEach(pr2 => {
+    if (!mediaProc[pr2.pid]) mediaProc[pr2.pid] = { nombre:pr2.nombre, cant:0, min:0, ficha:pr2.ficha };
+    mediaProc[pr2.pid].cant += pr2.cant; mediaProc[pr2.pid].min += pr2.min;
+  }));
+  Object.values(mediaProc).forEach(m => { m.minUd = m.cant>0 ? m.min/m.cant : 0; });
+
+  const persCons = {};
+  partes.forEach(p => (p.procesos_realizados||[]).forEach(t => {
+    const cant = toNum(t.cantidad), min = minDeTarea(t);
+    if (!cant || !min || !t.persona_id) return;
+    if (procesos.find(z=>z.id===t.proceso_id)?.apoyo) return;
+    if (!persCons[t.persona_id]) persCons[t.persona_id] =
+      { id:t.persona_id, nombre: nombrePers(t.persona_id), min:0, fechas:new Set(), procesos:{} };
+    const pe = persCons[t.persona_id];
+    pe.min += min; pe.fechas.add(p.fecha);
+    if (!pe.procesos[t.proceso_id]) pe.procesos[t.proceso_id] =
+      { pid:t.proceso_id, nombre: nombreProc(t.proceso_id), cant:0, min:0 };
+    pe.procesos[t.proceso_id].cant += cant; pe.procesos[t.proceso_id].min += min;
+  }));
+  const empleados = Object.values(persCons).map(pe => {
+    const u = usuarios.find(z=>z.id===pe.id);
+    const jor = u?.jornada === "media" ? MIN_JORNADA/2 : MIN_JORNADA;
+    let peso=0, d=0;
+    const detalle = Object.values(pe.procesos).map(x => {
+      const media = mediaProc[x.pid]?.minUd || 0;
+      const minUd = x.cant>0 ? x.min/x.cant : 0;
+      const vs = media>0 ? (minUd/media-1)*100 : 0;
+      peso += x.min; d += vs*x.min;
+      return { ...x, minUd, vs, media };
+    }).sort((a,b)=>b.min-a.min);
+    const dias = pe.fechas.size;
+    return { ...pe, detalle, dias, debia: dias*jor, media: u?.jornada==="media",
+      vsMedia: peso>0 ? d/peso : 0 };
+  }).sort((a,b)=>a.vsMedia-b.vsMedia);
+
+  // ── Totales
+  const T = bloques.reduce((a,b)=>({ uds:a.uds+b.uds, plan:a.plan+b.plan,
+    venta:a.venta+b.venta, coste:a.coste+b.coste, costeObj:a.costeObj+b.costeObj }),
+    {uds:0,plan:0,venta:0,coste:0,costeObj:0});
+  const perdidaMat = materiasCons.reduce((a,m)=>a+Math.max(0,m.coste),0);
+
+  const colR = (r,obj) => r>=obj ? C.green : r>=obj-5 ? C.amber : C.red;
+  const Sec = ({ children }) => (
+    <div style={{fontSize:12,letterSpacing:0.6,textTransform:"uppercase",color:C.mutedD,fontWeight:800,margin:"20px 0 10px"}}>{children}</div>
+  );
+  const Fila = ({ l, v, col, sub }) => (
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:10,padding:"7px 0",fontSize:14}}>
+      <span style={{color:C.mutedD,minWidth:0}}>{l}{sub && <div style={{fontSize:12,color:C.muted}}>{sub}</div>}</span>
+      <b style={{flexShrink:0,color:col||C.text,fontSize:15}}>{v}</b>
+    </div>
+  );
+
+  const atajos = [["7 días",7],["30 días",30],["90 días",90]];
+
+  return (
+    <div style={{background:C.bg,minHeight:"100vh",paddingBottom:40}}>
+      <Header title="INFORME ENTRE FECHAS" onBack={onBack} sub={`${fechaES(desde)} – ${fechaES(hasta)}`}/>
+      <div style={{padding:14}}>
+
+        {/* FECHAS Y CENTRO */}
+        <Card style={{marginBottom:14}}>
+          <div style={{display:"flex",gap:8,marginBottom:10}}>
+            {atajos.map(([t,n])=>(
+              <button key={t} onClick={()=>{ setDesde(haceDias(n)); setHasta(hoy); }}
+                style={{flex:1,minHeight:40,borderRadius:10,border:`1.5px solid ${C.border}`,background:"#fff",
+                  fontFamily:F.h,fontWeight:700,fontSize:13,color:C.text,cursor:"pointer"}}>{t}</button>
+            ))}
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+            <div><div style={{fontSize:11,fontWeight:800,color:C.mutedD,marginBottom:4}}>DESDE</div>
+              <input type="date" value={desde} max={hasta} onChange={e=>setDesde(e.target.value)}
+                style={{width:"100%",height:44,borderRadius:10,border:`1.5px solid ${C.border}`,padding:"0 10px",fontSize:15,color:C.text,background:"#fff"}}/></div>
+            <div><div style={{fontSize:11,fontWeight:800,color:C.mutedD,marginBottom:4}}>HASTA</div>
+              <input type="date" value={hasta} min={desde} max={hoy} onChange={e=>setHasta(e.target.value)}
+                style={{width:"100%",height:44,borderRadius:10,border:`1.5px solid ${C.border}`,padding:"0 10px",fontSize:15,color:C.text,background:"#fff"}}/></div>
+          </div>
+          {centros.length>1 && (
+            <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:10}}>
+              {centros.map(c=>(
+                <button key={c.id} onClick={()=>setCentroId(c.id)}
+                  style={{minHeight:40,padding:"0 14px",borderRadius:20,cursor:"pointer",fontFamily:F.h,fontWeight:800,fontSize:13,
+                    background: centroId===c.id?C.navy:"#fff", border:`2px solid ${centroId===c.id?C.navy:C.border}`,
+                    color: centroId===c.id?"#fff":C.text}}>{c.nombre}</button>
+              ))}
+            </div>
+          )}
+        </Card>
+
+        {bloques.length===0 ? (
+          <div style={{textAlign:"center",padding:"36px 20px"}}>
+            <div style={{fontSize:44,marginBottom:10}}>📊</div>
+            <div style={{fontFamily:F.h,fontWeight:800,fontSize:17,color:C.text,marginBottom:6}}>
+              No hay turnos cerrados en estas fechas
+            </div>
+            <div style={{fontSize:14,color:C.mutedD,lineHeight:1.6}}>
+              {fuera>0
+                ? <>Hay {fuera} parte{fuera!==1?"s":""} de líneas, pero su turno no se ha cerrado. El informe solo cuenta lo que tiene informe de turno.</>
+                : "Prueba con otro rango o con el otro centro."}
+            </div>
+          </div>
+        ) : (<>
+          {/* RESUMEN DE CABECERA */}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:6}}>
+            {[[num(T.uds), `de ${num(T.plan)} uds`, T.plan>0&&T.uds/T.plan<0.85?C.red:C.text],
+              [eur(T.venta), "ventas", C.text],
+              [eur(T.venta-T.coste), "beneficio", (T.venta-T.coste)>=0?C.green:C.red]].map(([n,l,col],i)=>(
+              <div key={i} style={{background:"#fff",border:`2px solid ${C.border}`,borderRadius:14,padding:"12px 8px",textAlign:"center"}}>
+                <div style={{fontFamily:F.h,fontWeight:900,fontSize:20,color:col,lineHeight:1.1}}>{n}</div>
+                <div style={{fontSize:11.5,color:C.mutedD,marginTop:3,fontWeight:600}}>{l}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{fontSize:12,color:C.mutedD,marginBottom:4,lineHeight:1.6}}>
+            {nDias} día{nDias!==1?"s":""} · {cierresR.length} turno{cierresR.length!==1?"s":""} cerrado{cierresR.length!==1?"s":""} · {bloques.length} producto{bloques.length!==1?"s":""}
+            <div>Solo entra lo de turnos cerrados.</div>
+          </div>
+          {fuera>0 && (
+            <div style={{background:C.amberBg,border:`2px solid ${C.amber}`,borderRadius:12,padding:"11px 13px",
+              marginBottom:12,fontSize:13.5,color:C.amber,fontWeight:700,lineHeight:1.55}}>
+              ⚠️ {fuera} parte{fuera!==1?"s":""} fuera del informe: su turno no está cerrado.
+              <div style={{fontSize:12.5,fontWeight:600,color:C.mutedD,marginTop:3}}>
+                Ciérralos desde la pantalla de fábrica y vuelve a mirar.
+              </div>
+            </div>
+          )}
+
+          {/* ── PRODUCTO A PRODUCTO ── */}
+          {bloques.map((b,i)=>(
+            <div key={i} style={{background:"#fff",border:`3px solid ${b.benef>=0?C.border:C.red}`,borderRadius:20,padding:16,marginBottom:14}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:10,marginBottom:4}}>
+                <b style={{fontSize:19,lineHeight:1.2,minWidth:0}}>{b.nombre}</b>
+                <b style={{flexShrink:0,fontSize:24,color:C.text}}>{num(b.uds)}<span style={{fontSize:13,color:C.mutedD,fontWeight:600}}> uds</span></b>
+              </div>
+              <div style={{fontSize:13,color:C.mutedD,marginBottom:12}}>
+                de {num(b.plan)} previstas{b.plan>0 && ` · ${Math.round(b.uds/b.plan*100)}%`}
+              </div>
+
+              {/* ECONÓMICO */}
+              <div style={{background:C.card2,borderRadius:12,padding:"10px 13px",marginBottom:10}}>
+                <div style={{fontSize:11.5,fontWeight:800,color:C.mutedD,letterSpacing:0.4,marginBottom:2}}>💶 PARTE ECONÓMICA</div>
+                {b.udsEco>0 ? (<>
+                  <Fila l="Se vende a" v={`${b.ventaUd.toFixed(2)} €`}/>
+                  <Fila l="Debería costar" v={`${b.costeObjUd.toFixed(2)} €`}/>
+                  <Fila l="Ha costado" v={`${b.costeUd.toFixed(2)} €`}
+                    col={b.costeUd>b.ventaUd?C.red : b.costeUd>b.costeObjUd*1.05?C.amber:C.text}/>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:10,
+                    borderTop:`1px solid ${C.border}`,marginTop:5,paddingTop:7}}>
+                    <b style={{fontSize:14}}>Deja {(b.ventaUd-b.costeUd).toFixed(2)} € cada una</b>
+                    <b style={{flexShrink:0,fontSize:19,color:b.benef>=0?C.green:C.red}}>
+                      {b.benef>=0?"+":"−"} {eur(Math.abs(b.benef))}</b>
+                  </div>
+                </>) : (
+                  <div style={{fontSize:13,color:C.mutedD,paddingTop:6,lineHeight:1.5}}>
+                    Sin datos económicos: los turnos de este producto no se han cerrado en estas fechas.
+                  </div>
+                )}
+              </div>
+
+              {/* MATERIA PRIMA */}
+              {b.materias.length>0 && (
+                <div style={{background:C.card2,borderRadius:12,padding:"10px 13px",marginBottom:10}}>
+                  <div style={{fontSize:11.5,fontWeight:800,color:C.mutedD,letterSpacing:0.4,marginBottom:6}}>📦 MATERIA PRIMA</div>
+                  {b.materias.map((m,k)=>(
+                    <div key={k} style={{padding:"7px 0",borderTop:k>0?`1px solid ${C.border}`:"none"}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:10}}>
+                        <span style={{minWidth:0}}>
+                          <b style={{fontSize:14.5}}>{m.nombre}</b>
+                          <div style={{fontSize:12,color:C.mutedD,marginTop:2}}>
+                            tocaba {num(Math.round(m.toca))} m · gastados {num(Math.round(m.gast))} m
+                            {Math.abs(m.dif)>1 && <b style={{color:m.dif>0?C.red:C.green}}> · {num(Math.abs(Math.round(m.dif)))} m de {m.dif>0?"más":"menos"}{Math.abs(m.coste)>1?` (${eur(Math.abs(m.coste))})`:""}</b>}
+                          </div>
+                          {m.lotes.length>1 && (
+                            <div style={{fontSize:11.5,color:C.mutedD,marginTop:2}}>
+                              {m.lotes.map(l=>`${l.lote} ${Math.round(l.r)}%`).join(" · ")}
+                            </div>
+                          )}
+                        </span>
+                        <b style={{flexShrink:0,textAlign:"right",color:colR(m.r,m.obj),fontSize:17}}>
+                          {Math.round(m.r)}%
+                          <div style={{fontSize:11,color:C.mutedD,fontWeight:600}}>obj {m.obj}%</div>
+                        </b>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* PROCESADOS */}
+              {b.procs.length>0 && (
+                <div style={{background:C.card2,borderRadius:12,padding:"10px 13px"}}>
+                  <div style={{fontSize:11.5,fontWeight:800,color:C.mutedD,letterSpacing:0.4,marginBottom:6}}>👥 PROCESADOS · OPERARIOS</div>
+                  {b.procs.map((pr2,k)=>{
+                    const ratio = pr2.ficha>0 ? pr2.minUd/pr2.ficha : null;
+                    const col = ratio==null?C.text : ratio<=1.1?C.green : ratio<=1.5?C.amber : C.red;
+                    return (
+                      <div key={k} style={{padding:"8px 0",borderTop:k>0?`1px solid ${C.border}`:"none"}}>
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:10}}>
+                          <span style={{minWidth:0}}>
+                            <b style={{fontSize:14}}>{pr2.nombre}</b>
+                            <div style={{fontSize:12,color:C.mutedD,marginTop:2}}>
+                              {num(pr2.cant)} uds · {num(Math.round(pr2.min))} min
+                            </div>
+                          </span>
+                          <b style={{flexShrink:0,textAlign:"right",color:col,fontSize:16}}>
+                            {pr2.minUd.toFixed(2)}
+                            <div style={{fontSize:11,color:C.mutedD,fontWeight:600}}>
+                              min/ud{pr2.ficha>0?` · ficha ${pr2.ficha}`:""}</div>
+                          </b>
+                        </div>
+                        {pr2.gente.map((g,j)=>(
+                          <div key={j} style={{display:"flex",justifyContent:"space-between",gap:10,
+                            fontSize:12.5,color:C.mutedD,padding:"3px 0 0 10px"}}>
+                            <span style={{minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                              {j===0&&pr2.gente.length>1?"🥇 ":""}{g.nombre} · {num(g.cant)} uds</span>
+                            <b style={{flexShrink:0,color: g.minUd<=pr2.minUd?C.green:C.amber}}>{g.minUd.toFixed(2)}</b>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          ))}
+
+          {/* ── RESUMEN GENERAL ── */}
+          <div style={{background:C.navy,borderRadius:18,padding:"18px 20px",marginTop:22,marginBottom:14,textAlign:"center"}}>
+            <div style={{fontSize:12,color:"rgba(255,255,255,0.65)",fontWeight:700,letterSpacing:0.6}}>RESUMEN GENERAL</div>
+            <div style={{fontFamily:F.h,fontWeight:900,fontSize:22,color:"#fff",marginTop:4}}>
+              {fechaES(desde)} – {fechaES(hasta)}
+            </div>
+            <div style={{fontSize:14,color:"rgba(255,255,255,0.75)",marginTop:3}}>
+              {num(T.uds)} uds · {eur(T.venta)} de ventas · {eur(T.venta-T.coste)} de beneficio
+            </div>
+          </div>
+
+          <Sec>📦 Materias primas · las que más cuestan</Sec>
+          <Card style={{marginBottom:14}}>
+            {materiasCons.map((m,i)=>(
+              <div key={i} style={{padding:"11px 0",borderBottom:i<materiasCons.length-1?`1px solid ${C.card2}`:"none"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:10}}>
+                  <span style={{minWidth:0}}>
+                    <b style={{fontSize:15}}>{i+1}. {m.nombre}</b>
+                    <div style={{fontSize:12,color:C.mutedD,marginTop:2}}>
+                      {num(Math.round(m.gast))} m en {[...m.productos].join(", ")}
+                    </div>
+                  </span>
+                  <span style={{flexShrink:0,textAlign:"right"}}>
+                    <b style={{fontSize:18,color:colR(m.r,m.obj)}}>{Math.round(m.r)}%</b>
+                    <div style={{fontSize:11.5,color:C.mutedD,fontWeight:600}}>obj {m.obj}%</div>
+                  </span>
+                </div>
+                <div style={{height:8,background:C.card2,borderRadius:4,overflow:"hidden",marginTop:6}}>
+                  <div style={{width:Math.min(100,m.r)+"%",height:"100%",background:colR(m.r,m.obj),borderRadius:4}}/>
+                </div>
+                {Math.abs(m.coste)>1 && (
+                  <div style={{fontSize:12.5,fontWeight:700,marginTop:5,color:m.coste>0?C.red:C.green}}>
+                    {num(Math.abs(Math.round(m.gast-m.toca)))} m de {m.coste>0?"más":"menos"} · {eur(Math.abs(m.coste))}
+                  </div>
+                )}
+                {m.lotes.length>1 && (() => {
+                  const otros = m.lotes.slice(1);
+                  const media = otros.reduce((a,x)=>a+x.r,0)/otros.length;
+                  return media - m.lotes[0].r >= 8 ? (
+                    <div style={{fontSize:12.5,color:C.mutedD,marginTop:4,lineHeight:1.5}}>
+                      Lote <b style={{color:C.text}}>{m.lotes[0].lote}</b> al {Math.round(m.lotes[0].r)}%; los demás al {Math.round(media)}%. <b>Es el lote.</b>
+                    </div>
+                  ) : null;
+                })()}
+              </div>
+            ))}
+            {perdidaMat>1 && (
+              <div style={{background:C.redBg,borderRadius:11,padding:"11px 13px",marginTop:10,
+                fontSize:13.5,color:C.red,fontWeight:700}}>
+                Materia gastada de más en el periodo: {eur(perdidaMat)}
+              </div>
+            )}
+          </Card>
+
+          <Sec>👥 Empleados · en todo el periodo</Sec>
+          <Card>
+            {empleados.map((pe,i)=>{
+              const h = pe.min/60, deb = pe.debia/60;
+              const colH = deb>0 && h/deb>=0.95 ? C.green : C.amber;
+              const colV = pe.vsMedia<=-10?C.green : pe.vsMedia>=10?C.red : C.mutedD;
+              return (
+                <div key={i} style={{padding:"13px 0",borderBottom:i<empleados.length-1?`1px solid ${C.card2}`:"none"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:10,marginBottom:6}}>
+                    <span style={{minWidth:0}}>
+                      <b style={{fontSize:16}}>{i===0&&empleados.length>1?"🥇 ":""}{pe.nombre}</b>
+                      <div style={{fontSize:12.5,color:C.mutedD,marginTop:2}}>
+                        <b style={{color:colH}}>{h.toFixed(1)} h</b> de {deb.toFixed(1)} · {pe.dias} día{pe.dias!==1?"s":""}{pe.media?" · media jornada":""}
+                      </div>
+                    </span>
+                    <b style={{flexShrink:0,fontSize:18,color:colV}}>{pe.vsMedia>0?"+":""}{Math.round(pe.vsMedia)}%
+                      <div style={{fontSize:10.5,color:C.mutedD,fontWeight:700}}>VS MEDIA</div></b>
+                  </div>
+                  {pe.detalle.map((d,k)=>(
+                    <div key={k} style={{display:"flex",justifyContent:"space-between",gap:10,fontSize:12.5,padding:"3px 0 3px 10px"}}>
+                      <span style={{color:C.mutedD,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                        {d.nombre} · {num(d.cant)} uds</span>
+                      <span style={{flexShrink:0}}>
+                        <b style={{color:C.text}}>{d.minUd.toFixed(2)}</b>
+                        <span style={{color:C.muted}}> / {d.media.toFixed(2)}</span>
+                        <b style={{marginLeft:6,color: d.vs<=-10?C.green : d.vs>=10?C.red : C.mutedD}}>
+                          {d.vs>0?"+":""}{Math.round(d.vs)}%</b>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
+            <div style={{fontSize:12.5,color:C.mutedD,lineHeight:1.55,marginTop:10}}>
+              Las horas son las anotadas en tareas, comparadas con los días que aparece × su jornada.
+              En cada proceso: lo suyo / la media de todos · el % contra esa media.
+            </div>
+          </Card>
+        </>)}
+      </div>
+    </div>
+  );
+}
+
 function InformeSemanalScreen({ onBack, centros, productos, mps, procesos, usuarios, motivos=[] }) {
   const [prods]   = useCol("producciones", "fecha");
   const [cierres] = useCol("cierres_turno", "fecha");
@@ -10622,6 +11087,7 @@ function Home({ perfil, onGo, onLogout, counts, ordenes=[], producciones=[], pro
     { id:"planificacion", grupo:"proc", icon:"📅", bg:"#EEF2FF", label:"Planificación", sub:"Mes · semana · cuadre · cierre", roles:["gerencia","sup_fabrica"] },
     { id:"cierres",   grupo:"proc", icon:"🔒", bg:"#F0FDF4", label:"Cierres de turno",    sub:"Consulta y reenvío de informes",     roles:["gerencia","sup_fabrica","sup_oficina"] },
     { id:"semanal",   grupo:"proc", icon:"📊", bg:"#EFF6FF", label:"Informe semanal",     sub:"Materias, procesos, empleados, paradas", roles:["gerencia","sup_fabrica","sup_oficina"] },
+    { id:"rango",     grupo:"proc", icon:"📈", bg:"#EFF6FF", label:"Informe entre fechas", sub:"Producto a producto y consolidado",      roles:["gerencia","sup_fabrica","sup_oficina"] },
     { id:"terminal",  grupo:"proc", icon:"🖥️", bg:"#ECFDF5", label:"Terminal de Planta",   sub:"Pantalla táctil del obrador",        roles:["gerencia","sup_fabrica","sup_oficina","operario"] },
     { id:"ordenes",   grupo:"proc", icon:"📋", bg:"#ECFDF5", label:"Órdenes de Producción", sub:"Planificar y registrar",     roles:["gerencia","sup_fabrica","sup_oficina"] },
     { id:"diario",    grupo:"proc", icon:"📖", bg:"#EFF6FF", label:"Diario de Fabricación", sub:"El parte oficial del día",          roles:["gerencia","sup_fabrica","sup_oficina"] },
@@ -10819,6 +11285,8 @@ export default function App() {
       {view==="home"      && <Home perfil={perfil} onGo={setView} onLogout={()=>signOut(auth)} counts={counts} ordenes={ordenesRoot} producciones={produccionesRoot} productos={productos}/>}
       {view==="moldes"    && <MoldesScreen onBack={back} productos={productos}/>}
       {view==="cierres"   && <CierresScreen onBack={back} centros={centros} usuarios={usuarios} perfil={perfil}/>}
+      {view==="rango"     && <InformeRangoScreen onBack={back} centros={centros} productos={productos}
+        mps={mps} procesos={procesos} usuarios={usuarios} turnos={turnos} perfil={perfil}/>}
       {view==="semanal"   && <InformeSemanalScreen onBack={back} centros={centros} productos={productos}
         mps={mps} procesos={procesos} usuarios={usuarios} motivos={motivos}/>}
       {view==="terminal"  && <TerminalPlanta onBack={back} perfil={perfil} productos={productos} lineas={lineas}
