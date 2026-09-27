@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.46.0";
+const APP_VERSION = "v4.47.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -8064,9 +8064,13 @@ function InformeRangoScreen({ onBack, centros, productos, mps, procesos, usuario
     const x = tocar(pid);
     const u = toNum(z.uds);
     x.udsEco   += u;
-    x.venta    += toNum(z.venta_ud) * u;
     x.coste    += toNum(z.coste_ud) * u;
     x.costeObj += (toNum(z.coste_obj_ud) || toNum(z.coste_ud)) * u;
+    // El precio de venta se toma de la ficha de hoy, no del que guardó cada cierre:
+    // un turno cerrado antes de ponerle precio guardó 0 y hundía la media.
+    const pvGuardado = toNum(z.venta_ud);
+    if (Math.abs(pvGuardado - toNum(x.p?.precio_venta)) > 0.005) x.pvDistinto = true;
+    if (pvGuardado <= 0) x.udsSinPrecio = (x.udsSinPrecio||0) + u;
   }));
 
   const bloques = Object.values(acum).map(x => {
@@ -8082,11 +8086,13 @@ function InformeRangoScreen({ onBack, centros, productos, mps, procesos, usuario
       gente: Object.values(pr2.gente).map(g=>({ ...g, minUd: g.cant>0 ? g.min/g.cant : 0 }))
         .sort((a,b)=>a.minUd-b.minUd),
     })).sort((a,b)=>b.min-a.min);
-    const benef = x.venta - x.coste;
-    return { ...x, materias, procs, benef,
-      ventaUd: x.udsEco>0 ? x.venta/x.udsEco : toNum(x.p?.precio_venta),
+    const ventaUd = toNum(x.p?.precio_venta);        // el de la ficha, siempre
+    const venta = ventaUd * x.udsEco;
+    const benef = venta - x.coste;
+    return { ...x, materias, procs, venta, benef, ventaUd,
       costeUd: x.udsEco>0 ? x.coste/x.udsEco : 0,
-      costeObjUd: x.udsEco>0 ? x.costeObj/x.udsEco : 0 };
+      costeObjUd: x.udsEco>0 ? x.costeObj/x.udsEco : 0,
+      sinPrecio: !(ventaUd>0) };
   }).sort((a,b)=>b.uds-a.uds);
 
   // ── CONSOLIDADO ────────────────────────────────────────────
@@ -8365,7 +8371,8 @@ function InformeRangoScreen({ onBack, centros, productos, mps, procesos, usuario
               <div style={{background:C.card2,borderRadius:12,padding:"10px 13px",marginBottom:10}}>
                 <div style={{fontSize:11.5,fontWeight:800,color:C.mutedD,letterSpacing:0.4,marginBottom:2}}>💶 PARTE ECONÓMICA</div>
                 {b.udsEco>0 ? (<>
-                  <Fila l="Se vende a" v={`${b.ventaUd.toFixed(2)} €`}/>
+                  <Fila l="Se vende a" v={b.ventaUd>0 ? `${b.ventaUd.toFixed(2)} €` : "sin precio"}
+                    col={b.ventaUd>0?C.text:C.red} sub="de la ficha del producto"/>
                   <Fila l="Debería costar" v={`${b.costeObjUd.toFixed(2)} €`}/>
                   <Fila l="Ha costado" v={`${b.costeUd.toFixed(2)} €`}
                     col={b.costeUd>b.ventaUd?C.red : b.costeUd>b.costeObjUd*1.05?C.amber:C.text}/>
