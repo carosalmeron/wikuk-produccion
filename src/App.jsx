@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.44.0";
+const APP_VERSION = "v4.46.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -8149,6 +8149,44 @@ function InformeRangoScreen({ onBack, centros, productos, mps, procesos, usuario
     venta:a.venta+b.venta, coste:a.coste+b.coste, costeObj:a.costeObj+b.costeObj }),
     {uds:0,plan:0,venta:0,coste:0,costeObj:0});
   const perdidaMat = materiasCons.reduce((a,m)=>a+Math.max(0,m.coste),0);
+  // Cada lote usado en el periodo, para saber cuál ha ido mejor y cuál peor
+  const lotesCons = [];
+  materiasCons.forEach(m => m.lotes.forEach(l => {
+    if (l.gast <= 0) return;
+    const salida = l.gast * l.r/100;
+    const toca = m.obj>0 ? salida/(m.obj/100) : salida;
+    lotesCons.push({ materia: m.nombre, lote: l.lote, gast: l.gast, r: l.r, obj: m.obj,
+      precio: m.precio, dif: l.r - m.obj, coste: (l.gast - toca) * m.precio, productos: m.productos });
+  }));
+  const lotesOrd = [...lotesCons].sort((a,b)=>b.dif-a.dif);
+  const mejorLote = lotesOrd[0] || null;
+  const peorLote  = lotesOrd.length>1 ? lotesOrd[lotesOrd.length-1] : null;
+  // Si el peor hubiera ido como el mejor: metros y euros que se ahorraban
+  const ahorroLote = (peorLote && mejorLote && mejorLote.r > peorLote.r)
+    ? { m: peorLote.gast - peorLote.gast*peorLote.r/mejorLote.r,
+        e: (peorLote.gast - peorLote.gast*peorLote.r/mejorLote.r) * peorLote.precio } : null;
+
+  // Lo que cuesta que cada uno no vaya al ritmo del mejor de ese proceso
+  const mejorRitmo = {};
+  Object.entries(mediaProc).forEach(([pid,mp2]) => { mejorRitmo[pid] = null; });
+  empleados.forEach(pe => pe.detalle.forEach(d => {
+    if (mejorRitmo[d.pid]==null || d.minUd < mejorRitmo[d.pid]) mejorRitmo[d.pid] = d.minUd;
+  }));
+  const empCoste = empleados.map(pe => {
+    let minDeMas = 0;
+    pe.detalle.forEach(d => {
+      const mejor = mejorRitmo[d.pid];
+      if (mejor!=null && d.minUd > mejor) minDeMas += (d.minUd - mejor) * d.cant;
+    });
+    return { ...pe, minDeMas, coste: minDeMas/60*TARIFA_MO };
+  }).sort((a,b)=>a.coste-b.coste);
+  const mejoresEmp = empCoste.slice(0,2);
+  const peoresEmp  = empCoste.length>3 ? empCoste.slice(-2).reverse() : [];
+  const costeLentitud = empCoste.reduce((a,x)=>a+x.coste,0);
+
+  // Lo que ha costado de más de lo que debería, sobre lo que sí se ha fabricado
+  const desvioT = T.coste - T.costeObj;
+  const udsEcoT = bloques.reduce((a,b)=>a+b.udsEco,0);
 
   const colR = (r,obj) => r>=obj ? C.green : r>=obj-5 ? C.amber : C.red;
   const Sec = ({ children }) => (
@@ -8211,9 +8249,11 @@ function InformeRangoScreen({ onBack, centros, productos, mps, procesos, usuario
           </div>
         ) : (<>
           {/* RESUMEN DE CABECERA */}
-          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:6}}>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10,marginBottom:6}}>
             {[[num(T.uds), `de ${num(T.plan)} uds`, T.plan>0&&T.uds/T.plan<0.85?C.red:C.text],
               [eur(T.venta), "ventas", C.text],
+              [(desvioT>=0?"− ":"+ ")+eur(Math.abs(desvioT)),
+                desvioT>=0 ? "ineficiencia" : "ahorro", desvioT>=0?C.red:C.green],
               [eur(T.venta-T.coste), "beneficio", (T.venta-T.coste)>=0?C.green:C.red]].map(([n,l,col],i)=>(
               <div key={i} style={{background:"#fff",border:`2px solid ${C.border}`,borderRadius:14,padding:"12px 8px",textAlign:"center"}}>
                 <div style={{fontFamily:F.h,fontWeight:900,fontSize:20,color:col,lineHeight:1.1}}>{n}</div>
@@ -8224,6 +8264,12 @@ function InformeRangoScreen({ onBack, centros, productos, mps, procesos, usuario
           <div style={{fontSize:12,color:C.mutedD,marginBottom:4,lineHeight:1.6}}>
             {nDias} día{nDias!==1?"s":""} · {cierresR.length} turno{cierresR.length!==1?"s":""} cerrado{cierresR.length!==1?"s":""} · {bloques.length} producto{bloques.length!==1?"s":""}
             <div>Solo entra lo de turnos cerrados.</div>
+            {Math.abs(desvioT)>1 && udsEcoT>0 && (
+              <div style={{color:desvioT>=0?C.red:C.green,fontWeight:700,marginTop:2}}>
+                {desvioT>=0?"Ha costado":"Ha costado menos de lo previsto:"} {(Math.abs(desvioT)/udsEcoT).toFixed(2)} €
+                {desvioT>=0?" de más":" de menos"} por unidad · {(T.coste/udsEcoT).toFixed(2)} € en vez de {(T.costeObj/udsEcoT).toFixed(2)} €
+              </div>
+            )}
           </div>
           {fuera>0 && (
             <div style={{background:C.amberBg,border:`2px solid ${C.amber}`,borderRadius:12,padding:"11px 13px",
@@ -8234,6 +8280,75 @@ function InformeRangoScreen({ onBack, centros, productos, mps, procesos, usuario
               </div>
             </div>
           )}
+
+          {/* ── LO MEJOR Y LO PEOR, ANTES DEL DETALLE ── */}
+          {(mejorLote || mejoresEmp.length>0) && (() => {
+            const Mini = ({ tit, sub, val, col, bg }) => (
+              <div style={{background:bg,borderRadius:12,padding:"10px 12px",minWidth:0}}>
+                <div style={{fontSize:10,fontWeight:800,color:col,letterSpacing:0.3}}>{tit}</div>
+                <div style={{fontSize:14,fontWeight:800,color:C.text,marginTop:2,lineHeight:1.3,
+                  overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{sub}</div>
+                <div style={{fontSize:16,fontWeight:900,color:col,lineHeight:1.25,marginTop:1}}>{val}</div>
+              </div>
+            );
+            return (
+              <Card style={{marginBottom:14}}>
+                {mejorLote && (
+                  <div style={{marginBottom: mejoresEmp.length?14:0}}>
+                    <div style={{fontSize:11.5,fontWeight:800,color:C.mutedD,letterSpacing:0.4,marginBottom:7}}>📦 MATERIA PRIMA · LO MEJOR Y LO PEOR</div>
+                    <div style={{display:"grid",gridTemplateColumns: peorLote?"1fr 1fr":"1fr",gap:8}}>
+                      <Mini tit="🥇 LA MEJOR" col={C.green} bg={C.greenBg}
+                        sub={`${mejorLote.materia} · ${mejorLote.lote}`}
+                        val={`${Math.round(mejorLote.r)}%  ${mejorLote.dif>=0?"+":""}${Math.round(mejorLote.dif)} pts`}/>
+                      {peorLote && <Mini tit="⚠️ LA PEOR" col={C.red} bg={C.redBg}
+                        sub={`${peorLote.materia} · ${peorLote.lote}`}
+                        val={`${Math.round(peorLote.r)}%  ${peorLote.dif>=0?"+":""}${Math.round(peorLote.dif)} pts`}/>}
+                    </div>
+                    {peorLote && peorLote.coste>1 && (
+                      <div style={{fontSize:13,color:C.text,lineHeight:1.6,marginTop:7}}>
+                        Usar <b>{peorLote.lote}</b> ha costado <b style={{color:C.red}}>{eur(peorLote.coste)}</b> de más
+                        sobre su objetivo{ahorroLote && ahorroLote.e>1 && <> · al ritmo del mejor se habrían ahorrado <b style={{color:C.text}}>{num(Math.round(ahorroLote.m))} m ({eur(ahorroLote.e)})</b></>}.
+                      </div>
+                    )}
+                    {perdidaMat>1 && (
+                      <div style={{fontSize:12.5,color:C.mutedD,marginTop:3}}>
+                        Entre todas las materias, {eur(perdidaMat)} de más en el periodo.
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {mejoresEmp.length>0 && (
+                  <div style={{borderTop: mejorLote?`1px solid ${C.card2}`:"none", paddingTop: mejorLote?12:0}}>
+                    <div style={{fontSize:11.5,fontWeight:800,color:C.mutedD,letterSpacing:0.4,marginBottom:7}}>👥 EMPLEADOS · LOS QUE MÁS Y MENOS CUESTAN</div>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                      {mejoresEmp.map((pe,i)=>(
+                        <Mini key={"m"+i} tit={i===0?"🥇 EL MEJOR":"🥈 SEGUNDO"} col={C.green} bg={C.greenBg}
+                          sub={pe.nombre} val={pe.coste<1 ? "marca el ritmo" : `${eur(pe.coste)} de más`}/>
+                      ))}
+                    </div>
+                    {peoresEmp.length>0 && (
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginTop:8}}>
+                        {peoresEmp.map((pe,i)=>(
+                          <Mini key={"p"+i} tit={i===0?"⚠️ EL QUE MÁS":"⚠️ EL SEGUNDO"} col={C.red} bg={C.redBg}
+                            sub={pe.nombre} val={`${eur(pe.coste)} · ${Math.round(pe.minDeMas)} min`}/>
+                        ))}
+                      </div>
+                    )}
+                    {costeLentitud>1 && (
+                      <div style={{fontSize:13,color:C.text,lineHeight:1.6,marginTop:7}}>
+                        Si todos fueran al ritmo del mejor en cada proceso, el periodo habría costado
+                        <b style={{color:C.red}}> {eur(costeLentitud)}</b> menos ({Math.round(costeLentitud/TARIFA_MO*60/60)} h de trabajo).
+                      </div>
+                    )}
+                    <div style={{fontSize:12,color:C.mutedD,marginTop:3,lineHeight:1.5}}>
+                      Cada uno comparado con el más rápido de <b>su mismo proceso</b>, no con una media general.
+                    </div>
+                  </div>
+                )}
+              </Card>
+            );
+          })()}
 
           {/* ── PRODUCTO A PRODUCTO ── */}
           {bloques.map((b,i)=>(
@@ -8281,9 +8396,18 @@ function InformeRangoScreen({ onBack, centros, productos, mps, procesos, usuario
                             {Math.abs(m.dif)>1 && <b style={{color:m.dif>0?C.red:C.green}}> · {num(Math.abs(Math.round(m.dif)))} m de {m.dif>0?"más":"menos"}{Math.abs(m.coste)>1?` (${eur(Math.abs(m.coste))})`:""}</b>}
                           </div>
                           {m.lotes.length>1 && (
-                            <div style={{fontSize:11.5,color:C.mutedD,marginTop:2}}>
-                              {m.lotes.map(l=>`${l.lote} ${Math.round(l.r)}%`).join(" · ")}
+                            <div style={{fontSize:11.5,marginTop:3,lineHeight:1.6}}>
+                              {m.lotes.map((l,j)=>(
+                                <span key={j} style={{marginRight:8,
+                                  color: j===m.lotes.length-1?C.green : j===0?C.red : C.mutedD,
+                                  fontWeight: j===0||j===m.lotes.length-1?700:400}}>
+                                  {j===m.lotes.length-1?"🥇 ":j===0?"⚠️ ":""}{l.lote} {Math.round(l.r)}%
+                                </span>
+                              ))}
                             </div>
+                          )}
+                          {m.lotes.length===1 && (
+                            <div style={{fontSize:11.5,color:C.mutedD,marginTop:2}}>lote {m.lotes[0].lote}</div>
                           )}
                         </span>
                         <b style={{flexShrink:0,textAlign:"right",color:colR(m.r,m.obj),fontSize:17}}>
@@ -8370,13 +8494,37 @@ function InformeRangoScreen({ onBack, centros, productos, mps, procesos, usuario
                   </div>
                 )}
                 {m.lotes.length>1 && (() => {
+                  const peor = m.lotes[0], mejor = m.lotes[m.lotes.length-1];
                   const otros = m.lotes.slice(1);
                   const media = otros.reduce((a,x)=>a+x.r,0)/otros.length;
-                  return media - m.lotes[0].r >= 8 ? (
-                    <div style={{fontSize:12.5,color:C.mutedD,marginTop:4,lineHeight:1.5}}>
-                      Lote <b style={{color:C.text}}>{m.lotes[0].lote}</b> al {Math.round(m.lotes[0].r)}%; los demás al {Math.round(media)}%. <b>Es el lote.</b>
+                  return (
+                    <div style={{marginTop:7}}>
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                        {[["🥇 MEJOR LOTE",mejor,C.green,C.greenBg],["⚠️ PEOR LOTE",peor,C.red,C.redBg]].map(([t,l,col,bg],k)=>(
+                          <div key={k} style={{background:bg,borderRadius:10,padding:"8px 10px"}}>
+                            <div style={{fontSize:10,fontWeight:800,color:col,letterSpacing:0.3}}>{t}</div>
+                            <div style={{fontSize:13.5,fontWeight:800,color:C.text,marginTop:2,
+                              overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{l.lote}</div>
+                            <div style={{fontSize:16,fontWeight:900,color:col,lineHeight:1.2}}>{Math.round(l.r)}%
+                              <span style={{fontSize:11,color:C.mutedD,fontWeight:600}}> · {num(Math.round(l.gast))} m</span></div>
+                          </div>
+                        ))}
+                      </div>
+                      {mejor.r - peor.r >= 5 && (
+                        <div style={{fontSize:12.5,color:C.mutedD,marginTop:5,lineHeight:1.5}}>
+                          {Math.round(mejor.r-peor.r)} puntos entre uno y otro.
+                          {media - peor.r >= 8
+                            ? <> Los demás van al {Math.round(media)}%: <b style={{color:C.text}}>el problema es ese lote</b>.</>
+                            : <> Con el {peor.lote} al ritmo del {mejor.lote} se habrían ahorrado <b style={{color:C.text}}>{num(Math.round(peor.gast - peor.gast*peor.r/mejor.r))} m</b>.</>}
+                        </div>
+                      )}
+                      {m.lotes.length>2 && (
+                        <div style={{fontSize:11.5,color:C.muted,marginTop:4}}>
+                          {m.lotes.length} lotes: {m.lotes.map(l=>`${l.lote} ${Math.round(l.r)}%`).join(" · ")}
+                        </div>
+                      )}
                     </div>
-                  ) : null;
+                  );
                 })()}
               </div>
             ))}
