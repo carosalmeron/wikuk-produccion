@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.47.0";
+const APP_VERSION = "v4.48.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -7491,8 +7491,14 @@ function CostesScreen({ onBack, centros }) {
 // PLANIFICAR · CENTRO NORMAL — producto y cantidad por día y turno.
 // El plan dice cuántas personas hacen falta; el cierre compara con las que hubo.
 // ═══════════════════════════════════════════════════════════════
-function PlanNormal({ centro, productos, semana, setSemana, planSem, guardarSem, onBack }) {
+function PlanNormal({ centro, productos, planes, onBack }) {
   const [modal, setModal] = useState(null);
+  const [semana, setSemana] = useState(isoWeek(new Date().toISOString().slice(0,10)));
+  const idSem = `${semana}__${centro?.id||""}`;
+  const planSem = planes.find(p => p.id === idSem) || { calendario: [] };
+  const guardarSem = (data) => save("planes_semana", idSem,
+    { semana, periodo: semana.slice(0,4)+"-"+String(Math.ceil(parseInt(semana.slice(6))/4.35)).padStart(2,"0"),
+      centro: centro?.id||"", ...data });
   const dias = diasDeSemana(semana);
   const nT = parseInt(centro?.turnos_abiertos)||2;
   const turnosC = Array.from({length:nT},(_,i)=>`T${i+1}`);
@@ -7531,6 +7537,36 @@ function PlanNormal({ centro, productos, semana, setSemana, planSem, guardarSem,
                 <b style={{fontSize:17,textTransform:"capitalize"}}>{nombreDia(f)} {f.slice(8)}</b>
                 <span style={{fontSize:13,color:C.mutedD}}>{num(delDia.reduce((a,x)=>a+toNum(x.cantidad),0))} uds</span>
               </div>
+              {(() => {
+                // Lo guardado con un turno que este centro no tiene: se enseña, no se esconde
+                const huerf = delDia.filter(x => !turnosC.includes(x.turno));
+                if (!huerf.length) return null;
+                return (
+                  <div style={{background:C.amberBg,border:`2px solid ${C.amber}`,borderRadius:12,padding:"10px 12px",marginBottom:8}}>
+                    <div style={{fontSize:12,fontWeight:800,color:C.amber,marginBottom:5}}>
+                      ⚠️ {huerf.length} producto{huerf.length!==1?"s":""} en un turno que este centro ya no tiene
+                    </div>
+                    {huerf.map((x,i)=>(
+                      <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,
+                        fontSize:13.5,padding:"5px 0"}}>
+                        <span style={{minWidth:0}}>{productos.find(z=>z.id===x.producto_id)?.nombre||"?"}
+                          <span style={{color:C.mutedD}}> · {x.turno||"sin turno"}</span></span>
+                        <span style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+                          <b>{num(x.cantidad)}</b>
+                          <button onClick={()=>{
+                              const resto = cal.filter(z => z!==x);
+                              guardarSem({ calendario: [...resto, { ...x, turno: turnosC[0] }] });
+                            }}
+                            style={{background:"#fff",border:`2px solid ${C.amber}`,color:C.amber,borderRadius:9,
+                              padding:"5px 10px",fontSize:12,fontWeight:800,cursor:"pointer"}}>→ {turnosC[0]}</button>
+                          <button onClick={()=>guardarSem({ calendario: cal.filter(z => z!==x) })}
+                            style={{background:"none",border:"none",color:C.red,fontSize:17,cursor:"pointer"}}>✕</button>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
               {turnosC.map(t=>{
                 const items = delDia.filter(x=>x.turno===t);
                 const pers = personasDe(items);
@@ -7716,8 +7752,7 @@ function PlanificacionScreen({ onBack, perfil, productos, mps, producciones, cen
   );
 
   if (centro?.tipo === "normal") {
-    return <PlanNormal centro={centro} productos={productos} semana={semana} setSemana={setSemana}
-      planSem={planSem} guardarSem={guardarSem} onBack={()=>setCentroId("")}/>;
+    return <PlanNormal centro={centro} productos={productos} planes={planesSemAll} onBack={()=>setCentroId("")}/>;
   }
 
   return (
