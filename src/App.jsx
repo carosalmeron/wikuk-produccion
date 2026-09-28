@@ -3,7 +3,7 @@
 // WIKUK PRODUCCIÓN 2.0 — FASE 1: Configuración maestra + Auth
 // Firebase: Auth (email/pass) + Firestore en tiempo real
 // ═══════════════════════════════════════════════════════════════════════════════
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { initializeApp, getApps, deleteApp } from "firebase/app";
 import {
   getAuth, initializeAuth, indexedDBLocalPersistence, browserLocalPersistence, inMemoryPersistence,
@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.48.1";
+const APP_VERSION = "v4.49.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -3000,7 +3000,9 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
   return <OrdenTrabajo ot={otSel} perfil={perfil} productos={productos} mps={mps} motivos={motivos}
     moldes={moldes} gente={gente} procesos={procesos} claveTurno={claveTurno} turno={turno} turnos={turnos} hoy={hoy}
     apoyosHoy={apoyos.filter(a=>a.fecha===hoy && (!centroId || !a.centro || a.centro===centroId))}
-    tareasOp={tareasOp.filter(t=>t.fecha===(otSel?.fecha||hoy) && t.turno_clave===(otSel?.turno||claveTurno) && t.linea===otSel?.linea)}
+    tareasOp={tareasOp.filter(t => t.fecha===(otSel?.fecha||hoy)
+      && t.turno_clave===(otSel?.turno||claveTurno)
+      && (t.linea===otSel?.linea || (t.producto_id && t.producto_id===otSel?.producto_id)))}
     onApoyo={diaVer ? null : ()=>setVista("apoyo")}
     onSalir={diaVer ? null : onBack}
     onVolver={()=>{ if (diaVer) { setDiaVer(""); setVista("inicio"); } else setVista("ordenes"); }}/>;
@@ -4135,20 +4137,30 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
   const [borradores] = useCol("borradores");
   const borrador = borradores.find(b => b.id === idBorrador);
 
-  // Lo que anotaron los operarios entra en las tareas (sin duplicar lo que ya esté)
-  const [opCargado, setOpCargado] = useState(false);
+  // Lo que anotan los operarios entra según va llegando: uno anota, el jefe abre y ya está.
+  // Se lleva la cuenta de cuáles se han metido para no repetirlos ni resucitar los borrados.
+  const opVistos = useRef(new Set());
   useEffect(() => {
-    if (opCargado || parte || !tareasOp.length) return;
-    setOpCargado(true);
+    if (parte || !tareasOp.length) return;
+    const pendientes = tareasOp.filter(t => t.id && !opVistos.current.has(t.id));
+    if (!pendientes.length) return;
+    pendientes.forEach(t => opVistos.current.add(t.id));
     setTareas(ts => {
-      const nuevas = tareasOp
-        .filter(t => !ts.some(z => z.persona_id===t.persona_id && z.proceso_id===t.proceso_id && toNum(z.cantidad)>0))
-        .map(t => ({ id: uid(), proceso_id: t.proceso_id, cantidad: toNum(t.cantidad), persona_id: t.persona_id, minutos: toNum(t.minutos), de_operario: true }));
-      // Las vacías de la ficha se quitan si ya hay una de operario del mismo proceso
-      const limpias = ts.filter(z => toNum(z.cantidad)>0 || !nuevas.some(n => n.proceso_id===z.proceso_id));
+      const nuevas = [];
+      let base = [...ts];
+      pendientes.forEach(t => {
+        // Si ya hay una fila de esa persona en ese proceso, se actualiza en vez de duplicar
+        const i = base.findIndex(z => z.persona_id===t.persona_id && z.proceso_id===t.proceso_id);
+        if (i >= 0) base[i] = { ...base[i], cantidad: toNum(t.cantidad), minutos: toNum(t.minutos), de_operario: true };
+        else nuevas.push({ id: uid(), proceso_id: t.proceso_id, cantidad: toNum(t.cantidad),
+          persona_id: t.persona_id, minutos: toNum(t.minutos), de_operario: true });
+      });
+      // La fila vacía que venía de la ficha se quita si ese proceso ya lo ha anotado alguien
+      const limpias = base.filter(z => toNum(z.cantidad)>0 || z.persona_id
+        || !nuevas.some(n => n.proceso_id===z.proceso_id));
       return [...limpias, ...nuevas];
     });
-  }, [tareasOp, parte, opCargado]);
+  }, [tareasOp, parte]);
 
   // Al abrir: si hay algo a medias y el parte no está cerrado, se recupera
   useEffect(() => {
