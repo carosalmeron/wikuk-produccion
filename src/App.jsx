@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.48.0";
+const APP_VERSION = "v4.48.1";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -7516,8 +7516,8 @@ function PlanNormal({ centro, productos, planes, onBack }) {
       : resto;
     guardarSem({ calendario: nuevo });
   };
-  const semAnt = () => { const l=lunesDeSemana(semana); l.setDate(l.getDate()-7); setSemana(isoWeek(l.toISOString().slice(0,10))); };
-  const semSig = () => { const l=lunesDeSemana(semana); l.setDate(l.getDate()+7); setSemana(isoWeek(l.toISOString().slice(0,10))); };
+  const semAnt = () => { const l=lunesDeSemana(semana); l.setDate(l.getDate()-7); setSemana(isoWeek(ymd(l))); };
+  const semSig = () => { const l=lunesDeSemana(semana); l.setDate(l.getDate()+7); setSemana(isoWeek(ymd(l))); };
 
   return (
     <div style={{background:C.bg,minHeight:"100vh",paddingBottom:40}}>
@@ -8821,8 +8821,8 @@ function InformeSemanalScreen({ onBack, centros, productos, mps, procesos, usuar
   const Nota = ({ children }) => <div style={{fontSize:12.5,color:C.mutedD,lineHeight:1.55,marginTop:8}}>{children}</div>;
   const colR = (r,obj) => r>=obj ? C.green : r>=obj-5 ? C.amber : C.red;
 
-  const semAnt = () => { const l=lunesDeSemana(semana); l.setDate(l.getDate()-7); setSemana(isoWeek(l.toISOString().slice(0,10))); };
-  const semSig = () => { const l=lunesDeSemana(semana); l.setDate(l.getDate()+7); setSemana(isoWeek(l.toISOString().slice(0,10))); };
+  const semAnt = () => { const l=lunesDeSemana(semana); l.setDate(l.getDate()-7); setSemana(isoWeek(ymd(l))); };
+  const semSig = () => { const l=lunesDeSemana(semana); l.setDate(l.getDate()+7); setSemana(isoWeek(ymd(l))); };
 
   return (
     <div style={{background:C.bg,minHeight:"100vh",paddingBottom:40}}>
