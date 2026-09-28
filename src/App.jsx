@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.49.1";
+const APP_VERSION = "v4.50.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -5404,6 +5404,7 @@ function ImportHistoricoScreen({ onBack, productos, mps, lineas, turnos }) {
 function AnaliticaScreen({ onBack, productos, mps, lineas, turnos, usuarios, centros }) {
   const [ordenes] = useCol("ordenes");
   const [producciones] = useCol("producciones");
+  const [cierresAn] = useCol("cierres_turno", "fecha");
   const [regsOp] = useCol("registros_operario");
   const [cfg] = useCol("config_costes");
   const [tab, setTab] = useState("dx");
@@ -5414,14 +5415,20 @@ function AnaliticaScreen({ onBack, productos, mps, lineas, turnos, usuarios, cen
 
   const centro = centros.find(c=>c.id===centroId) || centros[0];
   const estructura = cfg[0] && cfg[0].horas_persona_mes ? cfg[0].fijos_mensuales/cfg[0].horas_persona_mes : 2.45;
-  const tarifaCargada = (centro?.tarifa_mo||12.5) + estructura;
+  const tarifaCargada = (centro?.tarifa_mo||TARIFA_MO) + estructura;
   const prodMap = {}; productos.forEach(p=>prodMap[p.id]=p);
   const mpMap = {}; mps.forEach(m=>mpMap[m.id]=m);
   const linMap = {}; lineas.forEach(l=>linMap[l.id]=l);
   const centroDeParte = (p) => productos.find(z=>z.id===p.producto_id)?.centro || "";
+  // v4.50.0: mismas reglas que el informe entre fechas — solo turnos cerrados, sin reabiertas
+  const claveAn = (x) => x.turno_clave || (x.turno_id ? claveDeTurno(turnos, x.turno_id) : "?");
+  const turnosCerradosAn = new Set(cierresAn.map(c => `${c.fecha}|${claveAn(c)}`));
+  let fueraAn = 0;
   const P2 = producciones.filter(p=>{
     if (!p.fecha || !(p.cantidad>0)) return false;
     if (centroId && centroDeParte(p) !== centroId) return false;
+    if (p.reabierta) return false;
+    if (!turnosCerradosAn.has(`${p.fecha}|${claveAn(p)}`)) { fueraAn++; return false; }
     if (desde && p.fecha < desde) return false;
     if (hasta && p.fecha > hasta) return false;
     if (texto) {
@@ -5526,7 +5533,10 @@ function AnaliticaScreen({ onBack, productos, mps, lineas, turnos, usuarios, cen
   Object.values(grupos).forEach(g=>{
     const np = g.np||3;
     const udsTot = g.rows.reduce((s,p)=>s+p.cantidad,0)||1;
-    const costeDia = np*8*tarifaCargada;
+    // v4.50.0: horas de verdad (minutos anotados) si las hay; si no, jornada de 7,5 h
+    const minAnot = g.rows.reduce((a,p)=>a+toNum(p.minutos_totales),0);
+    const horasDia = minAnot>0 ? minAnot/60 : np*HORAS_JORNADA;
+    const costeDia = horasDia*tarifaCargada;
     g.rows.forEach(p=>{
       const pr = prodMap[p.producto_id];
       const real = costeDia*(p.cantidad/udsTot);
@@ -5579,7 +5589,7 @@ function AnaliticaScreen({ onBack, productos, mps, lineas, turnos, usuarios, cen
 
   return (
     <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
-      <Header title="📊 ANALÍTICA" onBack={onBack} sub={`${P2.length} partes · tarifa cargada ${tarifaCargada.toFixed(2)} €/h (MO ${centro?.tarifa_mo||"?"} + estructura ${estructura.toFixed(2)})`}/>
+      <Header title="📊 ANALÍTICA" onBack={onBack} sub={`${P2.length} partes cerrados${fueraAn?` · ${fueraAn} fuera (sin cerrar)`:""} · tarifa cargada ${tarifaCargada.toFixed(2)} €/h`}/>
       <div style={{padding:14}}>
         <FiltrosBar centros={centros} centroId={centroId} setCentroId={setCentroId}
           texto={texto} setTexto={setTexto} desde={desde} setDesde={setDesde} hasta={hasta} setHasta={setHasta}
@@ -5625,7 +5635,7 @@ function AnaliticaScreen({ onBack, productos, mps, lineas, turnos, usuarios, cen
           </div>
           <Card style={{marginBottom:10,background:C.card2,border:"none"}}>
             <div style={{fontSize:13,color:C.mutedD,lineHeight:1.7}}>
-              <b>La cuenta, simple:</b> si el plan es 100 sticks a 1 € y produces 50 con el mismo equipo, tu coste real es 2 €/ud. Aquí, cada periodo: lo previsto, lo producido, lo que costó el equipo, y el <b>resultado en €</b>.
+              <b>Ojo, esto no es beneficio.</b> Aquí se compara el <b>coste objetivo</b> (coste estándar de ficha × lo producido) con el <b>coste real</b> (horas anotadas × tarifa + exceso de materia). El número grande es <b>ahorro (+) o sobrecoste (−)</b>. Para ventas y margen, usa <b>📈 Informe entre fechas</b>. Solo entran partes de turnos <b>cerrados</b>.
             </div>
           </Card>
           {pgArr.map(([k,d])=>{
@@ -5648,8 +5658,8 @@ function AnaliticaScreen({ onBack, productos, mps, lineas, turnos, usuarios, cen
                     <div style={{width:Math.min(100,pctPlan)+"%",height:"100%",background:pctPlan>=95?C.green:pctPlan>=75?C.amber:C.red,borderRadius:4}}/></div>}
                 </div>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,marginTop:10,fontSize:12.5}}>
-                  <div style={{background:C.card2,borderRadius:10,padding:"8px 10px"}}><div style={{color:C.muted,fontSize:10.5}}>VALOR PRODUCIDO</div><b>{d.val.toFixed(0)} €</b></div>
-                  <div style={{background:C.card2,borderRadius:10,padding:"8px 10px"}}><div style={{color:C.muted,fontSize:10.5}}>COSTE EQUIPO+MP</div><b>{(d.coste+d.mp).toFixed(0)} €</b></div>
+                  <div style={{background:C.card2,borderRadius:10,padding:"8px 10px"}}><div style={{color:C.muted,fontSize:10.5}}>COSTE OBJETIVO</div><b>{d.val.toFixed(0)} €</b></div>
+                  <div style={{background:C.card2,borderRadius:10,padding:"8px 10px"}}><div style={{color:C.muted,fontSize:10.5}}>COSTE REAL</div><b>{(d.coste+d.mp).toFixed(0)} €</b></div>
                   <div style={{background:C.card2,borderRadius:10,padding:"8px 10px"}}><div style={{color:C.muted,fontSize:10.5}}>€/UD REAL·OBJ</div><b style={{color:cReal<=cObj?C.green:C.red}}>{cReal.toFixed(2)}</b><span style={{color:C.muted}}> · {cObj.toFixed(2)}</span></div>
                 </div>
               </Card>
