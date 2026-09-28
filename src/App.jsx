@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.49.0";
+const APP_VERSION = "v4.49.1";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -4168,7 +4168,19 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
     setBorradorCargado(true);
     if (borrador.total != null) setTotal(String(borrador.total));
     if (borrador.consumos) setConsumos(borrador.consumos);
-    if (borrador.tareas) setTareas(borrador.tareas);
+    // El borrador no sustituye: se funde con lo que ya han anotado los operarios
+    if (borrador.tareas) setTareas(ts => {
+      const clave = (t) => `${t.persona_id||""}|${t.proceso_id}`;
+      const delBorrador = borrador.tareas.map(t => ({ ...t, id: t.id || uid() }));
+      const yaPuestas = delBorrador.map(clave);
+      const conservar = ts.filter(t => (t.de_operario || toNum(t.cantidad)>0 || t.persona_id)
+        && !yaPuestas.includes(clave(t)));
+      // Las filas vacías de la ficha solo se quedan si nadie ha anotado ese proceso
+      const vacias = ts.filter(t => !t.de_operario && !toNum(t.cantidad) && !t.persona_id
+        && !delBorrador.some(z=>z.proceso_id===t.proceso_id)
+        && !conservar.some(z=>z.proceso_id===t.proceso_id));
+      return [...vacias, ...delBorrador, ...conservar];
+    });
     if (borrador.paros) setParos(borrador.paros);
     if (borrador.nota) setNota(borrador.nota);
   }, [borrador, parte, borradorCargado]);
