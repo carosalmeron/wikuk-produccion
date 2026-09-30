@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.53.0";
+const APP_VERSION = "v4.55.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -110,10 +110,11 @@ const minDeTarea = (t) => {
 // No se venden, así que no tienen precio: se valoran a su propio coste objetivo.
 // Así el margen a objetivo es 0 y lo que se ve es si el servicio ha salido caro o barato.
 const esServicio = (p) => !!p?.es_servicio;
+// Un servicio no se vende: no tiene precio ni beneficio. Solo se compara con su objetivo.
 const precioDe = (p) => {
-  if (!p) return 0;
-  const n = (x) => { const v = parseFloat(String(x ?? "").replace(",", ".")); return isNaN(v) ? 0 : v; };
-  return esServicio(p) ? n(p.coste_objetivo) : n(p.precio_venta);
+  if (!p || esServicio(p)) return 0;
+  const v = parseFloat(String(p.precio_venta ?? "").replace(",", "."));
+  return isNaN(v) ? 0 : v;
 };
 const TARIFA_MO = 15.25;            // €/h coste real (27.444 €/año ÷ 1.800 h)
 const LINEAS_FISICAS = 2;
@@ -3309,8 +3310,7 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
   // Los artículos de servicio no se venden: se valoran a coste objetivo (v4.51.0).
   const sinPrecio = filas.filter(f => f.real > 0 && !esServicio(f.p) && !(toNum(f.p?.precio_venta) > 0))
     .map(f => f.p?.nombre || "?");
-  const sinCosteServ = filas.filter(f => f.real > 0 && esServicio(f.p) && !(toNum(f.p?.coste_objetivo) > 0))
-    .map(f => f.p?.nombre || "?");
+  const sinCosteServ = [];   // el servicio se mide con su escandallo, no necesita precio ni coste de ficha
 
   const apoyosTurno = repartoApoyo.deHoy;
   const sobraApoyo  = repartoApoyo.sobra;
@@ -3358,9 +3358,21 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
     // Lo que debería costar según la ficha, para ponerlo al lado
     const ggUdObj = T.plan>0 ? ggTurno / T.plan : 0;
     const costeObjUd = f.plan>0 ? (f.objMat + f.objMO + f.objApoyo)/f.plan + ggUdObj : 0;
-    return { ...f, coste, venta, costeUd: coste/f.real, ventaUd: venta/f.real, costeObjUd,
-      margenUd: (venta-coste)/f.real, margenObjUd: f.pv - costeObjUd, beneficio: venta-coste };
-  }).sort((a,b) => a.margenUd - b.margenUd);
+    const serv = esServicio(f.p);
+    return { ...f, serv, coste, venta, costeUd: coste/f.real, ventaUd: venta/f.real, costeObjUd,
+      costeObj: costeObjUd*f.real, desvio: coste - costeObjUd*f.real,
+      margenUd: serv ? 0 : (venta-coste)/f.real, margenObjUd: serv ? 0 : f.pv - costeObjUd,
+      beneficio: serv ? 0 : venta-coste };
+  }).sort((a,b) => (a.serv?1:0)-(b.serv?1:0) || a.margenUd - b.margenUd);
+
+  // Los servicios van aparte: no hay venta contra la que comparar, solo objetivo
+  const ppServ  = porProducto.filter(x => x.serv);
+  const ppVenta = porProducto.filter(x => !x.serv);
+  const servCoste = ppServ.reduce((a,x)=>a+x.coste, 0);
+  const servObj   = ppServ.reduce((a,x)=>a+x.costeObj, 0);
+  const servUds   = ppServ.reduce((a,x)=>a+x.real, 0);
+  const servDesv  = servCoste - servObj;
+  const benefVenta = ppVenta.reduce((a,x)=>a+x.beneficio, 0);
 
   // ── Rendimientos por lote
   // Una fila por materia y parte: si hubo varios lotes, se suman los metros
@@ -3489,7 +3501,7 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
     <div class="aviso" style="border-color:${desvio>=0?"#166534":"#b45309"};background:${desvio>=0?"#F0FDF4":"#fffbeb"};text-align:center;padding:14px">
       <div style="font-size:11px;letter-spacing:.4px">FRENTE AL OBJETIVO DEL TURNO</div>
       <div style="font-size:30px;font-weight:900;margin:4px 0">${desvio>=0?"+":"−"} ${eur(Math.abs(desvio))}</div>
-      <div style="font-size:12px">Hemos ganado ${eur(benefReal)} cuando tocaban ${eur(benefObj)}</div>
+      <div style="font-size:12px">Hemos ganado ${eur(benefVenta)} cuando tocaban ${eur(benefObj)}${ppServ.length?` · servicios ${servDesv>0?"+":"−"}${eur(Math.abs(servDesv))} sobre objetivo`:""}</div>
     </div>
     ${pieInforme(perfil)}
   `;
@@ -3617,15 +3629,23 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
               <td style="padding:4px 0;text-align:right;font-weight:800;color:${desvioVolumen>=0?"#16a34a":"#ef4444"}">
                 ${desvioVolumen>=0?"+":"−"} ${eur(Math.abs(desvioVolumen))}</td></tr>
             ${porProducto.map(x=>`
-            <tr><td style="padding:6px 0;border-top:1px solid #eee"><b>${esc(x.p?.nombre||"?")}</b>
-              <div style="font-size:11px;color:#777">${num(x.real)} uds · vende ${x.ventaUd.toFixed(2)} € ·
+            <tr><td style="padding:6px 0;border-top:1px solid #eee"><b>${x.serv?`<span style="background:#eff6ff;color:#3b82f6;border-radius:4px;padding:1px 5px;font-size:9.5px">SERVICIO</span> `:""}${esc(x.p?.nombre||"?")}</b>
+              <div style="font-size:11px;color:#777">${num(x.real)} uds · ${x.serv?"no se vende":`vende ${x.ventaUd.toFixed(2)} €`} ·
                 debería costar ${x.costeObjUd.toFixed(2)} € · ha costado <b style="color:${x.costeUd>x.costeObjUd*1.05?"#b91c1c":"#111"}">${x.costeUd.toFixed(2)} €</b></div></td>
               <td style="padding:6px 0;border-top:1px solid #eee;text-align:right">
-                <b style="color:${x.beneficio>=0?"#16a34a":"#ef4444"}">${x.beneficio>=0?"+":"−"} ${eur(Math.abs(x.beneficio))}</b>
-                <div style="font-size:11px;color:#777">${x.margenUd.toFixed(2)} €/ud · debería ${x.margenObjUd.toFixed(2)}</div></td></tr>`).join("")}
-            <tr><td style="padding:6px 0;border-top:2px solid #ccc"><b>Beneficio del turno</b></td>
+                ${x.serv
+                  ? `<b style="color:${x.desvio>0?"#ef4444":"#16a34a"}">${x.desvio>0?"+":"−"} ${eur(Math.abs(x.desvio))}</b>
+                     <div style="font-size:11px;color:#777">frente a su objetivo</div>`
+                  : `<b style="color:${x.beneficio>=0?"#16a34a":"#ef4444"}">${x.beneficio>=0?"+":"−"} ${eur(Math.abs(x.beneficio))}</b>
+                     <div style="font-size:11px;color:#777">${x.margenUd.toFixed(2)} €/ud · debería ${x.margenObjUd.toFixed(2)}</div>`}</td></tr>`).join("")}
+            ${ppVenta.length ? `<tr><td style="padding:6px 0;border-top:2px solid #ccc"><b>Beneficio del turno</b>
+              <div style="font-size:11px;color:#777">solo artículos de venta</div></td>
               <td style="padding:6px 0;border-top:2px solid #ccc;text-align:right">
-                <b style="color:${benefReal>=0?"#16a34a":"#ef4444"};font-size:15px">${eur(benefReal)}</b></td></tr>
+                <b style="color:${benefVenta>=0?"#16a34a":"#ef4444"};font-size:15px">${eur(benefVenta)}</b></td></tr>` : ""}
+            ${ppServ.length ? `<tr><td style="padding:6px 0;border-top:1px solid #ccc"><b>Servicios · ${num(servUds)} uds</b>
+              <div style="font-size:11px;color:#777">han costado ${eur(servCoste)} y debían costar ${eur(servObj)}</div></td>
+              <td style="padding:6px 0;border-top:1px solid #ccc;text-align:right">
+                <b style="color:${servDesv>0?"#ef4444":"#16a34a"};font-size:15px">${servDesv>0?"+":"−"} ${eur(Math.abs(servDesv))}</b></td></tr>` : ""}
           </table>
         </div>
       </div>
@@ -3644,12 +3664,14 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
     (minApoyo>0?`\nApoyo (aparte): ${Math.round(minApoyo)} min · ${eur(costeApoyo)} de ${eur(costeApoyoTeo)} teóricos`:"") +
     (rends.length?`\nRendimientos:\n` + rends.map(x=>`  ${x.producto}: ${x.mp?.nombre||""} ${Math.round(x.r)}% (obj ${x.obj}%)`).join("\n") : "") +
     `\n\nCoste objetivo ${eur(costeObj)} · real ${eur(costeReal)}` +
-    `\n` + porProducto.map(x=>`${x.p?.nombre}: ${num(x.real)} uds · ${x.margenUd.toFixed(2)} €/ud · ${eur(x.beneficio)}`).join("\n") +
-    `\nBeneficio ${eur(benefReal)}` +
+    `\n` + porProducto.map(x=>x.serv
+      ? `${x.p?.nombre} (servicio): ${num(x.real)} uds · ${x.desvio>0?"+":"−"}${eur(Math.abs(x.desvio))} sobre objetivo`
+      : `${x.p?.nombre}: ${num(x.real)} uds · ${x.margenUd.toFixed(2)} €/ud · ${eur(x.beneficio)}`).join("\n") +
+    `\nBeneficio ${eur(benefVenta)}` +
     `\n\n${desvioCoste>0?"INEFICIENCIA":"AHORRO"}: ${eur(Math.abs(desvioCoste))}` +
     `\n${costeUdReal.toFixed(2)} €/ud en vez de ${costeObjUd.toFixed(2)} € → ${Math.abs(costeUdReal-costeObjUd).toFixed(2)} € × ${num(T.real)} uds` +
     (Math.abs(T.plan-T.real)>0.5 ? `\nAdemás ${eur(Math.abs(desvioVolumen))} por las ${num(Math.abs(T.plan-T.real))} uds que ${T.real<T.plan?"faltan":"sobran"}` : "") +
-    `\nBeneficio ${eur(benefReal)} de ${eur(benefObj)} previstos` +
+    `\nBeneficio ${eur(benefVenta)} de ${eur(benefObj)} previstos` +
     `\n\nCerrado por ${perfil?.nombre||""}`;
 
   // Mismo sistema que el CRM: una función de Vercel en /api/send-email
@@ -3682,7 +3704,8 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
       coste_objetivo: costeObj, coste_para_lo_hecho: costeHecho, coste_real: costeReal,
       personas_previstas: T.persPrev, personas_reales: personasTurno, jornadas_reales: jornadasTurno, mo_real: T.realMO, mo_anotada: T.moAnotada,
       uds_debian_hacer: T.debianHacer, pct_ritmo: T.debianHacer>0 ? T.real/T.debianHacer : null,
-      beneficio_objetivo: benefObj, beneficio_real: benefReal, desvio,
+      beneficio_objetivo: benefObj, beneficio_real: benefVenta, desvio,
+      servicios_uds: servUds, servicios_coste: servCoste, servicios_objetivo: servObj, servicios_desvio: servDesv,
       desvio_volumen: desvioVolumen, desvio_coste: desvioCoste,
       coste_ud_objetivo: costeObjUd, coste_ud_real: costeUdReal,
       min_parados: minParados, n_paradas: paros.length,
@@ -3690,7 +3713,8 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
       por_persona: porPersona.map(x=>({ proceso: x.proceso, persona: x.persona,
         uds: x.cant, minutos: Math.round(x.min), min_ud: x.minUd, estandar: x.estandar })),
       por_producto: porProducto.map(x=>({ producto_id: x.ot.producto_id, nombre: x.p?.nombre||"",
-        uds: x.real, venta_ud: x.ventaUd, coste_ud: x.costeUd, coste_obj_ud: x.costeObjUd, margen_ud: x.margenUd, beneficio: x.beneficio })),
+        uds: x.real, servicio: !!x.serv, venta_ud: x.ventaUd, coste_ud: x.costeUd, coste_obj_ud: x.costeObjUd,
+        margen_ud: x.margenUd, beneficio: x.beneficio, desvio: x.desvio })),
       min_apoyo: minApoyo, min_apoyo_teorico: minApoyoTeo,
       coste_apoyo: costeApoyo, coste_apoyo_teorico: costeApoyoTeo, desvio_apoyo: desvioApoyo,
       cerrado_por: perfil?.nombre||"", cerrado_at: new Date().toISOString(),
@@ -4087,12 +4111,18 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
                     <div key={i} style={{background:"#fff",borderRadius:11,padding:"11px 12px",marginBottom:8,
                       border:`1.5px solid ${x.margenUd>=0?C.border:C.red}`}}>
                       <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8,marginBottom:6}}>
-                        <b style={{fontSize:14.5,color:C.text,minWidth:0}}>{x.p?.nombre||"?"}</b>
+                        <b style={{fontSize:14.5,color:C.text,minWidth:0}}>
+                          {x.serv && <span style={{background:C.blueBg,color:C.blue,borderRadius:6,padding:"2px 6px",
+                            fontSize:10.5,fontWeight:800,marginRight:5,verticalAlign:"middle"}}>SERVICIO</span>}
+                          {x.p?.nombre||"?"}
+                        </b>
                         <span style={{flexShrink:0,fontSize:13,color:C.mutedD}}>{num(x.real)} uds</span>
                       </div>
+                      {!x.serv && (
                       <div style={{display:"flex",justifyContent:"space-between",fontSize:13.5,padding:"2px 0"}}>
                         <span style={{color:C.mutedD}}>Se vende a</span><b>{x.ventaUd.toFixed(2)} €</b>
                       </div>
+                      )}
                       <div style={{display:"flex",justifyContent:"space-between",fontSize:13.5,padding:"2px 0"}}>
                         <span style={{color:C.mutedD}}>Debería costar</span>
                         <span style={{color:C.mutedD}}>{x.costeObjUd.toFixed(2)} €</span>
@@ -4110,18 +4140,49 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
                       </div>
                       <div style={{display:"flex",justifyContent:"space-between",fontSize:14,padding:"5px 0 0",
                         borderTop:`1px solid ${C.card2}`,marginTop:4}}>
-                        <span style={{color:C.text,fontWeight:700}}>Deja {x.margenUd.toFixed(2)} € cada una
-                          <span style={{fontSize:11.5,color:C.mutedD,fontWeight:600}}> · debería {x.margenObjUd.toFixed(2)}</span></span>
-                        <b style={{color:x.beneficio>=0?C.green:C.red}}>
-                          {x.beneficio>=0?"+":"−"} {eur(Math.abs(x.beneficio))}
-                        </b>
+                        {x.serv ? (<>
+                          <span style={{color:C.text,fontWeight:700}}>
+                            {x.desvio>0?"Ha salido caro":x.desvio<0?"Ha salido barato":"Justo al objetivo"}
+                            <span style={{display:"block",fontSize:11.5,color:C.mutedD,fontWeight:600}}>
+                              no se vende: solo se compara con su objetivo
+                            </span>
+                          </span>
+                          <b style={{color:x.desvio>0?C.red:C.green}}>
+                            {x.desvio>0?"+":"−"} {eur(Math.abs(x.desvio))}
+                          </b>
+                        </>) : (<>
+                          <span style={{color:C.text,fontWeight:700}}>Deja {x.margenUd.toFixed(2)} € cada una
+                            <span style={{fontSize:11.5,color:C.mutedD,fontWeight:600}}> · debería {x.margenObjUd.toFixed(2)}</span></span>
+                          <b style={{color:x.beneficio>=0?C.green:C.red}}>
+                            {x.beneficio>=0?"+":"−"} {eur(Math.abs(x.beneficio))}
+                          </b>
+                        </>)}
                       </div>
                     </div>
                   ))}
-                  {fila("Beneficio del turno", eur(benefReal), benefReal>=0?C.green:C.red, true)}
-                  <div style={{fontSize:12,color:C.mutedD,marginTop:4}}>
-                    {num(T.real)} uds · media de {(udV-costeUdReal).toFixed(2)} € cada una
-                  </div>
+                  {ppVenta.length>0 && fila("Beneficio del turno", eur(benefVenta), benefVenta>=0?C.green:C.red, true)}
+                  {ppVenta.length>0 && (
+                    <div style={{fontSize:12,color:C.mutedD,marginTop:4}}>
+                      {num(ppVenta.reduce((a,x)=>a+x.real,0))} uds vendibles · media de
+                      {" "}{(ppVenta.reduce((a,x)=>a+x.margenUd*x.real,0)/(ppVenta.reduce((a,x)=>a+x.real,0)||1)).toFixed(2)} € cada una
+                    </div>
+                  )}
+                  {ppServ.length>0 && (
+                    <div style={{background:servDesv>0?C.redBg:C.greenBg,borderRadius:11,padding:"11px 12px",marginTop:10,
+                      border:`1.5px solid ${servDesv>0?C.red:C.green}`}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8,fontSize:15}}>
+                        <b style={{color:C.text}}>Servicios · {num(servUds)} uds</b>
+                        <b style={{flexShrink:0,fontSize:18,color:servDesv>0?C.red:C.green}}>
+                          {servDesv>0?"+":"−"} {eur(Math.abs(servDesv))}
+                        </b>
+                      </div>
+                      <div style={{fontSize:12.5,color:C.mutedD,marginTop:4,lineHeight:1.55}}>
+                        Han costado {eur(servCoste)} y debían costar {eur(servObj)}.
+                        No se venden, así que no entran en el beneficio: solo cuentan si salen
+                        más caros o más baratos de lo previsto.
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })()}
@@ -8239,13 +8300,16 @@ function InformeRangoScreen({ onBack, centros, productos, mps, procesos, usuario
       gente: Object.values(pr2.gente).map(g=>({ ...g, minUd: g.cant>0 ? g.min/g.cant : 0 }))
         .sort((a,b)=>a.minUd-b.minUd),
     })).sort((a,b)=>b.min-a.min);
-    const ventaUd = precioDe(x.p);                   // ficha; servicio → su coste objetivo
-    const venta = ventaUd * x.udsEco;
-    const benef = venta - x.coste;
-    return { ...x, materias, procs, venta, benef, ventaUd,
+    // Un servicio no se vende: ni venta ni beneficio, solo desvío contra su objetivo
+    const serv = esServicio(x.p);
+    const ventaUd = precioDe(x.p);                   // el de la ficha, siempre
+    const venta = serv ? 0 : ventaUd * x.udsEco;
+    const benef = serv ? 0 : venta - x.coste;
+    return { ...x, serv, materias, procs, venta, benef, ventaUd,
+      desvio: x.coste - x.costeObj,
       costeUd: x.udsEco>0 ? x.coste/x.udsEco : 0,
       costeObjUd: x.udsEco>0 ? x.costeObj/x.udsEco : 0,
-      sinPrecio: !(ventaUd>0) };
+      sinPrecio: !serv && !(ventaUd>0) };
   }).sort((a,b)=>b.uds-a.uds);
 
   // ── CONSOLIDADO ────────────────────────────────────────────
@@ -8305,8 +8369,12 @@ function InformeRangoScreen({ onBack, centros, productos, mps, procesos, usuario
 
   // ── Totales
   const T = bloques.reduce((a,b)=>({ uds:a.uds+b.uds, plan:a.plan+b.plan,
-    venta:a.venta+b.venta, coste:a.coste+b.coste, costeObj:a.costeObj+b.costeObj }),
-    {uds:0,plan:0,venta:0,coste:0,costeObj:0});
+    venta:a.venta+b.venta,
+    coste:a.coste+(b.serv?0:b.coste), costeObj:a.costeObj+(b.serv?0:b.costeObj),
+    servCoste:a.servCoste+(b.serv?b.coste:0), servObj:a.servObj+(b.serv?b.costeObj:0),
+    servUds:a.servUds+(b.serv?b.uds:0) }),
+    {uds:0,plan:0,venta:0,coste:0,costeObj:0,servCoste:0,servObj:0,servUds:0});
+  const servDesvR = T.servCoste - T.servObj;
   const perdidaMat = materiasCons.reduce((a,m)=>a+Math.max(0,m.coste),0);
   // Cada lote usado en el periodo, para saber cuál ha ido mejor y cuál peor
   const lotesCons = [];
@@ -8413,7 +8481,9 @@ function InformeRangoScreen({ onBack, centros, productos, mps, procesos, usuario
               [eur(T.venta), "ventas", C.text],
               [(desvioT>=0?"− ":"+ ")+eur(Math.abs(desvioT)),
                 desvioT>=0 ? "ineficiencia" : "ahorro", desvioT>=0?C.red:C.green],
-              [eur(T.venta-T.coste), "beneficio", (T.venta-T.coste)>=0?C.green:C.red]].map(([n,l,col],i)=>(
+              [eur(T.venta-T.coste), "beneficio", (T.venta-T.coste)>=0?C.green:C.red],
+              ...(T.servUds>0 ? [[(servDesvR>0?"+":"−")+eur(Math.abs(servDesvR)), "servicios vs objetivo", servDesvR>0?C.red:C.green]] : [])
+             ].map(([n,l,col],i)=>(
               <div key={i} style={{background:"#fff",border:`2px solid ${C.border}`,borderRadius:14,padding:"12px 8px",textAlign:"center"}}>
                 <div style={{fontFamily:F.h,fontWeight:900,fontSize:20,color:col,lineHeight:1.1}}>{n}</div>
                 <div style={{fontSize:11.5,color:C.mutedD,marginTop:3,fontWeight:600}}>{l}</div>
@@ -8511,7 +8581,8 @@ function InformeRangoScreen({ onBack, centros, productos, mps, procesos, usuario
 
           {/* ── PRODUCTO A PRODUCTO ── */}
           {bloques.map((b,i)=>(
-            <div key={i} style={{background:"#fff",border:`3px solid ${b.benef>=0?C.border:C.red}`,borderRadius:20,padding:16,marginBottom:14}}>
+            <div key={i} style={{background:"#fff",borderRadius:20,padding:16,marginBottom:14,
+              border:`3px solid ${(b.serv ? b.desvio<=0 : b.benef>=0) ? C.border : C.red}`}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:10,marginBottom:4}}>
                 <b style={{fontSize:19,lineHeight:1.2,minWidth:0}}>{b.nombre}</b>
                 <b style={{flexShrink:0,fontSize:24,color:C.text}}>{num(b.uds)}<span style={{fontSize:13,color:C.mutedD,fontWeight:600}}> uds</span></b>
@@ -8523,7 +8594,19 @@ function InformeRangoScreen({ onBack, centros, productos, mps, procesos, usuario
               {/* ECONÓMICO */}
               <div style={{background:C.card2,borderRadius:12,padding:"10px 13px",marginBottom:10}}>
                 <div style={{fontSize:11.5,fontWeight:800,color:C.mutedD,letterSpacing:0.4,marginBottom:2}}>💶 PARTE ECONÓMICA</div>
-                {b.udsEco>0 ? (<>
+                {b.udsEco>0 ? (b.serv ? (<>
+                  <Fila l="Debería costar" v={`${b.costeObjUd.toFixed(2)} €`}/>
+                  <Fila l="Ha costado" v={`${b.costeUd.toFixed(2)} €`}
+                    col={b.costeUd>b.costeObjUd*1.05?C.amber:C.text}/>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:10,
+                    borderTop:`1px solid ${C.border}`,marginTop:5,paddingTop:7}}>
+                    <b style={{fontSize:14}}>Es un servicio: no se vende
+                      <span style={{display:"block",fontSize:11.5,color:C.mutedD,fontWeight:600}}>
+                        solo se compara con su objetivo</span></b>
+                    <b style={{flexShrink:0,fontSize:19,color:b.desvio>0?C.red:C.green}}>
+                      {b.desvio>0?"+":"−"} {eur(Math.abs(b.desvio))}</b>
+                  </div>
+                </>) : (<>
                   <Fila l="Se vende a" v={b.ventaUd>0 ? `${b.ventaUd.toFixed(2)} €` : "sin precio"}
                     col={b.ventaUd>0?C.text:C.red} sub="de la ficha del producto"/>
                   <Fila l="Debería costar" v={`${b.costeObjUd.toFixed(2)} €`}/>
@@ -8535,7 +8618,7 @@ function InformeRangoScreen({ onBack, centros, productos, mps, procesos, usuario
                     <b style={{flexShrink:0,fontSize:19,color:b.benef>=0?C.green:C.red}}>
                       {b.benef>=0?"+":"−"} {eur(Math.abs(b.benef))}</b>
                   </div>
-                </>) : (
+                </>)) : (
                   <div style={{fontSize:13,color:C.mutedD,paddingTop:6,lineHeight:1.5}}>
                     Sin datos económicos: los turnos de este producto no se han cerrado en estas fechas.
                   </div>
@@ -8626,6 +8709,7 @@ function InformeRangoScreen({ onBack, centros, productos, mps, procesos, usuario
             </div>
             <div style={{fontSize:14,color:"rgba(255,255,255,0.75)",marginTop:3}}>
               {num(T.uds)} uds · {eur(T.venta)} de ventas · {eur(T.venta-T.coste)} de beneficio
+              {T.servUds>0 && ` · servicios ${servDesvR>0?"+":"−"}${eur(Math.abs(servDesvR))} sobre objetivo`}
             </div>
           </div>
 
