@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.55.0";
+const APP_VERSION = "v4.56.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -3419,6 +3419,50 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
     return Object.values(acum).map(x => ({ ...x, minUd: x.cant>0 ? x.min/x.cant : 0 }));
   })();
 
+  // ── Cada empleado: lo que ha hecho, cuánto ha tardado y qué le falta o le sobra de jornada
+  const porEmpleado = (() => {
+    const acum = {};
+    filas.forEach(f => {
+      (f.parte?.procesos_realizados||[]).forEach(pr => {
+        if (!pr.persona_id) return;
+        const min = minDeTarea(pr), cant = toNum(pr.cantidad);
+        const cat = procesos.find(z=>z.id===pr.proceso_id);
+        if (!acum[pr.persona_id]) acum[pr.persona_id] = {
+          id: pr.persona_id, nombre: usuarios.find(u=>u.id===pr.persona_id)?.nombre || "—",
+          media: jornadaDe(pr.persona_id) === 0.5, min: 0, tareas: [] };
+        const e = acum[pr.persona_id];
+        e.min += min;
+        const k = `${f.ot.linea}|${pr.proceso_id}`;
+        const ya = e.tareas.find(t => t.k === k);
+        if (ya) { ya.min += min; ya.cant += cant; }
+        else e.tareas.push({ k, linea: f.ot.linea, proceso: cat?.nombre || "?",
+          producto: f.p?.nombre || "", cant, min });
+      });
+    });
+    // También los apoyos del turno: su tiempo también es jornada
+    apoyosTurno.forEach(a => {
+      const quienes = a.personas_id || [];
+      quienes.forEach(pid => {
+        if (!pid) return;
+        const min = toNum(a.minutos_por_persona) || (toNum(a.minutos) / (quienes.length||1));
+        if (!acum[pid]) acum[pid] = { id: pid, nombre: usuarios.find(u=>u.id===pid)?.nombre || "—",
+          media: jornadaDe(pid) === 0.5, min: 0, tareas: [] };
+        const e = acum[pid];
+        e.min += min;
+        e.tareas.push({ k: "ap|"+a.id+"|"+pid, linea: "Apoyo",
+          proceso: a.proceso || procesos.find(z=>z.id===a.proceso_id)?.nombre || "Apoyo",
+          producto: "", cant: toNum(a.cantidad_usada) || toNum(a.cantidad), min, apoyo: true });
+      });
+    });
+    return Object.values(acum).map(e => {
+      const debe = e.media ? MIN_JORNADA/2 : MIN_JORNADA;
+      return { ...e, debe, dif: e.min - debe,
+        tareas: e.tareas.sort((a,b)=>b.min-a.min) };
+    }).sort((a,b)=>b.min-a.min);
+  })();
+  const minEmpleados = porEmpleado.reduce((a,e)=>a+e.min, 0);
+  const debeEmpleados = porEmpleado.reduce((a,e)=>a+e.debe, 0);
+
   // Lo que hizo cada uno los 60 días anteriores, para saber si hoy es lo normal
   const hist = (() => {
     const desde = new Date(new Date(hoy).getTime() - 60*864e5).toISOString().slice(0,10);
@@ -3550,6 +3594,29 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
       <div style="font-size:13px;line-height:1.8;margin-bottom:18px;color:#555">
         ${notas.map(x=>`${esc(x.linea)}: <i>“${esc(x.txt)}”</i>`).join("<br/>")}</div>` : ""}
 
+      ${porEmpleado.length ? `<h3 style="font-size:13px;text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid #111;padding-bottom:4px">Jornada de cada uno</h3>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:18px">
+        <tr><th ${th}>Empleado · trabajos</th><th ${th}>Uds</th><th ${th}>Minutos</th><th ${th}>Jornada</th><th ${th}>Diferencia</th></tr>
+        ${porEmpleado.map(e=>{
+          const col = Math.abs(e.dif)<=15 ? "#166534" : e.dif<0 ? "#b45309" : "#b91c1c";
+          const txt = Math.abs(e.dif)<=15 ? "cuadra" : e.dif<0 ? `−${Math.round(-e.dif)} min` : `+${Math.round(e.dif)} min`;
+          return `<tr><td ${est}><b>${esc(e.nombre)}</b>${e.media?' <span style="font-size:10px;color:#777">media jornada</span>':""}</td>
+            <td ${n}></td><td ${n}><b>${Math.round(e.min)} min</b></td>
+            <td ${n}>${Math.round(e.debe)} min</td>
+            <td ${n}><b style="color:${col}">${txt}</b></td></tr>`
+          + e.tareas.map(t=>`<tr>
+            <td ${est} style="padding-left:16px;color:#555">${t.apoyo?"🤝 ":""}${esc(t.proceso)}
+              <span style="font-size:10px;color:#888"> · ${esc(t.linea)}</span></td>
+            <td ${n}>${t.cant>0?num(t.cant):""}</td>
+            <td ${n}>${t.min>0?Math.round(t.min)+" min":'<span style="color:#b91c1c">sin tiempo</span>'}</td>
+            <td ${n}>${t.cant>0&&t.min>0?(t.min/t.cant).toFixed(2)+" min/ud":""}</td>
+            <td ${n}></td></tr>`).join("");
+        }).join("")}
+        <tr><td ${est} style="background:#f7f7f7"><b>TOTAL</b></td><td ${n} style="background:#f7f7f7"></td>
+          <td ${n} style="background:#f7f7f7"><b>${Math.round(minEmpleados)} min</b></td>
+          <td ${n} style="background:#f7f7f7">${Math.round(debeEmpleados)} min</td>
+          <td ${n} style="background:#f7f7f7"><b>${minEmpleados-debeEmpleados>=0?"+":"−"}${Math.round(Math.abs(minEmpleados-debeEmpleados))} min</b></td></tr>
+      </table>` : ""}
       ${porPersona.length ? `<h3 style="font-size:13px;text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid #111;padding-bottom:4px">Quién ha ido a qué ritmo</h3>
       <table style="width:100%;border-collapse:collapse;margin-bottom:18px">
         <tr><th ${th}>Proceso · persona</th><th ${th}>Uds</th><th ${th}>Minutos</th><th ${th}>min/ud</th><th ${th}>Suyo (60 d)</th><th ${th}>Ficha</th></tr>
@@ -3706,6 +3773,10 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
       uds_debian_hacer: T.debianHacer, pct_ritmo: T.debianHacer>0 ? T.real/T.debianHacer : null,
       beneficio_objetivo: benefObj, beneficio_real: benefVenta, desvio,
       servicios_uds: servUds, servicios_coste: servCoste, servicios_objetivo: servObj, servicios_desvio: servDesv,
+      empleados: porEmpleado.map(e=>({ id:e.id, nombre:e.nombre, media:e.media,
+        minutos:Math.round(e.min), jornada:Math.round(e.debe), diferencia:Math.round(e.dif),
+        tareas: e.tareas.map(t=>({ linea:t.linea, proceso:t.proceso, uds:t.cant, minutos:Math.round(t.min), apoyo:!!t.apoyo })) })),
+      empleados_minutos: Math.round(minEmpleados), empleados_jornada: Math.round(debeEmpleados),
       desvio_volumen: desvioVolumen, desvio_coste: desvioCoste,
       coste_ud_objetivo: costeObjUd, coste_ud_real: costeUdReal,
       min_parados: minParados, n_paradas: paros.length,
@@ -3905,6 +3976,61 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
           </div>
         );
       })()}
+      {porEmpleado.length>0 && (
+        <BloqueF titulo={`🧑‍🏭 Jornada de cada uno · ${porEmpleado.length} persona${porEmpleado.length!==1?"s":""}`}
+          sub={`${Math.round(minEmpleados)} min anotados de ${Math.round(debeEmpleados)} de jornada.`}>
+          {porEmpleado.map(e => {
+            const pct = e.debe>0 ? Math.min(140, e.min/e.debe*100) : 0;
+            const col = Math.abs(e.dif) <= 15 ? C.green : e.dif < 0 ? C.amber : C.red;
+            return (
+              <div key={e.id} style={{background:"#fff",border:`2px solid ${C.border}`,borderRadius:14,
+                padding:"12px 13px",marginBottom:10}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8}}>
+                  <b style={{fontSize:15.5,color:C.text,minWidth:0}}>
+                    {e.nombre}
+                    {e.media && <span style={{fontSize:11.5,color:C.mutedD,fontWeight:600}}> · media jornada</span>}
+                  </b>
+                  <b style={{flexShrink:0,fontFamily:F.h,fontSize:20,color:col}}>{Math.round(e.min)} min</b>
+                </div>
+                <div style={{height:8,background:C.card2,borderRadius:5,overflow:"hidden",margin:"7px 0 4px"}}>
+                  <div style={{width:pct+"%",height:"100%",background:col,borderRadius:5}}/>
+                </div>
+                <div style={{display:"flex",justifyContent:"space-between",gap:8,fontSize:12.5,color:C.mutedD}}>
+                  <span>jornada {Math.round(e.debe)} min</span>
+                  <b style={{color:col}}>
+                    {Math.abs(e.dif) <= 15 ? "cuadra"
+                      : e.dif < 0 ? `faltan ${Math.round(-e.dif)} min`
+                      : `sobran ${Math.round(e.dif)} min`}
+                  </b>
+                </div>
+                <div style={{borderTop:`1px solid ${C.card2}`,marginTop:8,paddingTop:6}}>
+                  {e.tareas.map((t,j)=>(
+                    <div key={j} style={{display:"flex",justifyContent:"space-between",gap:10,
+                      fontSize:13,padding:"3px 0"}}>
+                      <span style={{color:C.mutedD,minWidth:0}}>
+                        {t.apoyo && <span style={{color:C.blue,fontWeight:700}}>🤝 </span>}
+                        {t.proceso}
+                        <span style={{display:"block",fontSize:11.5,color:C.muted}}>
+                          {t.linea}{t.cant>0 ? ` · ${num(t.cant)} uds` : ""}
+                          {t.cant>0 && t.min>0 ? ` · ${(t.min/t.cant).toFixed(2)} min/ud` : ""}
+                        </span>
+                      </span>
+                      <b style={{flexShrink:0,color: t.min>0 ? C.text : C.red}}>
+                        {t.min>0 ? `${Math.round(t.min)} min` : "sin tiempo"}
+                      </b>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+          <div style={{fontSize:12.5,color:C.mutedD,lineHeight:1.6,marginTop:2}}>
+            Se admite un margen de 15 min. Si faltan muchos, hay trabajo sin anotar y la mano de obra
+            del turno sale barata de mentira; si sobran, algún tiempo está mal puesto.
+          </div>
+        </BloqueF>
+      )}
+
       {porPersona.length>0 && (
         <BloqueF titulo="👥 Quién ha ido a qué ritmo"
           sub="Minutos por unidad. Se compara con el resto de hoy y con lo que suele hacer cada uno en 60 días.">
