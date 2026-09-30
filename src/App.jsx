@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.51.0";
+const APP_VERSION = "v4.52.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -1965,7 +1965,9 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
   // De los partes ya cerrados de ese día: así un día antiguo sin calendario también se puede cerrar
   const otsDePartes = prods
     .filter(p => p.fecha === hoy && toNum(p.cantidad) > 0 && !p.reabierta
-      && (verDia || p.turno_clave === claveTurno || !p.turno_clave))
+      && (verDia || p.turno_clave === claveTurno || !p.turno_clave)
+      // v4.52.0: cada centro cierra lo suyo. Sin esto, Fresco arrastraba las líneas de Deshidratados
+      && (!centroId || (productos.find(z=>z.id===p.producto_id)?.centro || "") === centroId))
     .map(p => ({ linea: p.linea_nombre || "Sin línea", turno: p.turno_clave || claveTurno,
       fecha: p.fecha, producto_id: p.producto_id,
       cantidad: toNum(p.objetivo_ot) || toNum(p.cantidad),
@@ -2270,7 +2272,8 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                 cantidad: toNum(p.objetivo_ot)||toNum(p.cantidad), fecha:dia, turno:claveT }))
           ].filter((x,i,a) => a.findIndex(z=>z.linea===x.linea && z.producto_id===x.producto_id)===i);
           return (
-            <CierreTurno ots={otsDia} partes={prods.filter(p=>p.fecha===dia)} claveTurno={claveT}
+            <CierreTurno ots={otsDia} partes={prods.filter(p=>p.fecha===dia
+            && (!centroId || (productos.find(z=>z.id===p.producto_id)?.centro || "") === centroId))} claveTurno={claveT}
               apoyos={apoyos.filter(a=>a.fecha===dia && !a.cierre_id && (!centroId || !a.centro || a.centro===centroId))}
               apoyoPedidoHoy={{}} productos={productos} mps={mps} procesos={procesos}
               centros={centros} centro={centro} turno={t} hoy={dia} perfil={perfil} usuarios={usuarios}
@@ -2602,7 +2605,8 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
           </div>
 
           {modal?.tipo==="cierreTurno" && (
-            <CierreTurno ots={otsHoy} partes={prods.filter(p=>p.fecha===hoy)} claveTurno={claveTurno}
+            <CierreTurno ots={otsHoy} partes={prods.filter(p=>p.fecha===hoy
+              && (!centroId || (productos.find(z=>z.id===p.producto_id)?.centro || "") === centroId))} claveTurno={claveTurno}
               apoyos={apoyos.filter(a=>a.fecha===hoy && !a.cierre_id
                 && (!centroId || !a.centro || a.centro===centroId))}
               apoyoPedidoHoy={(() => {
@@ -3177,11 +3181,17 @@ function HojaApoyo({ procesos, mps, gente, perfil, centroId, claveTurno, hoy, pr
 // ── CIERRE DEL TURNO E INFORME ─────────────────────────────────────────────────
 function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], apoyoPedidoHoy={}, productos, mps, procesos=[], centros, centro, turno, hoy, perfil, usuarios,
                        ggMes, historico=[], onCerrar, onHecho }) {
-  // Un turno solo cierra lo suyo: se filtra aquí para que no dependa de quién llame
-  const ots    = (otsRaw||[]).filter(o => !claveTurno || !o.turno || o.turno === claveTurno);
+  // Un turno solo cierra lo suyo: se filtra aquí para que no dependa de quién llame.
+  // v4.52.0: y un centro solo cierra sus productos — Fresco no arrastra las líneas de Deshidratados.
+  const delCentro = (pid) => !centro?.id || ((productos.find(z=>z.id===pid)?.centro || "") === centro.id);
+  const ots    = (otsRaw||[]).filter(o => (!claveTurno || !o.turno || o.turno === claveTurno)
+    && delCentro(o.producto_id));
   const partes = (partesRaw||[]).filter(p => p.fecha === hoy
-    && (!claveTurno || !p.turno_clave || p.turno_clave === claveTurno));
-  const mezcla = (otsRaw||[]).length - ots.length;
+    && (!claveTurno || !p.turno_clave || p.turno_clave === claveTurno)
+    && delCentro(p.producto_id));
+  const delCentroRaw = (otsRaw||[]).filter(o => delCentro(o.producto_id));
+  const mezcla     = delCentroRaw.length - ots.length;                        // de otro turno
+  const otroCentro = (otsRaw||[]).length - delCentroRaw.length;               // de otro centro
   const [guardando, setGuardando] = useState(false);
 
   const prodDe = (pid) => productos.find(p => p.id === pid);
@@ -3820,6 +3830,13 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
           <div style={{fontSize:13.5,fontWeight:600,color:C.mutedD,marginTop:4}}>
             Un servicio se valora a su propio coste objetivo. Ponlo en Productos → ficha → Coste objetivo.
           </div>
+        </div>
+      )}
+      {otroCentro>0 && (
+        <div style={{background:C.blueBg,border:`2px solid ${C.blue}`,borderRadius:14,padding:"13px 15px",
+          marginBottom:16,fontSize:14,color:C.blue,fontWeight:700,lineHeight:1.55}}>
+          ℹ️ Se {otroCentro!==1?"han":"ha"} dejado fuera {otroCentro} línea{otroCentro!==1?"s":""} de otro centro.
+          Aquí solo entra <b>{centro?.nombre||"este centro"}</b>; lo demás se cierra desde su propio centro.
         </div>
       )}
       {mezcla>0 && (
