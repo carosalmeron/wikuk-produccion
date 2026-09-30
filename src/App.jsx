@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.56.0";
+const APP_VERSION = "v4.57.2";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -3197,6 +3197,8 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
     .filter(Boolean))];
   const mezclaCentros = !centro?.id && centrosEnJuego.length > 1;
   const delCentroRaw = (otsRaw||[]).filter(o => delCentro(o.producto_id));
+  const [justifica, setJustifica] = useState("");     // v4.57.2: por qué no cuadra la jornada
+  const [pidiendoJust, setPidiendoJust] = useState(false);
   const mezcla     = delCentroRaw.length - ots.length;                        // de otro turno
   const otroCentro = (otsRaw||[]).length - delCentroRaw.length;               // de otro centro
   const [guardando, setGuardando] = useState(false);
@@ -3462,6 +3464,11 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
   })();
   const minEmpleados = porEmpleado.reduce((a,e)=>a+e.min, 0);
   const debeEmpleados = porEmpleado.reduce((a,e)=>a+e.debe, 0);
+  // v4.57.1: la jornada tiene que cuadrar con 15 min de margen. Si no, no se cierra.
+  const MARGEN_JOR = 15;
+  const cuadra = (e) => Math.abs(e.dif) <= MARGEN_JOR;
+  const descuadrados = porEmpleado.filter(e => !cuadra(e));
+  const sinTiempo = porEmpleado.filter(e => e.tareas.some(t => !(t.min > 0)));
 
   // Lo que hizo cada uno los 60 días anteriores, para saber si hoy es lo normal
   const hist = (() => {
@@ -3595,6 +3602,10 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
         ${notas.map(x=>`${esc(x.linea)}: <i>“${esc(x.txt)}”</i>`).join("<br/>")}</div>` : ""}
 
       ${porEmpleado.length ? `<h3 style="font-size:13px;text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid #111;padding-bottom:4px">Jornada de cada uno</h3>
+      ${descuadrados.length && justifica.trim() ? `<div style="font-size:12.5px;margin-bottom:10px;padding:10px 12px;
+        border-radius:8px;background:#fffbeb;border:1px solid #f59e0b">
+        <b>Descuadre justificado:</b> ${esc(descuadrados.map(e=>`${e.nombre} ${e.dif>0?"+":"−"}${Math.round(Math.abs(e.dif))} min`).join(" · "))}.
+        <br/>Motivo: ${esc(justifica.trim())}</div>` : ""}
       <table style="width:100%;border-collapse:collapse;margin-bottom:18px">
         <tr><th ${th}>Empleado · trabajos</th><th ${th}>Uds</th><th ${th}>Minutos</th><th ${th}>Jornada</th><th ${th}>Diferencia</th></tr>
         ${porEmpleado.map(e=>{
@@ -3777,6 +3788,8 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
         minutos:Math.round(e.min), jornada:Math.round(e.debe), diferencia:Math.round(e.dif),
         tareas: e.tareas.map(t=>({ linea:t.linea, proceso:t.proceso, uds:t.cant, minutos:Math.round(t.min), apoyo:!!t.apoyo })) })),
       empleados_minutos: Math.round(minEmpleados), empleados_jornada: Math.round(debeEmpleados),
+      empleados_descuadre: descuadrados.map(e=>`${e.nombre} ${e.dif>0?"+":"−"}${Math.round(Math.abs(e.dif))} min`).join(" · "),
+      empleados_descuadre_motivo: justifica.trim(),
       desvio_volumen: desvioVolumen, desvio_coste: desvioCoste,
       coste_ud_objetivo: costeObjUd, coste_ud_real: costeUdReal,
       min_parados: minParados, n_paradas: paros.length,
@@ -3981,9 +3994,10 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
           sub={`${Math.round(minEmpleados)} min anotados de ${Math.round(debeEmpleados)} de jornada.`}>
           {porEmpleado.map(e => {
             const pct = e.debe>0 ? Math.min(140, e.min/e.debe*100) : 0;
-            const col = Math.abs(e.dif) <= 15 ? C.green : e.dif < 0 ? C.amber : C.red;
+            const ok = cuadra(e);
+            const col = ok ? C.green : e.dif < 0 ? C.amber : C.red;
             return (
-              <div key={e.id} style={{background:"#fff",border:`2px solid ${C.border}`,borderRadius:14,
+              <div key={e.id} style={{background:"#fff",border:`2px solid ${ok?C.border:col}`,borderRadius:14,
                 padding:"12px 13px",marginBottom:10}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8}}>
                   <b style={{fontSize:15.5,color:C.text,minWidth:0}}>
@@ -3998,9 +4012,9 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
                 <div style={{display:"flex",justifyContent:"space-between",gap:8,fontSize:12.5,color:C.mutedD}}>
                   <span>jornada {Math.round(e.debe)} min</span>
                   <b style={{color:col}}>
-                    {Math.abs(e.dif) <= 15 ? "cuadra"
-                      : e.dif < 0 ? `faltan ${Math.round(-e.dif)} min`
-                      : `sobran ${Math.round(e.dif)} min`}
+                    {ok ? "cuadra"
+                      : e.dif < 0 ? `⛔ faltan ${Math.round(-e.dif)} min`
+                      : `⛔ sobran ${Math.round(e.dif)} min`}
                   </b>
                 </div>
                 <div style={{borderTop:`1px solid ${C.card2}`,marginTop:8,paddingTop:6}}>
@@ -4024,10 +4038,45 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
               </div>
             );
           })}
-          <div style={{fontSize:12.5,color:C.mutedD,lineHeight:1.6,marginTop:2}}>
-            Se admite un margen de 15 min. Si faltan muchos, hay trabajo sin anotar y la mano de obra
-            del turno sale barata de mentira; si sobran, algún tiempo está mal puesto.
-          </div>
+          {(descuadrados.length>0 || sinTiempo.length>0) ? (
+            <div style={{background:C.redBg,border:`3px solid ${C.red}`,borderRadius:14,padding:"13px 15px",
+              fontSize:14.5,color:C.red,fontWeight:700,lineHeight:1.6}}>
+              ⛔ No se puede cerrar: la jornada no cuadra.
+              <div style={{fontSize:13,fontWeight:600,color:C.mutedD,marginTop:5,lineHeight:1.6}}>
+                {descuadrados.length>0 && (<>
+                  <b style={{color:C.text}}>{descuadrados.map(e=>e.nombre).join(", ")}</b>
+                  {descuadrados.length!==1?" se salen":" se sale"} de su jornada por más de {MARGEN_JOR} min.{" "}
+                </>)}
+                {sinTiempo.length>0 && (<>
+                  <b style={{color:C.text}}>{sinTiempo.map(e=>e.nombre).join(", ")}</b> {sinTiempo.length!==1?"tienen":"tiene"} tareas sin minutos.{" "}
+                </>)}
+                Entra en la orden de trabajo de esa línea y ajusta los tiempos de sus tareas.
+                {sinTiempo.length===0 && " Si de verdad fue así (una baja, una visita, formación, se fue antes), explícalo y podrás cerrar."}
+              </div>
+              {sinTiempo.length===0 && (
+                justifica ? (
+                  <div style={{background:"#fff",border:`2px solid ${C.amber}`,borderRadius:12,
+                    padding:"11px 13px",marginTop:10,fontSize:14,color:C.text,fontWeight:600,lineHeight:1.5}}>
+                    <span style={{fontSize:11.5,color:C.mutedD,fontWeight:800,letterSpacing:0.4,display:"block"}}>
+                      MOTIVO DEL DESCUADRE</span>
+                    {justifica}
+                    <button onClick={()=>setJustifica("")} style={{background:"none",border:"none",
+                      color:C.blue,fontSize:13,fontWeight:700,cursor:"pointer",padding:"6px 0 0"}}>
+                      ✏️ Cambiarlo</button>
+                  </div>
+                ) : (
+                  <div style={{marginTop:10}}>
+                    <BotonF alto={72} borde={C.amber} onClick={()=>setPidiendoJust(true)}>
+                      ✏️ Explicar por qué y cerrar igual</BotonF>
+                  </div>
+                )
+              )}
+            </div>
+          ) : (
+            <div style={{fontSize:12.5,color:C.mutedD,lineHeight:1.6,marginTop:2}}>
+              La jornada de cada uno tiene que cuadrar con un margen de {MARGEN_JOR} min. Todos cuadran.
+            </div>
+          )}
         </BloqueF>
       )}
 
@@ -4325,10 +4374,14 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
       </div>
 
       <div style={{display:"grid",gap:12}}>
-        {(() => { const bloq = sinPrecio.length>0 || sinCosteServ.length>0 || mezclaCentros;
+        {(() => { const bloq = sinPrecio.length>0 || sinCosteServ.length>0 || mezclaCentros
+            || (descuadrados.length>0 && !justifica.trim()) || sinTiempo.length>0;
           const motivo = mezclaCentros ? "elige un centro antes de cerrar"
             : sinPrecio.length ? "falta el precio de venta"
-            : sinCosteServ.length ? "falta el coste objetivo del servicio" : null;
+            : sinCosteServ.length ? "falta el coste objetivo del servicio"
+            : sinTiempo.length ? `${sinTiempo.map(e=>e.nombre).join(", ")}: hay tareas sin minutos`
+            : (descuadrados.length && !justifica.trim()) ? `la jornada de ${descuadrados.map(e=>e.nombre).join(", ")} no cuadra`
+            : null;
           return (
         <BotonF alto={110} bg={bloq?C.card2:C.green} color={bloq?C.muted:"#fff"}
           borde={bloq?C.border:C.green} disabled={guardando || bloq}
@@ -4343,6 +4396,12 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
           <BotonF alto={80} borde={C.border} disabled={guardando} onClick={()=>cerrarYEnviar("imprimir")}>🖨️ Imprimir</BotonF>
         </div>
       </div>
+
+      {pidiendoJust && (
+        <HojaTexto titulo="¿Por qué no cuadra la jornada?" valor={justifica}
+          onOk={(v)=>{ setJustifica(v); setPidiendoJust(false); }}
+          onCerrar={()=>setPidiendoJust(false)}/>
+      )}
     </CapaF>
   );
 }
