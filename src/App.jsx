@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.52.0";
+const APP_VERSION = "v4.53.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -2267,7 +2267,8 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
           const otsDia = [
             ...planesSem.filter(w => !centroId || w.centro === centroId)
               .flatMap(w => (w.calendario||[]).filter(x => x.fecha===dia && x.turno===claveT)),
-            ...prods.filter(p => p.fecha===dia && p.turno_clave===claveT && toNum(p.cantidad)>0 && !p.reabierta)
+            ...prods.filter(p => p.fecha===dia && p.turno_clave===claveT && toNum(p.cantidad)>0 && !p.reabierta
+                && (!centroId || (productos.find(z=>z.id===p.producto_id)?.centro || "") === centroId))
               .map(p => ({ linea:p.linea_nombre, producto_id:p.producto_id,
                 cantidad: toNum(p.objetivo_ot)||toNum(p.cantidad), fecha:dia, turno:claveT }))
           ].filter((x,i,a) => a.findIndex(z=>z.linea===x.linea && z.producto_id===x.producto_id)===i);
@@ -3189,6 +3190,11 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
   const partes = (partesRaw||[]).filter(p => p.fecha === hoy
     && (!claveTurno || !p.turno_clave || p.turno_clave === claveTurno)
     && delCentro(p.producto_id));
+  // Sin centro elegido ("Todos") no se puede cerrar nada que mezcle centros
+  const centrosEnJuego = [...new Set((otsRaw||[])
+    .map(o => productos.find(z=>z.id===o.producto_id)?.centro || "")
+    .filter(Boolean))];
+  const mezclaCentros = !centro?.id && centrosEnJuego.length > 1;
   const delCentroRaw = (otsRaw||[]).filter(o => delCentro(o.producto_id));
   const mezcla     = delCentroRaw.length - ots.length;                        // de otro turno
   const otroCentro = (otsRaw||[]).length - delCentroRaw.length;               // de otro centro
@@ -3832,6 +3838,18 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
           </div>
         </div>
       )}
+      {mezclaCentros && (
+        <div style={{background:C.redBg,border:`3px solid ${C.red}`,borderRadius:14,padding:"14px 16px",
+          marginBottom:16,fontSize:15,color:C.red,fontWeight:700,lineHeight:1.6}}>
+          ⛔ Estás en «Todos los centros» y aquí hay líneas de {centrosEnJuego.length} centros distintos:
+          {" "}<b>{centrosEnJuego.map(id=>centros.find(c=>c.id===id)?.nombre||"?").join(" · ")}</b>.
+          <div style={{fontSize:13.5,fontWeight:600,color:C.mutedD,marginTop:4}}>
+            Un cierre es de un solo centro: si se mezclan, la materia, las paradas, el personal y el coste
+            de los dos salen sumados y el informe no vale. Elige arriba el centro que vas a cerrar y
+            ciérralos uno a uno.
+          </div>
+        </div>
+      )}
       {otroCentro>0 && (
         <div style={{background:C.blueBg,border:`2px solid ${C.blue}`,borderRadius:14,padding:"13px 15px",
           marginBottom:16,fontSize:14,color:C.blue,fontWeight:700,lineHeight:1.55}}>
@@ -4120,10 +4138,16 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
       </div>
 
       <div style={{display:"grid",gap:12}}>
-        <BotonF alto={110} bg={sinPrecio.length?C.card2:C.green} color={sinPrecio.length?C.muted:"#fff"}
-          borde={sinPrecio.length?C.border:C.green} disabled={guardando || sinPrecio.length>0}
-          sub={sinPrecio.length ? "falta el precio de venta" : null}
+        {(() => { const bloq = sinPrecio.length>0 || sinCosteServ.length>0 || mezclaCentros;
+          const motivo = mezclaCentros ? "elige un centro antes de cerrar"
+            : sinPrecio.length ? "falta el precio de venta"
+            : sinCosteServ.length ? "falta el coste objetivo del servicio" : null;
+          return (
+        <BotonF alto={110} bg={bloq?C.card2:C.green} color={bloq?C.muted:"#fff"}
+          borde={bloq?C.border:C.green} disabled={guardando || bloq}
+          sub={motivo}
           onClick={()=>cerrarYEnviar("")}>{guardando?"Cerrando…":"🔒 CERRAR EL TURNO"}</BotonF>
+          ); })()}
         <div style={{fontSize:12.5,color:C.mutedD,textAlign:"center",lineHeight:1.5}}>
           El correo sale solo al cerrar. Estos botones son por si además lo quieres a mano.
         </div>
