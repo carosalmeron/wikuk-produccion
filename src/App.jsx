@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.50.0";
+const APP_VERSION = "v4.51.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -106,6 +106,15 @@ const minDeTarea = (t) => {
   const h = parseFloat(String(t?.horas ?? "").replace(",", "."));
   return (!isNaN(h) && h > 0) ? h*60 : 0;
 };
+// v4.51.0: hay artículos que son SERVICIO (embolsado, envasado para otro departamento).
+// No se venden, así que no tienen precio: se valoran a su propio coste objetivo.
+// Así el margen a objetivo es 0 y lo que se ve es si el servicio ha salido caro o barato.
+const esServicio = (p) => !!p?.es_servicio;
+const precioDe = (p) => {
+  if (!p) return 0;
+  const n = (x) => { const v = parseFloat(String(x ?? "").replace(",", ".")); return isNaN(v) ? 0 : v; };
+  return esServicio(p) ? n(p.coste_objetivo) : n(p.precio_venta);
+};
 const TARIFA_MO = 15.25;            // €/h coste real (27.444 €/año ÷ 1.800 h)
 const LINEAS_FISICAS = 2;
 const TURNOS_ABIERTOS = 2;
@@ -179,7 +188,7 @@ const calcRecursos = (items, productos, persLinea = 3, procesos = []) => {
     slots += turnos * (pers/(persLinea||3));
     personaTurnos += turnos * pers;
     costeMP += (parseFloat(p.coste_mp_objetivo)||0) * q;
-    ventas  += (parseFloat(p.precio_venta)||0) * q;
+    ventas  += precioDe(p) * q;
     costeFicha += (parseFloat(p.coste_objetivo)||0) * q;
     costeMO += turnos * pers * 8 * TARIFA_MO;
     // procesos fuera de línea: cuentan en horas y coste, pero no ocupan hueco
@@ -3237,7 +3246,7 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
     const minAnotados = toNum(parte?.minutos_totales) || toNum(parte?.horas_totales)*60;
     const moReal  = jornadasReales * 8 * TARIFA_MO;
     const moAnotada = (minAnotados/60) * TARIFA_MO;   // lo que está en tareas; la diferencia es tiempo muerto
-    const pv = toNum(p?.precio_venta);
+    const pv = precioDe(p);
     const apUd = apoyoUdDe(p);          // el apoyo que lleva dentro cada unidad
     const udsPorPersona = ritmo>0 && pers>0 ? ritmo/pers : 0;
     const debianHacer = udsPorPersona * jornadasReales;
@@ -3280,8 +3289,11 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
     }
     return { deHoy, sobra };
   })();
-  // Sin precio de venta el beneficio es mentira: no se cierra hasta ponerlo
-  const sinPrecio = filas.filter(f => f.real > 0 && !(toNum(f.p?.precio_venta) > 0))
+  // Sin precio de venta el beneficio es mentira: no se cierra hasta ponerlo.
+  // Los artículos de servicio no se venden: se valoran a coste objetivo (v4.51.0).
+  const sinPrecio = filas.filter(f => f.real > 0 && !esServicio(f.p) && !(toNum(f.p?.precio_venta) > 0))
+    .map(f => f.p?.nombre || "?");
+  const sinCosteServ = filas.filter(f => f.real > 0 && esServicio(f.p) && !(toNum(f.p?.coste_objetivo) > 0))
     .map(f => f.p?.nombre || "?");
 
   const apoyosTurno = repartoApoyo.deHoy;
@@ -3796,6 +3808,17 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
           <div style={{fontSize:13.5,fontWeight:600,color:C.mutedD,marginTop:4}}>
             Sin él, el informe diría que ese producto pierde todo lo que cuesta.
             Ponlo en Productos → ficha → Precio medio de venta, y vuelve a cerrar.
+            <br/>Si no se vende (embolsado, envasado, un servicio para otro departamento),
+            marca <b>«Es un servicio»</b> en su ficha y no te pedirá precio.
+          </div>
+        </div>
+      )}
+      {sinCosteServ.length>0 && (
+        <div style={{background:C.redBg,border:`3px solid ${C.red}`,borderRadius:14,padding:"14px 16px",
+          marginBottom:16,fontSize:15,color:C.red,fontWeight:700,lineHeight:1.6}}>
+          ⛔ Servicio sin coste objetivo: <b>{sinCosteServ.join(", ")}</b>.
+          <div style={{fontSize:13.5,fontWeight:600,color:C.mutedD,marginTop:4}}>
+            Un servicio se valora a su propio coste objetivo. Ponlo en Productos → ficha → Coste objetivo.
           </div>
         </div>
       )}
@@ -6735,7 +6758,11 @@ function ProductosScreen({ onBack, procesos, mps, centros }) {
                     {" · "}Coste obj: <span style={{color:C.text,fontWeight:700}}>{p.coste_objetivo}€/{p.unidad}</span>
                     {" · "}{p.procesos_asignados?.length||0} procesos · {p.materias_asignadas?.length||0} materias
                   </div>
-                  {p.precio_venta>0 && (
+                  {esServicio(p) && (
+                    <span style={{background:C.blueBg,color:C.blue,borderRadius:8,padding:"3px 8px",
+                      fontSize:11,fontWeight:800,marginRight:6,whiteSpace:"nowrap"}}>🧰 SERVICIO</span>
+                  )}
+                  {!esServicio(p) && p.precio_venta>0 && (
                     <div style={{marginTop:4,display:"flex",gap:8,alignItems:"center"}}>
                       <span style={{background:C.greenBg,border:`1.5px solid ${C.green}`,borderRadius:8,padding:"2px 9px",fontSize:12.5,fontFamily:F.h,fontWeight:800,color:C.green}}>
                         💶 Venta: {p.precio_venta.toFixed(2)} €
@@ -6789,6 +6816,7 @@ function ProductoForm({ onBack, ep, procesos, mps, centros, moldes = [] }) {
   const [unidad, setUnidad] = useState(ep?.unidad||"Stick");
   const [coste, setCoste]   = useState(ep?.coste_objetivo?.toString()||"");
   const [precioVenta, setPrecioVenta] = useState(ep?.precio_venta?.toString()||"");
+  const [servicio, setServicio] = useState(!!ep?.es_servicio);
   const [mFinales, setMFinales] = useState(ep?.metros_finales?.toString()||"");
   const [objDiario, setObjDiario] = useState(ep?.objetivo_diario?.toString()||"");
   const [udsTurno, setUdsTurno] = useState(ep?.uds_turno_linea?.toString()||"");
@@ -6890,7 +6918,8 @@ function ProductoForm({ onBack, ep, procesos, mps, centros, moldes = [] }) {
       nombre: nombre.trim(), centro, unidad: unidad.trim()||"ud",
       coste_objetivo: toNum(coste),
       coste_mp_objetivo: costeMPTotal, coste_mo_objetivo: costeMOTotal, coste_mo_meta: costeMOMeta,
-      precio_venta: pv||null,
+      precio_venta: servicio ? null : (pv||null),
+      es_servicio: servicio,
       metros_finales: toNum(mFinales),
       objetivo_diario: toNum(objDiario),
       uds_turno_linea: toNum(udsTurno),
@@ -6914,10 +6943,24 @@ function ProductoForm({ onBack, ep, procesos, mps, centros, moldes = [] }) {
             <Field label="Unidad" value={unidad} onChange={setUnidad} placeholder="Stick"/>
             <Field dec label="Metros finales/ud" value={mFinales} onChange={setMFinales} type="number" placeholder="10" min="0" step="0.1"/>
           </div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+          <div style={{display:"grid",gridTemplateColumns: servicio?"1fr":"1fr 1fr",gap:10}}>
             <Field dec label="Objetivo diario (uds)" value={objDiario} onChange={setObjDiario} type="number" placeholder="100" min="0" step="1"/>
-            <Field dec label="Precio medio de venta (€)" value={precioVenta} onChange={setPrecioVenta} type="number" placeholder="9.00" min="0" step="0.01"/>
+            {!servicio && <Field dec label="Precio medio de venta (€)" value={precioVenta} onChange={setPrecioVenta} type="number" placeholder="9.00" min="0" step="0.01"/>}
           </div>
+          <button type="button" onClick={()=>setServicio(v=>!v)}
+            style={{width:"100%",marginTop:4,display:"flex",alignItems:"center",gap:12,textAlign:"left",cursor:"pointer",
+              background: servicio?C.blueBg:"#fff", border:`2px solid ${servicio?C.blue:C.border}`, borderRadius:14, padding:"12px 14px"}}>
+            <span style={{width:28,height:28,borderRadius:8,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",
+              background: servicio?C.blue:C.card2, color:"#fff", fontSize:17, fontWeight:900}}>{servicio?"✓":""}</span>
+            <span>
+              <span style={{display:"block",fontFamily:F.h,fontWeight:800,fontSize:14.5,color:C.text}}>🧰 Es un servicio, no se vende</span>
+              <span style={{display:"block",fontSize:12.5,color:C.mutedD,lineHeight:1.5,marginTop:2}}>
+                Embolsado, envasado, manipulación para otro departamento. No pide precio de venta:
+                se valora a su <b>coste objetivo</b>, así que el informe mide si el servicio sale caro o barato,
+                no si gana o pierde dinero.
+              </span>
+            </span>
+          </button>
         </Card>
 
         {/* RITMO — base de la planificación */}
@@ -8138,7 +8181,7 @@ function InformeRangoScreen({ onBack, centros, productos, mps, procesos, usuario
     // El precio de venta se toma de la ficha de hoy, no del que guardó cada cierre:
     // un turno cerrado antes de ponerle precio guardó 0 y hundía la media.
     const pvGuardado = toNum(z.venta_ud);
-    if (Math.abs(pvGuardado - toNum(x.p?.precio_venta)) > 0.005) x.pvDistinto = true;
+    if (!esServicio(x.p) && Math.abs(pvGuardado - toNum(x.p?.precio_venta)) > 0.005) x.pvDistinto = true;
     if (pvGuardado <= 0) x.udsSinPrecio = (x.udsSinPrecio||0) + u;
   }));
 
@@ -8155,7 +8198,7 @@ function InformeRangoScreen({ onBack, centros, productos, mps, procesos, usuario
       gente: Object.values(pr2.gente).map(g=>({ ...g, minUd: g.cant>0 ? g.min/g.cant : 0 }))
         .sort((a,b)=>a.minUd-b.minUd),
     })).sort((a,b)=>b.min-a.min);
-    const ventaUd = toNum(x.p?.precio_venta);        // el de la ficha, siempre
+    const ventaUd = precioDe(x.p);                   // ficha; servicio → su coste objetivo
     const venta = ventaUd * x.udsEco;
     const benef = venta - x.coste;
     return { ...x, materias, procs, venta, benef, ventaUd,
@@ -9629,7 +9672,7 @@ function PlanMesTab({ periodo, plan, guardar, productos, mps, semanas, planesSem
       const moUd = ritmo>0 ? (pers*8*TARIFA_MO)/ritmo : 0;
       const ggUd = q>0 ? ggDeProducto(p, q)/q : 0;
       const costeUd = mpUd + moUd + ggUd;
-      const pvUd = toNum(p?.precio_venta);
+      const pvUd = precioDe(p);
       const margUd = pvUd>0 ? pvUd - costeUd : 0;
       const margPc = pvUd>0 ? margUd/pvUd : 0;
       const rojo = pvUd>0 && margUd < 0;
