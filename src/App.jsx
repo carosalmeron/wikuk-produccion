@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.57.2";
+const APP_VERSION = "v4.58.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -3441,6 +3441,25 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
           producto: f.p?.nombre || "", cant, min });
       });
     });
+    // v4.58.0: las paradas de la línea también son jornada. Quien estaba en esa línea
+    // las tiene encima: se reparten entre ellos según los minutos que hicieron allí.
+    filas.forEach(f => {
+      const minPara = (f.parte?.paros||[]).reduce((a,x)=>a+toNum(x.minutos), 0);
+      if (minPara <= 0) return;
+      const enLinea = Object.values(acum)
+        .map(e => ({ e, min: e.tareas.filter(t=>t.linea===f.ot.linea).reduce((a,t)=>a+t.min, 0) }))
+        .filter(x => x.min > 0);
+      if (!enLinea.length) return;
+      const totLinea = enLinea.reduce((a,x)=>a+x.min, 0);
+      enLinea.forEach(({e, min}) => {
+        const trozo = minPara * (min/totLinea);
+        e.min += trozo;
+        e.tareas.push({ k: "paro|"+f.ot.linea, linea: f.ot.linea,
+          proceso: (f.parte?.paros||[]).map(x=>x.motivo).filter(Boolean).join(" + ") || "Parada",
+          producto: "", cant: 0, min: trozo, parada: true });
+      });
+    });
+
     // También los apoyos del turno: su tiempo también es jornada
     apoyosTurno.forEach(a => {
       const quienes = a.personas_id || [];
@@ -3616,7 +3635,7 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
             <td ${n}>${Math.round(e.debe)} min</td>
             <td ${n}><b style="color:${col}">${txt}</b></td></tr>`
           + e.tareas.map(t=>`<tr>
-            <td ${est} style="padding-left:16px;color:#555">${t.apoyo?"🤝 ":""}${esc(t.proceso)}
+            <td ${est} style="padding-left:16px;color:#555">${t.apoyo?"🤝 ":""}${t.parada?"⏸ ":""}${esc(t.proceso)}
               <span style="font-size:10px;color:#888"> · ${esc(t.linea)}</span></td>
             <td ${n}>${t.cant>0?num(t.cant):""}</td>
             <td ${n}>${t.min>0?Math.round(t.min)+" min":'<span style="color:#b91c1c">sin tiempo</span>'}</td>
@@ -3786,7 +3805,8 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
       servicios_uds: servUds, servicios_coste: servCoste, servicios_objetivo: servObj, servicios_desvio: servDesv,
       empleados: porEmpleado.map(e=>({ id:e.id, nombre:e.nombre, media:e.media,
         minutos:Math.round(e.min), jornada:Math.round(e.debe), diferencia:Math.round(e.dif),
-        tareas: e.tareas.map(t=>({ linea:t.linea, proceso:t.proceso, uds:t.cant, minutos:Math.round(t.min), apoyo:!!t.apoyo })) })),
+        tareas: e.tareas.map(t=>({ linea:t.linea, proceso:t.proceso, uds:t.cant, minutos:Math.round(t.min),
+          apoyo:!!t.apoyo, parada:!!t.parada })) })),
       empleados_minutos: Math.round(minEmpleados), empleados_jornada: Math.round(debeEmpleados),
       empleados_descuadre: descuadrados.map(e=>`${e.nombre} ${e.dif>0?"+":"−"}${Math.round(Math.abs(e.dif))} min`).join(" · "),
       empleados_descuadre_motivo: justifica.trim(),
@@ -4023,6 +4043,7 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
                       fontSize:13,padding:"3px 0"}}>
                       <span style={{color:C.mutedD,minWidth:0}}>
                         {t.apoyo && <span style={{color:C.blue,fontWeight:700}}>🤝 </span>}
+                        {t.parada && <span style={{color:C.amber,fontWeight:700}}>⏸ </span>}
                         {t.proceso}
                         <span style={{display:"block",fontSize:11.5,color:C.muted}}>
                           {t.linea}{t.cant>0 ? ` · ${num(t.cant)} uds` : ""}
@@ -4074,7 +4095,8 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
             </div>
           ) : (
             <div style={{fontSize:12.5,color:C.mutedD,lineHeight:1.6,marginTop:2}}>
-              La jornada de cada uno tiene que cuadrar con un margen de {MARGEN_JOR} min. Todos cuadran.
+              Cuentan las tareas, el apoyo (🤝) y las paradas de su línea (⏸), repartidas entre
+              quienes estaban en ella. Margen de {MARGEN_JOR} min. Todos cuadran.
             </div>
           )}
         </BloqueF>
