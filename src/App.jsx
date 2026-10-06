@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.58.0";
+const APP_VERSION = "v4.59.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -3197,6 +3197,7 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
     .filter(Boolean))];
   const mezclaCentros = !centro?.id && centrosEnJuego.length > 1;
   const delCentroRaw = (otsRaw||[]).filter(o => delCentro(o.producto_id));
+  const [editTarea, setEditTarea] = useState(null);   // v4.59.0: corregir minutos sin salir del cierre
   const [justifica, setJustifica] = useState("");     // v4.57.2: por qué no cuadra la jornada
   const [pidiendoJust, setPidiendoJust] = useState(false);
   const mezcla     = delCentroRaw.length - ots.length;                        // de otro turno
@@ -3438,7 +3439,8 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
         const ya = e.tareas.find(t => t.k === k);
         if (ya) { ya.min += min; ya.cant += cant; }
         else e.tareas.push({ k, linea: f.ot.linea, proceso: cat?.nombre || "?",
-          producto: f.p?.nombre || "", cant, min });
+          producto: f.p?.nombre || "", cant, min,
+          parteId: f.parte?.id || "", procesoId: pr.proceso_id, personaId: pr.persona_id });
       });
     });
     // v4.58.0: las paradas de la línea también son jornada. Quien estaba en esa línea
@@ -3481,6 +3483,23 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
         tareas: e.tareas.sort((a,b)=>b.min-a.min) };
     }).sort((a,b)=>b.min-a.min);
   })();
+  // Corregir los minutos de una tarea desde el propio cierre: se reescribe su parte
+  const corregirMinutos = async (t, minNuevos) => {
+    const f = filas.find(z => z.parte?.id === t.parteId);
+    if (!f?.parte) return;
+    const lista = (f.parte.procesos_realizados || []);
+    const esta = (x) => x.proceso_id === t.procesoId && (x.persona_id||"") === (t.personaId||"");
+    const mias = lista.filter(esta);
+    if (!mias.length) return;
+    const cant = mias.reduce((a,x)=>a+toNum(x.cantidad), 0);
+    const nuevas = [
+      ...lista.filter(x => !esta(x)),
+      { proceso_id: t.procesoId, persona_id: t.personaId||"", cantidad: cant,
+        minutos: minNuevos, horas: minNuevos/60, corregido_por: perfil?.nombre || "", corregido_at: new Date().toISOString() },
+    ];
+    await save("producciones", t.parteId, { procesos_realizados: nuevas });
+  };
+
   const minEmpleados = porEmpleado.reduce((a,e)=>a+e.min, 0);
   const debeEmpleados = porEmpleado.reduce((a,e)=>a+e.debe, 0);
   // v4.57.1: la jornada tiene que cuadrar con 15 min de margen. Si no, no se cierra.
@@ -4038,9 +4057,14 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
                   </b>
                 </div>
                 <div style={{borderTop:`1px solid ${C.card2}`,marginTop:8,paddingTop:6}}>
-                  {e.tareas.map((t,j)=>(
-                    <div key={j} style={{display:"flex",justifyContent:"space-between",gap:10,
-                      fontSize:13,padding:"3px 0"}}>
+                  {e.tareas.map((t,j)=>{
+                    const editable = !!t.parteId;
+                    return (
+                    <div key={j} onClick={editable ? ()=>setEditTarea({ ...t, nombre: e.nombre }) : undefined}
+                      style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,
+                      fontSize:13,padding:editable?"6px 8px":"3px 0",marginBottom:editable?3:0,
+                      borderRadius:editable?9:0, background:editable?C.card2:"transparent",
+                      cursor:editable?"pointer":"default"}}>
                       <span style={{color:C.mutedD,minWidth:0}}>
                         {t.apoyo && <span style={{color:C.blue,fontWeight:700}}>🤝 </span>}
                         {t.parada && <span style={{color:C.amber,fontWeight:700}}>⏸ </span>}
@@ -4050,11 +4074,12 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
                           {t.cant>0 && t.min>0 ? ` · ${(t.min/t.cant).toFixed(2)} min/ud` : ""}
                         </span>
                       </span>
-                      <b style={{flexShrink:0,color: t.min>0 ? C.text : C.red}}>
+                      <b style={{flexShrink:0,color: t.min>0 ? C.text : C.red,display:"flex",alignItems:"center",gap:7}}>
                         {t.min>0 ? `${Math.round(t.min)} min` : "sin tiempo"}
+                        {editable && <span style={{color:C.blue,fontSize:15,fontWeight:400}}>✏️</span>}
                       </b>
                     </div>
-                  ))}
+                  ); })}
                 </div>
               </div>
             );
@@ -4071,7 +4096,7 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
                 {sinTiempo.length>0 && (<>
                   <b style={{color:C.text}}>{sinTiempo.map(e=>e.nombre).join(", ")}</b> {sinTiempo.length!==1?"tienen":"tiene"} tareas sin minutos.{" "}
                 </>)}
-                Entra en la orden de trabajo de esa línea y ajusta los tiempos de sus tareas.
+                Toca la tarea que esté mal y corrige sus minutos aquí mismo.
                 {sinTiempo.length===0 && " Si de verdad fue así (una baja, una visita, formación, se fue antes), explícalo y podrás cerrar."}
               </div>
               {sinTiempo.length===0 && (
@@ -4095,8 +4120,9 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
             </div>
           ) : (
             <div style={{fontSize:12.5,color:C.mutedD,lineHeight:1.6,marginTop:2}}>
-              Cuentan las tareas, el apoyo (🤝) y las paradas de su línea (⏸), repartidas entre
-              quienes estaban en ella. Margen de {MARGEN_JOR} min. Todos cuadran.
+              Toca cualquier tarea para corregir sus minutos. Cuentan las tareas, el apoyo (🤝) y las
+              paradas de su línea (⏸), repartidas entre quienes estaban en ella.
+              Margen de {MARGEN_JOR} min. Todos cuadran.
             </div>
           )}
         </BloqueF>
@@ -4419,6 +4445,11 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
         </div>
       </div>
 
+      {editTarea && (
+        <HojaNumero titulo={`${editTarea.proceso} · ${editTarea.nombre}`} valor={String(Math.round(editTarea.min))}
+          onOk={async (v)=>{ const m = toNum(v); setEditTarea(null); if (m>=0) await corregirMinutos(editTarea, m); }}
+          onCerrar={()=>setEditTarea(null)}/>
+      )}
       {pidiendoJust && (
         <HojaTexto titulo="¿Por qué no cuadra la jornada?" valor={justifica}
           onOk={(v)=>{ setJustifica(v); setPidiendoJust(false); }}
