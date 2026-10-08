@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.59.0";
+const APP_VERSION = "v4.60.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -3500,6 +3500,15 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
     await save("producciones", t.parteId, { procesos_realizados: nuevas });
   };
 
+  // Quitar del parte una tarea metida por error
+  const borrarTarea = async (t) => {
+    const f = filas.find(z => z.parte?.id === t.parteId);
+    if (!f?.parte) return;
+    const esta = (x) => x.proceso_id === t.procesoId && (x.persona_id||"") === (t.personaId||"");
+    const nuevas = (f.parte.procesos_realizados||[]).filter(x => !esta(x));
+    await save("producciones", t.parteId, { procesos_realizados: nuevas });
+  };
+
   const minEmpleados = porEmpleado.reduce((a,e)=>a+e.min, 0);
   const debeEmpleados = porEmpleado.reduce((a,e)=>a+e.debe, 0);
   // v4.57.1: la jornada tiene que cuadrar con 15 min de margen. Si no, no se cierra.
@@ -4096,7 +4105,7 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
                 {sinTiempo.length>0 && (<>
                   <b style={{color:C.text}}>{sinTiempo.map(e=>e.nombre).join(", ")}</b> {sinTiempo.length!==1?"tienen":"tiene"} tareas sin minutos.{" "}
                 </>)}
-                Toca la tarea que esté mal y corrige sus minutos aquí mismo.
+                Toca la tarea que esté mal: puedes corregir sus minutos o quitarla del parte aquí mismo.
                 {sinTiempo.length===0 && " Si de verdad fue así (una baja, una visita, formación, se fue antes), explícalo y podrás cerrar."}
               </div>
               {sinTiempo.length===0 && (
@@ -4120,7 +4129,7 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
             </div>
           ) : (
             <div style={{fontSize:12.5,color:C.mutedD,lineHeight:1.6,marginTop:2}}>
-              Toca cualquier tarea para corregir sus minutos. Cuentan las tareas, el apoyo (🤝) y las
+              Toca cualquier tarea para corregir sus minutos o quitarla del parte. Cuentan las tareas, el apoyo (🤝) y las
               paradas de su línea (⏸), repartidas entre quienes estaban en ella.
               Margen de {MARGEN_JOR} min. Todos cuadran.
             </div>
@@ -4448,7 +4457,15 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
       {editTarea && (
         <HojaNumero titulo={`${editTarea.proceso} · ${editTarea.nombre}`} valor={String(Math.round(editTarea.min))}
           onOk={async (v)=>{ const m = toNum(v); setEditTarea(null); if (m>=0) await corregirMinutos(editTarea, m); }}
-          onCerrar={()=>setEditTarea(null)}/>
+          onCerrar={()=>setEditTarea(null)}
+          extra={
+            <BotonF alto={84} bg={C.redBg} color={C.red} borde={C.red}
+              sub={`${editTarea.linea} · ${num(editTarea.cant)} uds · ${Math.round(editTarea.min)} min`}
+              onClick={async ()=>{
+                if (!window.confirm(`¿Quitar «${editTarea.proceso}» de ${editTarea.nombre}?\n\nSe borra del parte: ${num(editTarea.cant)} uds y ${Math.round(editTarea.min)} min.`)) return;
+                const t = editTarea; setEditTarea(null); await borrarTarea(t);
+              }}>🗑 Quitar esta tarea del parte</BotonF>
+          }/>
       )}
       {pidiendoJust && (
         <HojaTexto titulo="¿Por qué no cuadra la jornada?" valor={justifica}
@@ -5051,7 +5068,7 @@ const CapaF = ({ titulo, sub, onCerrar, children, color=C.navy }) => (
 );
 
 // Teclado numérico (o alfanumérico para lotes)
-function HojaNumero({ titulo, valor, texto, onOk, onCerrar }) {
+function HojaNumero({ titulo, valor, texto, onOk, onCerrar, extra }) {
   const [v, setV] = useState(valor || "");
   const ABC = "ABCDEFGHIJKLMNÑOPQRSTUVWXYZ".split("");
   const SIGNOS = ["/", "-", ".", ",", "_"];
@@ -5106,6 +5123,7 @@ function HojaNumero({ titulo, valor, texto, onOk, onCerrar }) {
       <div style={{maxWidth:480,marginTop:16,display:"grid",gap:10}}>
         <BotonF alto={100} bg={C.green} color="#fff" borde={C.green} onClick={()=>onOk(v)}>✔ GUARDAR</BotonF>
         {v && <BotonF alto={72} borde={C.border} color={C.red} onClick={()=>setV("")}>Borrar todo</BotonF>}
+        {extra}
       </div>
     </CapaF>
   );
