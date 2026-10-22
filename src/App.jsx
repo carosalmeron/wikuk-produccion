@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.64.0";
+const APP_VERSION = "v4.65.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -6006,6 +6006,7 @@ function AnaliticaScreen({ onBack, productos, mps, lineas, turnos, usuarios, cen
   const maxFact = Math.max(1, ...factArr.map(d=>d.total));
   const [openFact, setOpenFact] = useState(null);
 
+
   const mesesArr = Object.entries(meses).sort((a,b)=>a[0].localeCompare(b[0])).map(([m,d])=>{
     const pd = Object.values(d.persDias).reduce((s,n)=>s+n,0);
     return {mes:m, uds:d.uds, dias:d.dias.size, valPD: pd? d.val/pd : null};
@@ -6094,10 +6095,25 @@ function AnaliticaScreen({ onBack, productos, mps, lineas, turnos, usuarios, cen
         if (r2<objR) { const teor=(cs.metros_consumidos||0)*r2; mp += (teor/r2 - teor/objR)*(m.precio_ud||0); }
       });
       partesPG.push({fecha:p.fecha, cod:pr?.nombre||"?", val, real, desvMO:real-val, mp, uds:p.cantidad,
+        anotada: minAnot>0, tieneObj: toNum(pr?.coste_objetivo)>0,
         np:np, org:p.origen_personas||"", linea:(p.linea_nombre||linMap[p.linea_id]?.nombre||""), turno:turnos.find(t=>t.id===p.turno_id)?.nombre||"",
         lotes:[...new Set((p.consumos||[]).map(cs=>cs.lote).filter(Boolean))], obj:pr?.coste_objetivo||0});
     });
   });
+  // v4.65.0: ineficiencia por mes = lo que ha costado de más sobre el estándar.
+  // Solo los meses con productos que tengan coste objetivo en ficha.
+  const inefMes = {};
+  partesPG.forEach(x => {
+    if (!x.tieneObj) return;                       // sin estándar no hay con qué comparar
+    const m = x.fecha.slice(0,7);
+    const d = inefMes[m] = inefMes[m] || { mes:m, mo:0, mp:0, uds:0, obj:0, nAnot:0, n:0 };
+    d.mo += x.desvMO; d.mp += x.mp; d.uds += x.uds; d.obj += x.val; d.n++;
+    if (x.anotada) d.nAnot++;
+  });
+  const inefArr = Object.values(inefMes).map(d => ({ ...d, total: d.mo + d.mp,
+    udsPct: d.obj>0 ? (d.mo+d.mp)/d.obj*100 : 0 })).sort((a,b)=>b.mes.localeCompare(a.mes));
+  const maxInef = Math.max(1, ...inefArr.map(d=>Math.abs(d.total)));
+
   const [periodo, setPeriodo] = useState("mes");
   const [openProd, setOpenProd] = useState(null);
   const [openLote, setOpenLote] = useState(null);
@@ -6282,6 +6298,51 @@ function AnaliticaScreen({ onBack, productos, mps, lineas, turnos, usuarios, cen
               <b style={{fontFamily:F.h,fontSize:20}}>{eur(factArr.reduce((a,d)=>a+d.total,0)).replace("+","")}</b>
             </div>
           </Card>
+          {inefArr.length>0 && (
+          <Card style={{marginBottom:12}}>
+            <div style={{fontFamily:F.h,fontWeight:800,fontSize:15,marginBottom:3,color:C.text}}>Ineficiencia por mes</div>
+            <div style={{fontSize:12,color:C.muted,marginBottom:10}}>
+              Lo que ha costado de más (+) o de menos (−) sobre el coste estándar de ficha, en mano de obra
+              y en materia por rendir bajo objetivo. Solo los meses con productos que tengan coste objetivo.
+            </div>
+            {inefArr.map(d=>{
+              const malo = d.total>0;
+              return (
+                <div key={d.mes} style={{padding:"10px 0",borderBottom:`1px solid ${C.border}`}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8}}>
+                    <b style={{fontSize:14.5}}>{d.mes.slice(5)}/{d.mes.slice(2,4)}</b>
+                    <b style={{fontFamily:F.h,fontSize:18,color:malo?C.red:C.green}}>
+                      {malo?"+":"−"} {eur(Math.abs(d.total)).replace("+","").replace("−","")}
+                    </b>
+                  </div>
+                  <div style={{height:7,background:C.card2,borderRadius:4,overflow:"hidden",margin:"5px 0 4px"}}>
+                    <div style={{width:(Math.abs(d.total)/maxInef*100)+"%",height:"100%",
+                      background:malo?C.red:C.green,borderRadius:4}}/>
+                  </div>
+                  <div style={{display:"flex",justifyContent:"space-between",gap:8,fontSize:12,color:C.mutedD}}>
+                    <span>
+                      mano de obra <b style={{color:d.mo>0?C.red:C.green}}>{d.mo>0?"+":"−"}{Math.abs(d.mo).toFixed(0)} €</b>
+                      {" · "}materia <b style={{color:d.mp>0?C.red:C.text}}>{d.mp.toFixed(0)} €</b>
+                    </span>
+                    <b style={{flexShrink:0,color:malo?C.red:C.green}}>{d.udsPct>0?"+":""}{d.udsPct.toFixed(0)}% sobre estándar</b>
+                  </div>
+                  {d.nAnot < d.n && (
+                    <div style={{fontSize:11.5,color:C.amber,fontWeight:700,marginTop:3}}>
+                      ⚠️ {d.n-d.nAnot} de {d.n} partes sin minutos anotados: su mano de obra es estimada a jornada completa.
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            <div style={{display:"flex",justifyContent:"space-between",gap:10,marginTop:10,paddingTop:9,
+              borderTop:`2px solid ${C.border}`,fontSize:15}}>
+              <b>Total del periodo</b>
+              {(()=>{ const t = inefArr.reduce((a,d)=>a+d.total,0);
+                return <b style={{fontFamily:F.h,fontSize:20,color:t>0?C.red:C.green}}>
+                  {t>0?"+":"−"} {eur(Math.abs(t)).replace("+","").replace("−","")}</b>; })()}
+            </div>
+          </Card>
+          )}
           <Card>
             <div style={{fontFamily:F.h,fontWeight:800,fontSize:15,marginBottom:4,color:C.text}}>€ de fabricación producidos por persona·día</div>
             <div style={{fontSize:12,color:C.muted,marginBottom:10}}>Valor a coste estándar ÷ personas. Equilibrio: {(tarifaCargada*8).toFixed(0)} € (una persona/día). Normaliza el cambio de mix.</div>
