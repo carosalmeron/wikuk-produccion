@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.61.0";
+const APP_VERSION = "v4.62.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -5921,7 +5921,9 @@ function AnaliticaScreen({ onBack, productos, mps, lineas, turnos, usuarios, cen
     if (!p.fecha || !(p.cantidad>0)) return false;
     if (centroId && centroDeParte(p) !== centroId) return false;
     if (p.reabierta) return false;
-    if (!turnosCerradosAn.has(`${p.fecha}|${claveAn(p)}`)) { fueraAn++; return false; }
+    const yaCerrado = p.historico || p.registrado_por === "histórico"
+      || turnosCerradosAn.has(`${p.fecha}|${claveAn(p)}`);
+    if (!yaCerrado) { fueraAn++; return false; }
     if (desde && p.fecha < desde) return false;
     if (hasta && p.fecha > hasta) return false;
     if (texto) {
@@ -8587,7 +8589,8 @@ function InformeRangoScreen({ onBack, centros, productos, mps, procesos, usuario
   const claveDeCierre = (c) => c.turno_clave || (c.turno_id ? claveDeTurno(turnos, c.turno_id) : "?");
   const turnosCerrados = new Set(cierresR.map(c => `${c.fecha}|${claveDeCierre(c)}`));
   const todos = prods.filter(p => p.fecha>=desde && p.fecha<=hasta && !p.reabierta && enCentro(p));
-  const partes = todos.filter(p => turnosCerrados.has(`${p.fecha}|${p.turno_clave || (p.turno_id ? claveDeTurno(turnos, p.turno_id) : "?")}`));
+  const partes = todos.filter(p => p.historico || p.registrado_por === "histórico"
+    || turnosCerrados.has(`${p.fecha}|${p.turno_clave || (p.turno_id ? claveDeTurno(turnos, p.turno_id) : "?")}`));
   const fuera = todos.length - partes.length;
   const nDias = new Set(partes.map(p=>p.fecha)).size;
 
