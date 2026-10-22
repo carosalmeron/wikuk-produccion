@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.62.0";
+const APP_VERSION = "v4.64.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -315,6 +315,38 @@ const _refDe = (name, orderField) => {
 };
 
 const _emit = (key) => { const e = _store[key]; if (e) e.subs.forEach(fn => fn(e.rows, e.loading)); };
+
+// ── v4.63.0: el histórico completo, para las pantallas de análisis ──────────
+// Los 90 días vivos valen para la fábrica del día a día, pero un informe de
+// meses atrás necesita todo. Se lee UNA vez por sesión y se guarda aquí.
+const _hist = {};   // name → { rows, loading, subs:Set<fn>, cargado }
+const _cargaHist = async (name) => {
+  const e = _hist[name];
+  if (e.cargado || e.fetching) return;
+  e.fetching = true;
+  try {
+    const snap = await getDocs(query(collection(db, name), orderBy("fecha")));
+    e.rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    e.cargado = true;
+  } catch (err) { /* se queda con lo que tuviera */ }
+  e.loading = false; e.fetching = false;
+  e.subs.forEach(fn => fn(e.rows, e.loading));
+};
+const useHistorico = (name) => {
+  const [state, setState] = useState(() => {
+    const e = _hist[name];
+    return e ? { rows: e.rows, loading: e.loading } : { rows: [], loading: true };
+  });
+  useEffect(() => {
+    if (!_hist[name]) _hist[name] = { rows: [], loading: true, subs: new Set(), cargado: false, fetching: false };
+    const e = _hist[name];
+    const fn = (rows, loading) => setState({ rows, loading });
+    e.subs.add(fn);
+    if (e.cargado) fn(e.rows, false); else _cargaHist(name);
+    return () => { e.subs.delete(fn); };
+  }, [name]);
+  return [state.rows, state.loading];
+};
 
 const _ordenaCliente = (rows, orderField) =>
   orderField ? [...rows].sort((a,b) => String(a[orderField]??"").localeCompare(String(b[orderField]??""), "es")) : rows;
@@ -5676,8 +5708,8 @@ function TerminalOperario({ perfil, productos }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // ── DE DÓNDE SALEN LOS DATOS: fichero inicial o uso real de la app ─────────────
 function OrigenDatosScreen({ onBack, productos, centros, turnos }) {
-  const [prods]   = useCol("producciones", "fecha");
-  const [cierres] = useCol("cierres_turno", "fecha");
+  const [prods]   = useHistorico("producciones");
+  const [cierres] = useHistorico("cierres_turno");
   const [centroId, setCentroId] = useState("");
 
   const delCentro = (p) => { if (!centroId) return true;
@@ -5895,9 +5927,9 @@ function ImportHistoricoScreen({ onBack, productos, mps, lineas, turnos }) {
 // 📊 ANALÍTICA — evolución, costes ref vs real, lotes, equipos, turnos, operarios
 // ═══════════════════════════════════════════════════════════════════════════════
 function AnaliticaScreen({ onBack, productos, mps, lineas, turnos, usuarios, centros }) {
-  const [ordenes] = useCol("ordenes");
-  const [producciones] = useCol("producciones");
-  const [cierresAn] = useCol("cierres_turno", "fecha");
+  const [ordenes] = useHistorico("ordenes");
+  const [producciones, cargandoHist] = useHistorico("producciones");
+  const [cierresAn] = useHistorico("cierres_turno");
   const [regsOp] = useCol("registros_operario");
   const [cfg] = useCol("config_costes");
   const [tab, setTab] = useState("dx");
@@ -5955,6 +5987,25 @@ function AnaliticaScreen({ onBack, productos, mps, lineas, turnos, usuarios, cen
     d.val += p.cantidad*(pr?.coste_objetivo||3.5);
     if (p.n_personas) { const k=p.fecha+"_"+(p.linea_id||"x"); d.persDias[k]=Math.max(d.persDias[k]||0,p.n_personas); }
   });
+  // v4.64.0: facturación por mes = uds × precio de venta de la ficha
+  const factMes = {};
+  P2.forEach(p => {
+    const m = p.fecha.slice(0,7);
+    const pr = prodMap[p.producto_id];
+    const q = toNum(p.cantidad);
+    const pv = precioDe(pr);                       // servicio → 0: no se factura
+    const d = factMes[m] = factMes[m] || { mes:m, total:0, uds:0, prods:{}, sinPrecio:new Set() };
+    d.uds += q; d.total += pv*q;
+    if (!esServicio(pr) && !(pv>0) && pr?.nombre) d.sinPrecio.add(pr.nombre);
+    const k = pr?.nombre || "?";
+    const x = d.prods[k] = d.prods[k] || { nombre:k, uds:0, importe:0, pv, serv:esServicio(pr) };
+    x.uds += q; x.importe += pv*q;
+  });
+  const factArr = Object.values(factMes).sort((a,b)=>b.mes.localeCompare(a.mes))
+    .map(d => ({ ...d, lista: Object.values(d.prods).sort((a,b)=>b.importe-a.importe) }));
+  const maxFact = Math.max(1, ...factArr.map(d=>d.total));
+  const [openFact, setOpenFact] = useState(null);
+
   const mesesArr = Object.entries(meses).sort((a,b)=>a[0].localeCompare(b[0])).map(([m,d])=>{
     const pd = Object.values(d.persDias).reduce((s,n)=>s+n,0);
     return {mes:m, uds:d.uds, dias:d.dias.size, valPD: pd? d.val/pd : null};
@@ -6095,7 +6146,8 @@ function AnaliticaScreen({ onBack, productos, mps, lineas, turnos, usuarios, cen
               style={{background:tab===k?C.text:"#fff",color:tab===k?"#fff":C.muted,border:`1px solid ${tab===k?C.text:C.border}`,borderRadius:20,padding:"7px 14px",fontSize:13,fontFamily:F.h,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}}>{l}</button>
           ))}
         </div>
-        {vacio && <Empty icon="📊" text={(centroId||texto||desde||hasta) ? "Ningún parte con estos filtros" : "Sin datos aún. Importa el histórico o registra partes y esto cobra vida."}/>}
+        {cargandoHist && <Empty icon="⏳" text="Cargando todo el histórico…"/>}
+        {!cargandoHist && vacio && <Empty icon="📊" text={(centroId||texto||desde||hasta) ? "Ningún parte con estos filtros" : "Sin datos aún. Importa el histórico o registra partes y esto cobra vida."}/>}
 
         {!vacio && tab==="dx" && <>
           <div style={{background:C.navy,color:"#fff",borderRadius:16,padding:16,marginBottom:12}}>
@@ -6173,6 +6225,62 @@ function AnaliticaScreen({ onBack, productos, mps, lineas, turnos, usuarios, cen
           <Card style={{marginBottom:12}}>
             <div style={{fontFamily:F.h,fontWeight:800,fontSize:15,marginBottom:10,color:C.text}}>Sticks por mes</div>
             {mesesArr.map(x=><Bar key={x.mes} label={x.mes.slice(5)+"/"+x.mes.slice(2,4)} pct={x.uds/maxUds*100} color={C.accent2} value={`${x.uds.toFixed(0)} uds · ${x.dias} días`}/>)}
+          </Card>
+          <Card style={{marginBottom:12}}>
+            <div style={{fontFamily:F.h,fontWeight:800,fontSize:15,marginBottom:3,color:C.text}}>Facturación por mes · toca para ver los productos</div>
+            <div style={{fontSize:12,color:C.muted,marginBottom:10}}>
+              Unidades fabricadas × precio de venta de la ficha del producto. Los artículos de servicio no facturan.
+            </div>
+            {factArr.map(d=>{
+              const open = openFact===d.mes;
+              return (
+                <div key={d.mes}>
+                  <div onClick={()=>setOpenFact(open?null:d.mes)}
+                    style={{padding:"10px 0",borderBottom:`1px solid ${C.border}`,cursor:"pointer"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8}}>
+                      <b style={{fontSize:14.5}}>{open?"▾ ":"▸ "}{d.mes.slice(5)}/{d.mes.slice(2,4)}</b>
+                      <b style={{fontFamily:F.h,fontSize:18}}>{eur(d.total).replace("+","")}</b>
+                    </div>
+                    <div style={{height:7,background:C.card2,borderRadius:4,overflow:"hidden",margin:"5px 0 3px"}}>
+                      <div style={{width:(d.total/maxFact*100)+"%",height:"100%",background:C.accent2,borderRadius:4}}/>
+                    </div>
+                    <div style={{fontSize:12,color:C.mutedD}}>
+                      {num(d.uds)} uds · {d.uds>0 ? (d.total/d.uds).toFixed(2) : "0.00"} €/ud de media
+                      {d.sinPrecio.size>0 && <span style={{color:C.red,fontWeight:700}}> · {d.sinPrecio.size} sin precio en ficha</span>}
+                    </div>
+                  </div>
+                  {open && (
+                    <div style={{background:C.card2,borderRadius:10,padding:"9px 11px",margin:"7px 0 10px"}}>
+                      {d.lista.map((x,i)=>(
+                        <div key={i} style={{display:"flex",justifyContent:"space-between",gap:10,
+                          fontSize:13,padding:"4px 0",borderBottom:i<d.lista.length-1?`1px solid ${C.border}`:"none"}}>
+                          <span style={{color:C.mutedD,minWidth:0}}>
+                            {x.serv && <span style={{color:C.blue,fontWeight:700}}>🧰 </span>}{x.nombre}
+                            <span style={{display:"block",fontSize:11.5,color:C.muted}}>
+                              {num(x.uds)} uds × {x.serv ? "servicio, no factura" : `${x.pv.toFixed(2)} €`}
+                            </span>
+                          </span>
+                          <b style={{flexShrink:0,color: x.serv ? C.muted : (x.pv>0?C.text:C.red)}}>
+                            {x.pv>0 ? eur(x.importe).replace("+","") : (x.serv ? "—" : "sin precio")}
+                          </b>
+                        </div>
+                      ))}
+                      {d.sinPrecio.size>0 && (
+                        <div style={{fontSize:12,color:C.red,fontWeight:700,marginTop:7,lineHeight:1.55}}>
+                          ⚠️ {[...d.sinPrecio].join(", ")} no {d.sinPrecio.size!==1?"tienen":"tiene"} precio de venta en su ficha:
+                          esas unidades no suman a la facturación. Ponlo en Productos → ficha.
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            <div style={{display:"flex",justifyContent:"space-between",gap:10,marginTop:10,paddingTop:9,
+              borderTop:`2px solid ${C.border}`,fontSize:15}}>
+              <b>Total del periodo</b>
+              <b style={{fontFamily:F.h,fontSize:20}}>{eur(factArr.reduce((a,d)=>a+d.total,0)).replace("+","")}</b>
+            </div>
           </Card>
           <Card>
             <div style={{fontFamily:F.h,fontWeight:800,fontSize:15,marginBottom:4,color:C.text}}>€ de fabricación producidos por persona·día</div>
@@ -8557,8 +8665,8 @@ function LineaEditor({ it, productos, otros, onGuardar, onQuitar, onCerrar }) {
 // Al final, el consolidado de materias y de empleados.
 // ═══════════════════════════════════════════════════════════════
 function InformeRangoScreen({ onBack, centros, productos, mps, procesos, usuarios, turnos=[], perfil }) {
-  const [prods]   = useCol("producciones", "fecha");
-  const [cierres] = useCol("cierres_turno", "fecha");
+  const [prods]   = useHistorico("producciones");
+  const [cierres] = useHistorico("cierres_turno");
   const hoy = new Date().toISOString().slice(0,10);
   const haceDias = (n) => new Date(Date.now()-n*864e5).toISOString().slice(0,10);
   const [desde, setDesde] = useState(haceDias(30));
