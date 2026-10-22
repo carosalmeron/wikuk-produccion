@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.60.0";
+const APP_VERSION = "v4.61.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -5674,6 +5674,118 @@ function TerminalOperario({ perfil, productos }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // 📥 IMPORTAR HISTÓRICO — sube el JSON generado desde el Excel maestro
 // ═══════════════════════════════════════════════════════════════════════════════
+// ── DE DÓNDE SALEN LOS DATOS: fichero inicial o uso real de la app ─────────────
+function OrigenDatosScreen({ onBack, productos, centros, turnos }) {
+  const [prods]   = useCol("producciones", "fecha");
+  const [cierres] = useCol("cierres_turno", "fecha");
+  const [centroId, setCentroId] = useState("");
+
+  const delCentro = (p) => { if (!centroId) return true;
+    const pr = productos.find(z=>z.id===p.producto_id); return !pr?.centro || pr.centro === centroId; };
+
+  // Un parte es del fichero inicial si lo marcó la importación; si no, salió de la app
+  const esHistorico = (p) => !!p.historico || p.registrado_por === "histórico" || p.origen === "importado";
+  const claveDe = (x) => x.turno_clave || (x.turno_id ? claveDeTurno(turnos, x.turno_id) : "?");
+  const cerrados = new Set(cierres.filter(c=>!c.reabierto).map(c => `${c.fecha}|${claveDe(c)}`));
+
+  const meses = {};
+  prods.filter(p => p.fecha && delCentro(p)).forEach(p => {
+    const m = p.fecha.slice(0,7);
+    const d = meses[m] = meses[m] || { mes:m, hUds:0, hN:0, aUds:0, aN:0, aCerr:0, aTareas:0, dias:new Set() };
+    const q = toNum(p.cantidad);
+    d.dias.add(p.fecha);
+    if (esHistorico(p)) { d.hN++; d.hUds += q; }
+    else {
+      d.aN++; d.aUds += q;
+      if (cerrados.has(`${p.fecha}|${claveDe(p)}`)) d.aCerr++;
+      if ((p.procesos_realizados||[]).some(t=>t.persona_id)) d.aTareas++;
+    }
+  });
+  const arr = Object.values(meses).sort((a,b)=>b.mes.localeCompare(a.mes));
+  const T = arr.reduce((a,d)=>({ hN:a.hN+d.hN, hUds:a.hUds+d.hUds, aN:a.aN+d.aN, aUds:a.aUds+d.aUds }),
+    {hN:0,hUds:0,aN:0,aUds:0});
+  const MES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+  const rotulo = (m) => { const [y,mm] = m.split("-"); return `${MES[parseInt(mm)-1]} ${y}`; };
+
+  return (
+    <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
+      <Header title="🗂️ ORIGEN DE LOS DATOS" onBack={onBack}
+        sub={`${T.hN+T.aN} partes · ${T.hN} del fichero inicial · ${T.aN} de la app`}/>
+      <div style={{padding:14}}>
+        <Card style={{marginBottom:12,background:C.card2,border:"none"}}>
+          <div style={{fontSize:13,color:C.mutedD,lineHeight:1.7}}>
+            Un parte es <b>del fichero inicial</b> si entró por «Importar Histórico» (lleva la marca
+            <i> histórico</i>). El resto salió del <b>uso real de la app</b>: terminal de planta, operarios y
+            jefe de turno. De los de la app se indica además cuántos tienen el turno <b>cerrado</b> y cuántos
+            llevan <b>tareas con persona y minutos</b>, que es lo que permite calcular coste real.
+          </div>
+        </Card>
+
+        <div style={{display:"flex",gap:7,overflowX:"auto",paddingBottom:4,marginBottom:12}}>
+          {[{id:"",nombre:"Todos"}, ...centros].map(c=>(
+            <button key={c.id||"t"} onClick={()=>setCentroId(c.id)}
+              style={{background:centroId===c.id?C.text:"#fff",color:centroId===c.id?"#fff":C.muted,
+                border:`1px solid ${centroId===c.id?C.text:C.border}`,borderRadius:20,padding:"7px 14px",
+                fontSize:13,fontFamily:F.h,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}}>
+              {c.id?"🏭 ":""}{c.nombre}</button>
+          ))}
+        </div>
+
+        {arr.length===0 && <Empty icon="🗂️" text="Todavía no hay partes registrados."/>}
+
+        {arr.map(d => {
+          const tot = d.hN + d.aN;
+          const pctApp = tot>0 ? d.aN/tot*100 : 0;
+          return (
+            <Card key={d.mes} style={{marginBottom:10}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8}}>
+                <b style={{fontFamily:F.h,fontSize:16,textTransform:"capitalize"}}>{rotulo(d.mes)}</b>
+                <span style={{fontSize:12.5,color:C.mutedD}}>{tot} partes · {d.dias.size} días</span>
+              </div>
+              <div style={{display:"flex",height:12,borderRadius:6,overflow:"hidden",margin:"9px 0 7px",background:C.card2}}>
+                <div style={{width:(100-pctApp)+"%",background:C.amber}}/>
+                <div style={{width:pctApp+"%",background:C.green}}/>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9}}>
+                <div style={{background:C.amberBg,borderRadius:11,padding:"9px 11px"}}>
+                  <div style={{fontSize:10.5,color:C.amber,fontWeight:800,letterSpacing:0.4}}>FICHERO INICIAL</div>
+                  <b style={{fontFamily:F.h,fontSize:19}}>{d.hN}</b>
+                  <span style={{fontSize:12.5,color:C.mutedD}}> partes · {num(d.hUds)} uds</span>
+                </div>
+                <div style={{background:C.greenBg,borderRadius:11,padding:"9px 11px"}}>
+                  <div style={{fontSize:10.5,color:C.green,fontWeight:800,letterSpacing:0.4}}>USO DE LA APP</div>
+                  <b style={{fontFamily:F.h,fontSize:19}}>{d.aN}</b>
+                  <span style={{fontSize:12.5,color:C.mutedD}}> partes · {num(d.aUds)} uds</span>
+                </div>
+              </div>
+              {d.aN>0 && (
+                <div style={{fontSize:12.5,color:C.mutedD,marginTop:8,lineHeight:1.6,
+                  borderTop:`1px solid ${C.border}`,paddingTop:7}}>
+                  De los {d.aN} de la app: <b style={{color:d.aCerr===d.aN?C.green:C.amber}}>{d.aCerr}</b> con el
+                  turno cerrado y <b style={{color:d.aTareas===d.aN?C.green:C.amber}}>{d.aTareas}</b> con tareas
+                  de personas y minutos.
+                </div>
+              )}
+            </Card>
+          );
+        })}
+
+        {arr.length>0 && (
+          <Card style={{background:C.navy,color:"#fff",border:"none"}}>
+            <div style={{fontSize:11,letterSpacing:1,color:"rgba(255,255,255,.5)",fontWeight:800,marginBottom:6}}>TOTAL</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,fontSize:13.5}}>
+              <div><b style={{fontFamily:F.h,fontSize:22,display:"block"}}>{T.hN}</b>
+                del fichero inicial · {num(T.hUds)} uds</div>
+              <div><b style={{fontFamily:F.h,fontSize:22,display:"block"}}>{T.aN}</b>
+                del uso de la app · {num(T.aUds)} uds</div>
+            </div>
+          </Card>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ImportHistoricoScreen({ onBack, productos, mps, lineas, turnos }) {
   const [data, setData] = useState(null);
   const [estado, setEstado] = useState("idle");
@@ -11743,6 +11855,7 @@ function Home({ perfil, onGo, onLogout, counts, ordenes=[], producciones=[], pro
     { id:"seed", grupo:"herr",      icon:"🚀", bg:"#FFF7ED", label:"Carga Inicial",     sub:"Catálogo completo en 1 clic",          roles:["gerencia"] },
     { id:"synccat", grupo:"herr",   icon:"🔗", bg:"#F5F3FF", label:"Sincronizar Catálogo", sub:"Descripciones desde el CRM",         roles:["gerencia"] },
     { id:"importhist", grupo:"herr",icon:"📥", bg:"#FFFBEB", label:"Importar Histórico", sub:"Excel maestro → Firebase",              roles:["gerencia"] },
+    { id:"origen", grupo:"herr",    icon:"🗂️", bg:"#F0FDF4", label:"Origen de los datos", sub:"Fichero inicial o uso de la app",      roles:["gerencia"] },
     { id:"centros", grupo:"maestros",   icon:"🏭", bg:"#EFF6FF", label:"Centros de Trabajo", sub:`${counts.centros} centros`,           roles:["gerencia"] },
     { id:"lineas", grupo:"maestros",    icon:"⚙️", bg:"#F1F5F9", label:"Líneas de Producción", sub:`${counts.lineas} líneas`,            roles:["gerencia"] },
     { id:"usuarios", grupo:"maestros",  icon:"👥", bg:"#F5F3FF", label:"Usuarios",          sub:`${counts.usuarios} registrados`,      roles:["gerencia"] },
@@ -11947,6 +12060,7 @@ export default function App() {
       {view==="seed"      && <SeedScreen onBack={back}/>}
       {view==="synccat"   && <SyncCatalogoScreen onBack={back} productos={productos}/>}
       {view==="importhist"&& <ImportHistoricoScreen onBack={back} productos={productos} mps={mps} lineas={lineas} turnos={turnos}/>}
+      {view==="origen"    && <OrigenDatosScreen onBack={back} productos={productos} centros={centros} turnos={turnos}/>}
       {view==="centros"   && <CentrosScreen onBack={back}/>}
       {view==="lineas"    && <LineasScreen onBack={back} centros={centros}/>}
       {view==="motivos"   && <MotivosScreen onBack={back}/>}
