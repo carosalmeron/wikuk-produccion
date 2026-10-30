@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.66.0";
+const APP_VERSION = "v4.67.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -2084,11 +2084,21 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
   };
   const abiertas = otsHoy.filter(ot => !parteDe(ot));
   const cerradasHoy = otsHoy.filter(ot => parteDe(ot));
-  const cerradasTodas = prods.filter(p => p.origen==="terminal" && !p.reabierta).slice(0, 30);
+  // v4.67.0: aquí entra CUALQUIER parte, venga del terminal, del histórico o de donde sea,
+  // y los más recientes primero (antes se cogían los 30 más antiguos y no salía lo de esta semana).
+  const cerradasTodas = prods
+    .filter(p => !p.reabierta && toNum(p.cantidad) > 0
+      && (!centroId || (productos.find(z=>z.id===p.producto_id)?.centro || "") === centroId))
+    .slice().sort((a,b) => String(b.fecha||"").localeCompare(String(a.fecha||"")))
+    .slice(0, 60);
   // Reabiertas: hay que volver a cerrarlas, sean del día que sean
   const reabiertas = prods.filter(p => p.reabierta && (!centroId || !p.centro || p.centro === centroId));
-  const otDeParte = (p) => ({ linea: p.linea_nombre, producto_id: p.producto_id,
-    cantidad: p.objetivo_ot || p.cantidad, fecha: p.fecha, turno: p.turno_clave, parte: p });
+  const otDeParte = (p) => ({
+    linea: p.linea_nombre || nombreLinea(p.linea_id) || "Sin línea",
+    producto_id: p.producto_id,
+    cantidad: p.objetivo_ot || p.cantidad, fecha: p.fecha,
+    turno: p.turno_clave || (p.turno_id ? claveDeTurno(turnos, p.turno_id) : claveTurno),
+    parte: p });
 
   const prodDe = (pid) => productos.find(p => p.id === pid);
   const nombreMolde = (p) => p?.molde_id ? (moldes.find(m=>m.id===p.molde_id)?.nombre) : p?.molde;
@@ -2635,7 +2645,8 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
                 vuelve a <b style={{color:C.text}}>{turno?.nombre||"tu turno"}</b> para cerrarlo.
               </div>
             )}
-            <BotonF alto={88} borde={C.border} onClick={()=>setVista("cerradas")}>🗂️ Ver órdenes cerradas</BotonF>
+            <BotonF alto={88} borde={C.border} onClick={()=>setVista("cerradas")}
+              sub="Para corregir algo de un día anterior">🗂️ Ver partes cerrados</BotonF>
           </div>
 
           {modal?.tipo==="cierreTurno" && (
@@ -2670,10 +2681,10 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
   if (vista === "cerradas") {
     return (
       <div style={{background:C.bg,minHeight:"100vh",paddingBottom:30}}>
-        <CabF titulo="🗂️ Órdenes cerradas" sub="Se pueden reabrir si algo quedó mal"
+        <CabF titulo="🗂️ Partes cerrados" sub="Los 60 más recientes · reábrelos para corregir materias, lotes, unidades o tiempos"
           atras={()=>setVista("ordenes")} onSalir={onBack}/>
         <div style={{padding:22}}>
-          {cerradasTodas.length===0 && <Empty icon="🗂️" text="Todavía no hay órdenes cerradas"/>}
+          {cerradasTodas.length===0 && <Empty icon="🗂️" text="Todavía no hay partes cerrados"/>}
           {cerradasTodas.map(p=>{
             const prod = prodDe(p.producto_id);
             const sinLote = !(p.consumos||[]).some(c=>c.lote);
