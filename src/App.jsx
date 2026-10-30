@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.65.0";
+const APP_VERSION = "v4.66.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -3970,7 +3970,8 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
       </BloqueF>
 
       {rends.length>0 && (
-        <BloqueF titulo="Rendimientos">
+        <BloqueF titulo="Rendimientos"
+          sub="Si una materia o un lote están mal, se corrigen en la orden de trabajo de esa línea (reábrela si ya estaba cerrada), no aquí.">
           {rends.map((x,i)=>(
             <div key={i} style={{display:"flex",justifyContent:"space-between",gap:10,padding:"9px 0",fontSize:14.5,
               borderBottom: i<rends.length-1?`1px solid ${C.card2}`:"none"}}>
@@ -4762,9 +4763,11 @@ function OrdenTrabajo({ ot, perfil, productos, mps, motivos, moldes, gente, proc
                   <span style={{flex:1,minWidth:150}}>
                     <button onClick={()=>setModal({tipo:"materia", onOk:v=>setConsumos(cs=>cs.map((z,k)=>
                       k===i ? { ...z, materia_id:v, capas: capasDe(v) || toNum(z.capas) || 1 } : z))})}
-                      style={{background:"none",border:"none",padding:0,cursor:"pointer",textAlign:"left"}}>
-                      <b style={{fontSize:18,color:C.text,borderBottom:`2px dotted ${C.border}`}}>{mp?.nombre||"＋ elegir materia"}</b>
-                      <span style={{fontSize:13,color:C.blue,marginLeft:6}}>cambiar</span>
+                      style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,width:"100%",
+                        minHeight:60,background:mp?C.card2:C.amberBg,border:`2px solid ${mp?C.border:C.amber}`,
+                        borderRadius:12,padding:"10px 14px",cursor:"pointer",textAlign:"left"}}>
+                      <b style={{fontSize:18,color:mp?C.text:C.amber,minWidth:0}}>{mp?.nombre||"＋ elegir materia"}</b>
+                      <span style={{flexShrink:0,fontSize:13.5,color:C.blue,fontWeight:800,whiteSpace:"nowrap"}}>✏️ cambiar</span>
                     </button>
                     {mp && !(p?.materias_asignadas||[]).some(m=>m.mp_id===c.materia_id) && (
                       <div style={{fontSize:12,color:C.amber,fontWeight:700,marginTop:2,lineHeight:1.4}}>
