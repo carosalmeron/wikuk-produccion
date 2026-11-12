@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 
 // ── FIREBASE ───────────────────────────────────────────────────────────────────
-const APP_VERSION = "v4.67.0";
+const APP_VERSION = "v4.71.0";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAwuxF2MYzBjQhr9pD4d2pPSq9_8n65_hA",
@@ -80,6 +80,34 @@ const DOMINIO_OPERARIO = "operario.wikuk";
 // Mientras producción no tenga sus credenciales SMTP, se usa la del CRM,
 // que acepta llamadas de fuera. Para cambiarlo, deja la constante vacía.
 const API_CORREO = "https://crmwikuk.vercel.app/api/send-email";
+
+// Envía con reintentos: la tableta del obrador pierde la red a ratos y el servidor
+// de correo responde 421 («server busy») cuando le llegan muchos correos seguidos.
+const espera = (ms) => new Promise(r => setTimeout(r, ms));
+const enviaConReintentos = async (para, asunto, html, intentos = 3) => {
+  const resultados = [];
+  for (const to of para) {
+    let ultimo = "";
+    let logrado = false;
+    for (let i = 1; i <= intentos && !logrado; i++) {
+      try {
+        const r = await fetch(API_CORREO || "/api/send-email", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ to, subject: asunto, html }),
+        });
+        if (r.ok) { logrado = true; break; }
+        ultimo = (await r.text()).slice(0, 200);
+      } catch (e) {
+        ultimo = String(e).slice(0, 200);
+      }
+      if (i < intentos) await espera(i * 2000);     // 2 s, luego 4 s
+    }
+    resultados.push({ to, ok: logrado, detalle: logrado ? "" : `${ultimo} (${intentos} intentos)` });
+    await espera(400);                               // no disparar todos a la vez
+  }
+  return resultados;
+};
 const correoDeUsuario = (u) => `${(u||"").trim().toLowerCase().replace(/[^a-z0-9._-]/g,"")}@${DOMINIO_OPERARIO}`;
 // T1 es el que entra antes, T2 el siguiente… sin depender de cómo estén ordenados en la lista
 const turnosOrdenados = (turnos=[]) =>
@@ -116,7 +144,13 @@ const precioDe = (p) => {
   const v = parseFloat(String(p.precio_venta ?? "").replace(",", "."));
   return isNaN(v) ? 0 : v;
 };
-const TARIFA_MO = 15.25;            // €/h coste real (27.444 €/año ÷ 1.800 h)
+// v4.69.0: la tarifa reparte el MISMO coste anual entre las horas que de verdad se trabajan.
+// Si la jornada efectiva son 7,5 h y no 8, la hora vale más: 225 días × 7,5 h = 1.687,5 h/año.
+// 27.444 €/año ÷ 1.687,5 h = 16,26 €/h. Así una jornada sigue costando ~122 €, como antes.
+const DIAS_ANO = 225;               // días laborables al año
+const COSTE_PERSONA_MES = 2000;     // coste total de empresa por persona y mes
+const COSTE_PERSONA_ANO = COSTE_PERSONA_MES * 12;                                            // 24.000 €/año
+const TARIFA_MO = Math.round(COSTE_PERSONA_ANO / (DIAS_ANO * HORAS_JORNADA) * 100) / 100;    // 14,22 €/h
 const LINEAS_FISICAS = 2;
 const TURNOS_ABIERTOS = 2;
 const SLOTS_DIA = LINEAS_FISICAS * TURNOS_ABIERTOS;   // huecos línea-turno por día
@@ -191,7 +225,7 @@ const calcRecursos = (items, productos, persLinea = 3, procesos = []) => {
     costeMP += (parseFloat(p.coste_mp_objetivo)||0) * q;
     ventas  += precioDe(p) * q;
     costeFicha += (parseFloat(p.coste_objetivo)||0) * q;
-    costeMO += turnos * pers * 8 * TARIFA_MO;
+    costeMO += turnos * pers * HORAS_JORNADA * TARIFA_MO;
     // procesos fuera de línea: cuentan en horas y coste, pero no ocupan hueco
     (p.procesos_asignados||[]).forEach(pa => {
       const cat = procesos.find(z => z.id === pa.proceso_id);
@@ -808,7 +842,8 @@ function UsuarioForm({ onBack, ep, turnos, centros, onDone }) {
               {!ep && <Field label="Clave" value={clave} onChange={setClave} type="password" placeholder="mín. 6 caracteres"/>}
               {ep && (
                 <div style={{background:C.card2,borderRadius:9,padding:"9px 11px",marginBottom:14,fontSize:12.5,color:C.mutedD,lineHeight:1.5}}>
-                  🔑 Para cambiar la clave, usa <b>Restablecer clave</b>.
+                  🔑 La clave no se ve ni se edita desde aquí. Para cambiarla, borra el usuario
+                  y vuelve a crearlo con la nueva, o pídeselo a gerencia.
                 </div>
               )}
               {usuarioLogin && (clave||"").length>=6 && !ep && (
@@ -2319,7 +2354,25 @@ function TerminalPlanta({ onBack, perfil, productos, lineas, turnos, centros, mp
             <CierreTurno ots={otsDia} partes={prods.filter(p=>p.fecha===dia
             && (!centroId || (productos.find(z=>z.id===p.producto_id)?.centro || "") === centroId))} claveTurno={claveT}
               apoyos={apoyos.filter(a=>a.fecha===dia && !a.cierre_id && (!centroId || !a.centro || a.centro===centroId))}
-              apoyoPedidoHoy={{}} productos={productos} mps={mps} procesos={procesos}
+              apoyoPedidoHoy={(() => {
+                // v4.68.0: también en los cierres atrasados. Antes iba vacío y el desalado
+                // de ese día no se cargaba a ningún turno: se perdía del coste.
+                const acum = {};
+                otsDia.forEach(ot => {
+                  const pr = prodDe(ot.producto_id);
+                  (pr?.procesos_asignados||[]).forEach(pa => {
+                    const cat = procesos.find(z=>z.id===pa.proceso_id);
+                    if (!cat?.apoyo) return;
+                    const base = pa.base_tiempo || cat.base_tiempo || "ud";
+                    const pt = prods.find(z => z.fecha===dia && z.turno_clave===claveT
+                      && z.linea_nombre===ot.linea && z.producto_id===ot.producto_id);
+                    const uds = toNum(pt?.cantidad) || toNum(ot.cantidad);
+                    acum[cat.id] = (acum[cat.id]||0) + (base==="m" ? toNum(pr?.metros_finales)*(toNum(pa.capas)||1)*uds : uds);
+                  });
+                });
+                return acum;
+              })()}
+              productos={productos} mps={mps} procesos={procesos}
               centros={centros} centro={centro} turno={t} hoy={dia} perfil={perfil} usuarios={usuarios}
               ggMes={ggMes} historico={prods} onCerrar={()=>setModal(null)}
               onHecho={()=>{ setModal(null); setDiaVer(""); setVista("inicio"); }}/>
@@ -3299,7 +3352,7 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
     const ritmo = toNum(p?.uds_turno_linea), pers = normal ? 1 : (parseInt(p?.personas_linea)||3);
     // objetivo
     const mpUdObj = toNum(p?.coste_mp_objetivo);
-    const moUdObj = ritmo>0 ? (pers*8*TARIFA_MO)/ritmo : 0;
+    const moUdObj = ritmo>0 ? (pers*HORAS_JORNADA*TARIFA_MO)/ritmo : 0;
     // real
     const matReal = (parte?.consumos||[]).reduce((a,c)=>a+toNum(c.metros_consumidos)*precioMP(c.materia_id), 0);
     // Mano de obra real: lo que se paga a cada persona que estuvo. Con más de media
@@ -3307,7 +3360,7 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
     const hayGente = (parte?.procesos_realizados||[]).some(t=>t.persona_id);
     const jornadasReales = hayGente ? jornadasEnLinea(ot.linea) : (parseInt(parte?.n_personas)||pers);
     const minAnotados = toNum(parte?.minutos_totales) || toNum(parte?.horas_totales)*60;
-    const moReal  = jornadasReales * 8 * TARIFA_MO;
+    const moReal  = jornadasReales * HORAS_JORNADA * TARIFA_MO;
     const moAnotada = (minAnotados/60) * TARIFA_MO;   // lo que está en tareas; la diferencia es tiempo muerto
     const pv = precioDe(p);
     const apUd = apoyoUdDe(p);          // el apoyo que lleva dentro cada unidad
@@ -3402,7 +3455,9 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
     const coste = f.realMat + f.realMO + f.realApoyo + parteGG;
     const venta = f.ventaReal;
     // Lo que debería costar según la ficha, para ponerlo al lado
-    const ggUdObj = T.plan>0 ? ggTurno / T.plan : 0;
+    // v4.68.0: los generales se reparten entre lo FABRICADO, igual que el total de abajo.
+    // Antes iban sobre el plan y salían dos «debería costar» distintos en el mismo parte.
+    const ggUdObj = T.real>0 ? ggTurno / T.real : 0;
     const costeObjUd = f.plan>0 ? (f.objMat + f.objMO + f.objApoyo)/f.plan + ggUdObj : 0;
     const serv = esServicio(f.p);
     return { ...f, serv, coste, venta, costeUd: coste/f.real, ventaUd: venta/f.real, costeObjUd,
@@ -3553,6 +3608,10 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
   };
 
   const minEmpleados = porEmpleado.reduce((a,e)=>a+e.min, 0);
+  // v4.68.0: lo pagado sin anotar se mide contra TODO lo anotado — tareas, paradas y apoyo —
+  // no solo contra las tareas. Antes una parada bien anotada salía como tiempo muerto.
+  const moAnotadaTotal = (minEmpleados/60) * TARIFA_MO;
+  const moSinAnotar = T.realMO - moAnotadaTotal;
   const debeEmpleados = porEmpleado.reduce((a,e)=>a+e.debe, 0);
   // v4.57.1: la jornada tiene que cuadrar con 15 min de margen. Si no, no se cierra.
   const MARGEN_JOR = 15;
@@ -3599,6 +3658,9 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
   const minParados = paros.reduce((a,x)=>a+toNum(x.minutos),0);
   const notas = filas.filter(f=>f.parte?.observacion).map(f=>({ linea:f.ot.linea, txt:f.parte.observacion }));
   const destinatarios = usuarios.filter(u => u.recibe_informe && u.email);
+  // Una sola condición para TODO lo que cierra el turno: el botón verde, compartir e imprimir
+  const bloqueaCierre = sinPrecio.length>0 || sinCosteServ.length>0 || mezclaCentros
+    || (descuadrados.length>0 && !justifica.trim()) || sinTiempo.length>0;
 
   const htmlInforme = () => `
     <h1>Producción · ${esc(turno?.nombre||"")} · ${new Date(hoy+"T12:00:00").toLocaleDateString("es-ES",{weekday:"long",day:"numeric",month:"long"})}</h1>
@@ -3765,9 +3827,9 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
       <div style="font-size:12px;color:#777;margin-bottom:8px">Comparado con lo que debería haber costado <b>lo que sí se ha fabricado</b> (${num(T.real)} uds), no el plan entero (${num(T.plan)} uds, ${eur(costeObj)}).</div>
       <table style="width:100%;border-collapse:collapse;margin-bottom:18px">
         <tr><th ${th}>Concepto</th><th ${th}>Objetivo</th><th ${th}>Real</th><th ${th}>Desvío</th></tr>
-        <tr><td ${est}>Materia prima</td><td ${n}>${eur(T.objMat)}</td><td ${n}>${eur(T.realMat)}</td><td ${n}>${T.realMat-T.objMat>=0?"+":""}${eur(T.realMat-T.objMat)}</td></tr>
+        <tr><td ${est}>Materia prima</td><td ${n}>${eur(paraLoHecho.mat)}</td><td ${n}>${eur(T.realMat)}</td><td ${n}>${T.realMat-paraLoHecho.mat>=0?"+":""}${eur(T.realMat-paraLoHecho.mat)}</td></tr>
         <tr><td ${est}>Mano de obra
-            <div style="font-size:11px;color:#777;font-weight:400">${personasTurno} personas · ${num(Math.round(jornadasTurno*10)/10)} jornadas${T.debianHacer>0?` · al ritmo debían hacer ${num(Math.round(T.debianHacer))} uds · hicieron ${num(T.real)} (<b>${Math.round(T.real/T.debianHacer*100)}%</b>)`:""}${Math.abs(T.persPrev-jornadasTurno)>0.05?`<br/>Previstas ${num(Math.round(T.persPrev*10)/10)} jornadas, hubo ${num(Math.round(jornadasTurno*10)/10)}.`:""}<br/>${Object.keys(minPorPersona).map(pid=>{const u=usuarios.find(z=>z.id===pid); return esc((u?.nombre||"?").split(" ")[0])+(u?.jornada==="media"?" ½":"");}).join(" · ")}${T.moAnotada>0&&T.realMO-T.moAnotada>5?`<br/>${eur(T.realMO-T.moAnotada)} pagados sin tarea anotada`:""}</div></td>
+            <div style="font-size:11px;color:#777;font-weight:400">${personasTurno} personas · ${num(Math.round(jornadasTurno*10)/10)} jornadas${T.debianHacer>0?` · al ritmo debían hacer ${num(Math.round(T.debianHacer))} uds · hicieron ${num(T.real)} (<b>${Math.round(T.real/T.debianHacer*100)}%</b>)`:""}${Math.abs(T.persPrev-jornadasTurno)>0.05?`<br/>Previstas ${num(Math.round(T.persPrev*10)/10)} jornadas, hubo ${num(Math.round(jornadasTurno*10)/10)}.`:""}<br/>${Object.keys(minPorPersona).map(pid=>{const u=usuarios.find(z=>z.id===pid); return esc((u?.nombre||"?").split(" ")[0])+(u?.jornada==="media"?" ½":"");}).join(" · ")}${minEmpleados>0&&moSinAnotar>5?`<br/>${eur(moSinAnotar)} pagados sin anotar (tareas, paradas y apoyo incluidos)`:""}</div></td>
           <td ${n}>${eur(paraLoHecho.mo)}</td><td ${n}>${eur(T.realMO)}</td>
           <td ${n}>${T.realMO-paraLoHecho.mo>=0?"+":""}${eur(T.realMO-paraLoHecho.mo)}</td></tr>
         ${paraLoHecho.ap>0?`<tr><td ${est}>Apoyo del escandallo</td><td ${n}>${eur(paraLoHecho.ap)}</td><td ${n}>${eur(T.realApoyo)}</td>
@@ -3842,23 +3904,10 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
     `\nBeneficio ${eur(benefVenta)} de ${eur(benefObj)} previstos` +
     `\n\nCerrado por ${perfil?.nombre||""}`;
 
-  // Mismo sistema que el CRM: una función de Vercel en /api/send-email
-  const enviarCorreo = async (para, asunto, html) => {
-    const resultados = [];
-    for (const to of para) {
-      try {
-        const r = await fetch(API_CORREO || "/api/send-email", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ to, subject: asunto, html }),
-        });
-        resultados.push({ to, ok: r.ok, detalle: r.ok ? "" : (await r.text()).slice(0,200) });
-      } catch (e) {
-        resultados.push({ to, ok: false, detalle: String(e).slice(0,200) });
-      }
-    }
-    return resultados;
-  };
+  // Mismo sistema que el CRM: una función de Vercel en /api/send-email.
+  // v4.71.0: tres intentos. En el obrador la tableta pierde la red un momento
+  // («Failed to fetch») y Gmail a veces responde 421 cuando le llegan muchos de golpe.
+  const enviarCorreo = async (para, asunto, html) => enviaConReintentos(para, asunto, html);
 
   const cerrarYEnviar = async (accion) => {
     setGuardando(true);
@@ -3870,7 +3919,7 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
       centro: centro?.id||"", centro_nombre: centro?.nombre||"",
       uds_plan: T.plan, uds_real: T.real,
       coste_objetivo: costeObj, coste_para_lo_hecho: costeHecho, coste_real: costeReal,
-      personas_previstas: T.persPrev, personas_reales: personasTurno, jornadas_reales: jornadasTurno, mo_real: T.realMO, mo_anotada: T.moAnotada,
+      personas_previstas: T.persPrev, personas_reales: personasTurno, jornadas_reales: jornadasTurno, mo_real: T.realMO, mo_anotada: moAnotadaTotal, mo_sin_anotar: moSinAnotar,
       uds_debian_hacer: T.debianHacer, pct_ritmo: T.debianHacer>0 ? T.real/T.debianHacer : null,
       beneficio_objetivo: benefObj, beneficio_real: benefVenta, desvio,
       servicios_uds: servUds, servicios_coste: servCoste, servicios_objetivo: servObj, servicios_desvio: servDesv,
@@ -4329,9 +4378,10 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
               ⚠️ {usuarios.find(u=>u.id===pid)?.nombre||"?"}: {Math.round(minPorPersona[pid].total)} min anotados con jornada de {minPermitidos(pid)}. Sobran minutos.
             </div>
           ))}
-          {T.moAnotada>0 && T.realMO-T.moAnotada>5 && (
+          {minEmpleados>0 && moSinAnotar>5 && (
             <div style={{color:C.amber,fontWeight:700}}>
-              {eur(T.realMO-T.moAnotada)} pagados sin tarea anotada.
+              {eur(moSinAnotar)} pagados sin anotar.
+              <span style={{fontWeight:600,color:C.mutedD}}> Ya cuentan las tareas, las paradas y el apoyo.</span>
             </div>
           )}
         </div>
@@ -4475,8 +4525,7 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
       </div>
 
       <div style={{display:"grid",gap:12}}>
-        {(() => { const bloq = sinPrecio.length>0 || sinCosteServ.length>0 || mezclaCentros
-            || (descuadrados.length>0 && !justifica.trim()) || sinTiempo.length>0;
+        {(() => { const bloq = bloqueaCierre;
           const motivo = mezclaCentros ? "elige un centro antes de cerrar"
             : sinPrecio.length ? "falta el precio de venta"
             : sinCosteServ.length ? "falta el coste objetivo del servicio"
@@ -4493,8 +4542,11 @@ function CierreTurno({ ots: otsRaw, partes: partesRaw, claveTurno, apoyos=[], ap
           El correo sale solo al cerrar. Estos botones son por si además lo quieres a mano.
         </div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-          <BotonF alto={80} borde={C.border} disabled={guardando} onClick={()=>cerrarYEnviar("compartir")}>📤 Compartir</BotonF>
-          <BotonF alto={80} borde={C.border} disabled={guardando} onClick={()=>cerrarYEnviar("imprimir")}>🖨️ Imprimir</BotonF>
+          {/* v4.68.0: también cierran el turno, así que pasan las mismas comprobaciones */}
+          <BotonF alto={80} borde={C.border} disabled={guardando || bloqueaCierre}
+            onClick={()=>cerrarYEnviar("compartir")}>📤 Compartir</BotonF>
+          <BotonF alto={80} borde={C.border} disabled={guardando || bloqueaCierre}
+            onClick={()=>cerrarYEnviar("imprimir")}>🖨️ Imprimir</BotonF>
         </div>
       </div>
 
@@ -7650,7 +7702,7 @@ function ProductoForm({ onBack, ep, procesos, mps, centros, moldes = [] }) {
           )}
           {(() => {
             const nP = parseInt(persLinea)||3;
-            const costeTurno = nP * 8 * TARIFA_MO;
+            const costeTurno = nP * HORAS_JORNADA * TARIFA_MO;
             const puesto = toNum(udsTurno);
             const teor = velPuestos("real");
             const fila = (tit, uds, sub, destacar) => (
@@ -9786,20 +9838,38 @@ function CierresScreen({ onBack, centros, usuarios, perfil, centroFijo="" }) {
     })
     .sort((a,b) => (b.fecha||"").localeCompare(a.fecha||"") || (b.cerrado_at||"").localeCompare(a.cerrado_at||""));
 
+  // v4.71.0: los que se quedaron sin salir, de una tacada
+  const fallidos = lista.filter(c => (c.email_estado==="error" || c.email_estado==="parcial" || c.email_estado==="enviando")
+    && c.informe_html);
+  const [reintentando, setReintentando] = useState(false);
+  const reintentarTodos = async () => {
+    const fijos = usuarios.filter(u => u.recibe_informe && u.email).map(u => u.email);
+    if (!fijos.length) { window.alert("Nadie tiene marcada la casilla «Recibe el informe de producción» en su ficha."); return; }
+    if (!window.confirm(`Reintentar el envío de ${fallidos.length} parte${fallidos.length!==1?"s":""} a ${fijos.length} destinatario${fijos.length!==1?"s":""}.\n\n¿Seguimos?`)) return;
+    setReintentando(true);
+    let bien = 0, mal = 0;
+    for (const c of fallidos) {
+      const pendientes = fijos.filter(e => !(c.email_enviados_a||[]).includes(e));
+      if (!pendientes.length) { bien++; continue; }
+      const res = await enviaConReintentos(pendientes, c.asunto || `Producción ${c.fecha}`, c.informe_html);
+      const ok = res.filter(x=>x.ok).map(x=>x.to), fallo = res.filter(x=>!x.ok);
+      await save("cierres_turno", c.id, {
+        email_estado: fallo.length ? (ok.length ? "parcial" : "error") : "enviado",
+        email_enviados_a: [...new Set([...(c.email_enviados_a||[]), ...ok])],
+        reenviado_por: perfil?.nombre || "", reenviado_at: new Date().toISOString(),
+        email_error: fallo.length ? fallo.map(x=>`${x.to}: ${x.detalle}`).join(" · ").slice(0,500) : "",
+      });
+      fallo.length ? mal++ : bien++;
+    }
+    setReintentando(false);
+    window.alert(mal ? `${bien} enviados, ${mal} siguen sin salir.` : `Los ${bien} partes han salido.`);
+  };
+
   const reenviar = async (c, correos) => {
     if (!correos.length) { window.alert("Elige al menos una persona"); return; }
     if (!c.informe_html) { window.alert("Este cierre es anterior al informe automático: no tiene el correo guardado.\n\nSe puede volver a generar cerrando de nuevo el turno."); return; }
     setEnviando(c.id);
-    const res = [];
-    for (const to of correos) {
-      try {
-        const r = await fetch(API_CORREO || "/api/send-email", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ to, subject: c.asunto || `Producción ${c.fecha}`, html: c.informe_html, text: c.resumen || "" }),
-        });
-        res.push({ to, ok: r.ok, detalle: r.ok ? "" : (await r.text()).slice(0,200) });
-      } catch (e) { res.push({ to, ok:false, detalle:String(e).slice(0,200) }); }
-    }
+    const res = await enviaConReintentos(correos, c.asunto || `Producción ${c.fecha}`, c.informe_html);
     const ok = res.filter(x=>x.ok).map(x=>x.to), fallo = res.filter(x=>!x.ok);
     await save("cierres_turno", c.id, {
       email_estado: fallo.length ? (ok.length ? "parcial" : "error") : "enviado",
@@ -9837,6 +9907,22 @@ function CierresScreen({ onBack, centros, usuarios, perfil, centroFijo="" }) {
           centroId={centroId} setCentroId={centroFijo ? ()=>{} : setCentroId}
           texto={texto} setTexto={setTexto} desde={desde} setDesde={setDesde} hasta={hasta} setHasta={setHasta}
           total={cierres.length} mostrados={lista.length}/>
+
+        {fallidos.length>0 && (
+          <div style={{background:C.redBg,border:`3px solid ${C.red}`,borderRadius:16,padding:"14px 16px",marginBottom:14}}>
+            <div style={{fontFamily:F.h,fontWeight:800,fontSize:16,color:C.red,marginBottom:4}}>
+              ⛔ {fallidos.length} parte{fallidos.length!==1?"s":""} sin enviar
+            </div>
+            <div style={{fontSize:13,color:C.mutedD,lineHeight:1.6,marginBottom:10}}>
+              El turno se cerró bien y el informe está guardado, pero el correo no llegó a salir.
+              Suele ser que la tableta perdiera la red en ese momento. Se puede reintentar desde aquí
+              sin tocar los partes.
+            </div>
+            <Btn v={reintentando?"secondary":"primary"} disabled={reintentando} onClick={reintentarTodos}>
+              {reintentando ? "Enviando…" : `📧 Reintentar los ${fallidos.length}`}
+            </Btn>
+          </div>
+        )}
 
         {lista.length===0 && (
           <div style={{background:"#fff",border:`1px solid ${C.border}`,borderRadius:16,padding:22,textAlign:"center"}}>
@@ -10348,7 +10434,7 @@ function PlanMesTab({ periodo, plan, guardar, productos, mps, semanas, planesSem
       const q = toNum(it.cantidad);
       const ritmo = toNum(p?.uds_turno_linea), pers = parseInt(p?.personas_linea)||3;
       const mpUd = toNum(p?.coste_mp_objetivo);
-      const moUd = ritmo>0 ? (pers*8*TARIFA_MO)/ritmo : 0;
+      const moUd = ritmo>0 ? (pers*HORAS_JORNADA*TARIFA_MO)/ritmo : 0;
       const ggUd = q>0 ? ggDeProducto(p, q)/q : 0;
       const costeUd = mpUd + moUd + ggUd;
       const pvUd = precioDe(p);
@@ -11874,7 +11960,7 @@ function CierreSemanaTab({ semana, setSemana, semanas, plan, guardar, productos,
     const pers = parseInt(prod?.personas_linea)||3;
     const turnosObj = ritmo>0 ? udsObj/ritmo : 0;
     const cObjMP = (parseFloat(prod?.coste_mp_objetivo)||0)*udsObj;
-    const cObjMO = turnosObj*pers*8*TARIFA_MO;
+    const cObjMO = turnosObj*pers*HORAS_JORNADA*TARIFA_MO;
     let cRealMP=0, cRealMO=0;
     ps.forEach(p=>{ const c=costeRealParte(p); cRealMP+=c.mat; cRealMO+=c.mo; });
     const ritmoReal = ps.length>0 ? udsReal/ps.length : 0;
@@ -12031,12 +12117,12 @@ function Home({ perfil, onGo, onLogout, counts, ordenes=[], producciones=[], pro
   const esGerencia = perfil.rol === "gerencia";
   const tiles = [
     { id:"planificacion", grupo:"proc", icon:"📅", bg:"#EEF2FF", label:"Planificación", sub:"Mes · semana · cuadre · cierre", roles:["gerencia","sup_fabrica"] },
-    { id:"cierres",   grupo:"proc", icon:"🔒", bg:"#F0FDF4", label:"Cierres de turno",    sub:"Consulta y reenvío de informes",     roles:["gerencia","sup_fabrica","sup_oficina"] },
-    { id:"semanal",   grupo:"proc", icon:"📊", bg:"#EFF6FF", label:"Informe semanal",     sub:"Materias, procesos, empleados, paradas", roles:["gerencia","sup_fabrica","sup_oficina"] },
-    { id:"rango",     grupo:"proc", icon:"📈", bg:"#EFF6FF", label:"Informe entre fechas", sub:"Producto a producto y consolidado",      roles:["gerencia","sup_fabrica","sup_oficina"] },
-    { id:"terminal",  grupo:"proc", icon:"🖥️", bg:"#ECFDF5", label:"Terminal de Planta",   sub:"Pantalla táctil del obrador",        roles:["gerencia","sup_fabrica","sup_oficina","operario"] },
-    { id:"ordenes",   grupo:"proc", icon:"📋", bg:"#ECFDF5", label:"Órdenes de Producción", sub:"Planificar y registrar",     roles:["gerencia","sup_fabrica","sup_oficina"] },
-    { id:"diario",    grupo:"proc", icon:"📖", bg:"#EFF6FF", label:"Diario de Fabricación", sub:"El parte oficial del día",          roles:["gerencia","sup_fabrica","sup_oficina"] },
+    { id:"cierres",   grupo:"proc", icon:"🔒", bg:"#F0FDF4", label:"Cierres de turno",    sub:"Consulta y reenvío de informes",     roles:["gerencia","sup_fabrica"] },
+    { id:"semanal",   grupo:"proc", icon:"📊", bg:"#EFF6FF", label:"Informe semanal",     sub:"Materias, procesos, empleados, paradas", roles:["gerencia","sup_fabrica"] },
+    { id:"rango",     grupo:"proc", icon:"📈", bg:"#EFF6FF", label:"Informe entre fechas", sub:"Producto a producto y consolidado",      roles:["gerencia","sup_fabrica"] },
+    { id:"terminal",  grupo:"proc", icon:"🖥️", bg:"#ECFDF5", label:"Terminal de Planta",   sub:"Pantalla táctil del obrador",        roles:["gerencia","sup_fabrica","operario"] },
+    { id:"ordenes",   grupo:"proc", icon:"📋", bg:"#ECFDF5", label:"Órdenes de Producción", sub:"Planificar y registrar",     roles:["gerencia","sup_fabrica"] },
+    { id:"diario",    grupo:"proc", icon:"📖", bg:"#EFF6FF", label:"Diario de Fabricación", sub:"El parte oficial del día",          roles:["gerencia","sup_fabrica"] },
     { id:"analitica", grupo:"proc", icon:"📊", bg:"#FDF2F8", label:"Analítica",         sub:"Evolución · costes · lotes · equipos", roles:["gerencia","sup_fabrica"] },
     { id:"seed", grupo:"herr",      icon:"🚀", bg:"#FFF7ED", label:"Carga Inicial",     sub:"Catálogo completo en 1 clic",          roles:["gerencia"] },
     { id:"synccat", grupo:"herr",   icon:"🔗", bg:"#F5F3FF", label:"Sincronizar Catálogo", sub:"Descripciones desde el CRM",         roles:["gerencia"] },
