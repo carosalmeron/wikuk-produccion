@@ -7441,6 +7441,14 @@ function ProductosScreen({ onBack, procesos, mps, centros }) {
       <Header title="PRODUCTOS" onBack={onBack}/>
       <div style={{padding:14}}>
         <Btn onClick={()=>setEdit({})} style={{marginBottom:14}}>＋ Nuevo Producto</Btn>
+        {/* (13/11/2026, CEO) Exportar todo para cruzarlo con la app de planta nueva: productos con sus procesos, capas, materias, ritmo y molde */}
+        <Btn onClick={()=>{
+          const limpio = (o) => JSON.parse(JSON.stringify(o, (k, v) => (v && typeof v === "object" && typeof v.toDate === "function") ? v.toDate().toISOString() : v));
+          const datos = limpio({ app: "wikuk-produccion", exportado: new Date().toISOString(), productos, procesos, centros, moldes, materias: mps });
+          const blob = new Blob([JSON.stringify(datos, null, 1)], { type: "application/json" });
+          const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "app_antigua_productos_" + new Date().toISOString().slice(0, 10) + ".json";
+          document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+        }} v="secondary" style={{marginBottom:14,marginLeft:8}}>⬇️ Exportar para la app nueva ({productos.length})</Btn>
         <div style={{position:"relative",marginBottom:14}}>
           <span style={{position:"absolute",left:13,top:12,fontSize:15,color:C.muted}}>🔍</span>
           <input value={busq} onChange={e=>setBusq(e.target.value)} placeholder="Buscar por código, descripción o calibre…"
